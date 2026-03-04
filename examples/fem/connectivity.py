@@ -122,24 +122,6 @@ class InpParser:
         conn = self.elem_conn[elset][elem_type]
         return np.array([conn[k] for k in sorted(conn.keys())], dtype=int)
 
-    # Local edge definitions per element type.
-    # Each entry is a list of (local_node_i, local_node_j) pairs that form
-    # the edges of that element. Corner nodes only — mid-side nodes are
-    # included as the third entry where present so the full edge is
-    # (corner_a, corner_b, optional_midside).
-    _EDGE_LOCAL = {
-        # Linear triangle: 3 edges
-        "CPS3": [(0, 1), (1, 2), (2, 0)],
-        # Linear quad: 4 edges
-        "CPS4": [(0, 1), (1, 2), (2, 3), (3, 0)],
-        # Quadratic triangle: 3 edges, each with a mid-side node
-        #   0-3-1 / 1-4-2 / 2-5-0
-        "CPS6": [(0, 1, 3), (1, 2, 4), (2, 0, 5)],
-        # 9-node quad (serendipity/Lagrange):
-        #   0-4-1 / 1-5-2 / 2-6-3 / 3-7-0
-        "M3D9": [(0, 1, 4), (1, 2, 5), (2, 3, 6), (3, 0, 7)],
-    }
-
     def get_conn_edges(self, elset, elem_type):
         """
         Build a unique-edge connectivity dictionary for the given elset/element type.
@@ -165,14 +147,32 @@ class InpParser:
                 4: (1, 3),
             }
         """
-        if elem_type not in self._EDGE_LOCAL:
+        # Local edge definitions per element type.
+        # Each entry is a list of (local_node_i, local_node_j) pairs that form
+        # the edges of that element. Corner nodes only — mid-side nodes are
+        # included as the third entry where present so the full edge is
+        # (corner_a, corner_b, optional_midside).
+        _EDGE_LOCAL = {
+            # Linear triangle: 3 edges
+            "CPS3": [(0, 1), (1, 2), (2, 0)],
+            # Linear quad: 4 edges
+            "CPS4": [(0, 1), (1, 2), (2, 3), (3, 0)],
+            # Quadratic triangle: 3 edges, each with a mid-side node
+            #   0-3-1 / 1-4-2 / 2-5-0
+            "CPS6": [(0, 1, 3), (1, 2, 4), (2, 0, 5)],
+            # 9-node quad (serendipity/Lagrange):
+            #   0-4-1 / 1-5-2 / 2-6-3 / 3-7-0
+            "M3D9": [(0, 1, 4), (1, 2, 5), (2, 3, 6), (3, 0, 7)],
+        }
+
+        if elem_type not in _EDGE_LOCAL:
             raise NotImplementedError(
                 f"Edge connectivity not defined for element type '{elem_type}'. "
-                f"Supported types: {list(self._EDGE_LOCAL.keys())}"
+                f"Supported types: {list(_EDGE_LOCAL.keys())}"
             )
 
         H1_tri_conn = self.get_conn(elset, elem_type)  # shape (nelems, nodes_per_elem)
-        local_edges = self._EDGE_LOCAL[elem_type]
+        local_edges = _EDGE_LOCAL[elem_type]
 
         seen = {}  # canonical_corner_pair -> edge_tag
         edge_dict = {}  # edge_tag -> full node tuple (corner0, corner1[, midside])
@@ -204,6 +204,7 @@ class InpParser:
                     tag += 1
 
         return edge_dict
+
 
 if __name__ == "__main__":
     fname = "plate.inp"
