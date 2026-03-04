@@ -84,10 +84,10 @@ class DegreesOfFreedom:
 
     def get_basis(self, etype):
         basis_list = []
-        
+
         for sp in ["H1"]:
             # self._get_basis(etype, sp, names, kind) # names and kind come from space info
-            names =self.space.get_names(sp)
+            names = self.space.get_names(sp)
             basis_list.append(self._get_basis(etype, sp, names, self.kind))
         return basis.BasisCollection(basis_list)
 
