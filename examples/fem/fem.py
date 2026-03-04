@@ -51,16 +51,47 @@ class DegreesOfFreedom:
         return
 
     def add_source(self, model):
+        # Get the names of things associated with H1
+        names = self.space.get_names("H1")  # u, v
 
-        # if "H1" in self.space.get_spaces():
-        #     model.add_component(f"src_{self.kind}", ndof, )
-        # if "H1" in self.space.get_spaces():
+        # Create amigo source component with input names and geo names
+        input_names = []
+        geo_names = []
+        data_names = []
+        if self.kind == "input":
+            input_names = names
+        elif self.kind == "data":
+            data_names = names
+        elif self.kind == "geo":
+            geo_names = names
 
-        # if "H1" in self.space.get_spaces():
+        dof_src = DofSource(
+            input_names=input_names, geo_names=geo_names, data_names=data_names
+        )
 
-        pass
+        # Add global mesh source component
+        nnodes = mesh.get_num_nodes()
+        model.add_component(f"src_{self.kind}", nnodes, dof_src)
 
-    def get_basis(self, etype, space, names=[], kind="input"):
+    def link_dof(self, model, domain, etype, elem_name):
+        names = self.space.get_names("H1")
+        conn = self.mesh.get_conn(domain, etype)
+        for name in names:
+            model.link(
+                f"src_{self.kind}.{name}", f"{elem_name}.{name}", src_indices=conn
+            )
+        return
+
+    def get_basis(self, etype):
+        basis_list = []
+        
+        for sp in ["H1"]:
+            # self._get_basis(etype, sp, names, kind) # names and kind come from space info
+            names =self.space.get_names(sp)
+            basis_list.append(self._get_basis(etype, sp, names, self.kind))
+        return basis.BasisCollection(basis_list)
+
+    def _get_basis(self, etype, space, names=[], kind="input"):
         if etype == "CPS3":
             if space == "H1":
                 return basis.TriangleLagrangeBasis(1, names, kind=kind)
@@ -90,10 +121,6 @@ class DegreesOfFreedom:
 
         raise NotImplementedError(f"Quadrature for element {etype} not implemented")
 
-    def link_dof(self, model, name, elem_name, conn):
-        model.link(f"src.{name}", f"{elem_name}.{name}", src_indices=conn)
-        return
-
 
 class Mesh:
     def __init__(self, filename):
@@ -121,6 +148,9 @@ class Mesh:
 
     def get_conn(self, name, etype):
         return self.parser.get_conn(name, etype)
+
+    def get_num_elements(self, name, etype):
+        return self.parser.get_conn(name, etype).shape[0]
 
     def plot(self, u, ax=None, nlevels=30, cmap="coolwarm", title=None):
         min_level = np.min(u)
@@ -215,9 +245,10 @@ class Problem:
         self.weakform = weakform
 
         # Initialize Dof's
-        self.soln_dof = DegreesOfFreedom(mesh, "H1", "soln")
-        self.geo_dof = DegreesOfFreedom(mesh, "H1", "geo")
-        self.data_dof = DegreesOfFreedom(mesh, "H1", "data")
+        # Take in the soln space -> removes "H1" input
+        self.soln_dof = DegreesOfFreedom(mesh, self.soln_space, "soln")
+        self.geo_dof = DegreesOfFreedom(mesh, self.geo_space, "geo")
+        self.data_dof = DegreesOfFreedom(mesh, self.data_space, "data")
 
         return
 
@@ -225,46 +256,23 @@ class Problem:
         """Create and link the Amigo model"""
         model = am.Model(module_name)
 
-        # Get the names of things associated with H1
-        input_names = self.soln_space.get_names("H1")  # u, v
-        data_names = self.data_space.get_names("H1")  # x, y
-        geo_names = self.geo_space.get_names("H1")  # x, y
-
-        # Create amigo source component with input names and geo names
-        self.dof_src = DofSource(input_names=input_names, geo_names=geo_names)
-
-        # Add global mesh source component
-        nnodes = mesh.get_num_nodes()
-        model.add_component("src", nnodes, self.dof_src)
+        self.soln_dof.add_source(model)
+        self.data_dof.add_source(model)
+        self.geo_dof.add_source(model)
 
         # Build the elements for all domains
         domains = self.mesh.get_domains()
         for domain in domains:
             for etype in domains[domain]:
+                # Each element type has a dictionary of solution basis's
                 soln_basis = {}
+
                 # Build a finite-element for each weak form
                 elem_name = f"Element{etype}_{domain}"
 
-                # soln_basis_u = self.soln_dof.get_basis(
-                #     etype, "H1", names=input_names, kind="input"
-                # )
-
-                # soln_basis_v = self.soln_dof.get_basis(
-                #     etype, "H1", names=input_names, kind="input"
-                # )
-
-                # Each input gets a basis function assigned to it
-                for name in input_names:
-                    soln_basis[f"{name}"] = self.soln_dof.get_basis(
-                        etype, "H1", names=input_names, kind="input"
-                    )
-
-                data_basis = self.data_dof.get_basis(
-                    etype, "H1", names=data_names, kind="data"
-                )
-                geo_basis = self.geo_dof.get_basis(
-                    etype, "H1", names=geo_names, kind="data"
-                )
+                soln_basis = self.soln_dof.get_basis(etype)
+                data_basis = self.data_dof.get_basis(etype)
+                geo_basis = self.geo_dof.get_basis(etype)
 
                 # Create the quadrature instance
                 quadrature = self.soln_dof.get_quadrature(etype)
@@ -277,26 +285,16 @@ class Problem:
                     geo_basis,
                     quadrature,
                     self.weakform,
-                    etype,
-                    input_names,
-                    data_names,
-                    geo_names,
                 )
 
-                # Get the connectivity
-                # Needs to pull out any type of connectivity for the basis
-                conn = self.mesh.get_conn(domain, etype)
-
                 # Add the element/component
-                nelems = conn.shape[0]
+                nelems = self.mesh.get_num_elements(domain, etype)
                 model.add_component(elem_name, nelems, elem)
 
                 # Link all the element dof to the component
-                for name in input_names:
-                    self.soln_dof.link_dof(model, name, elem_name, conn)
-
-                for name in geo_names:
-                    self.geo_dof.link_dof(model, name, elem_name, conn)
+                self.soln_dof.link_dof(model, domain, etype, elem_name)
+                self.data_dof.link_dof(model, domain, etype, elem_name)
+                self.geo_dof.link_dof(model, domain, etype, elem_name)
 
         return model
 
@@ -310,38 +308,26 @@ class FiniteElement(am.Component):
         geo_basis,
         quadrature,
         weakform,
-        etype,
-        input_names=[],
-        data_names=[],
-        geo_names=[],
     ):
         super().__init__(name=name)
 
+        # NOTE: soln_basis is a dict of objectes for each input
         self.soln_basis = soln_basis
+
         self.data_basis = data_basis
         self.geo_basis = geo_basis
         self.quadrature = quadrature
         self.weakform = weakform
-        self.input_names = input_names
 
-        # The x/y coordinates
-        if etype == "CPS3":
-            shape = (3,)
-
-        elif etype == "CPS4":
-            shape = (4,)
-
-        # Data
-        for name in geo_names:
-            self.add_data(name, shape=shape)
-
-        # Inputs
-        for name in self.input_names:
-            self.add_input(name, shape=shape)
+        # From BasisCollection
+        self.soln_basis.add_declarations(self)
+        self.geo_basis.add_declarations(self)
+        self.data_basis.add_declarations(self)
 
         # Set the arguments to the compute function for each quadrature point
         self.set_args(self.quadrature.get_args())
 
+        # Add the objective to minimize
         self.add_objective("obj")
 
         return
@@ -350,40 +336,15 @@ class FiniteElement(am.Component):
 
         quad_weight, quad_point = self.quadrature.get_point(**args)
 
-        # # Evaluate the solution fields/data fields (u)
-        # soln_xi_u = self.soln_basis["u"].eval(self, quad_point)
-        # data_xi_u = self.data_basis.eval(self, quad_point)
-        # geo_u = self.geo_basis.eval(self, quad_point)
-
-        # # Perform the mapping from computational to physical coordinates (u)
-        # detJ_u, Jinv_u = self.geo_basis.compute_transform(geo_u)
-        # soln_phys_u = self.soln_basis["u"].transform(detJ_u, Jinv_u, soln_xi_u)
-        # data_phys_u = self.data_basis.transform(detJ_u, Jinv_u, data_xi_u)
-
-        # # Evaluate the solution fields/data fields (v)
-        # soln_xi_v = self.soln_basis["v"].eval(self, quad_point)
-        # data_xi_v = self.data_basis.eval(self, quad_point)
-        # geo_v = self.geo_basis.eval(self, quad_point)
-
-        # # Perform the mapping from computational to physical coordinates (u)
-        # detJ_v, Jinv_v = self.geo_basis.compute_transform(geo_v)
-        # soln_phys_v = self.soln_basis["v"].transform(detJ_v, Jinv_v, soln_xi_v)
-        # data_phys_v = self.data_basis.transform(detJ_v, Jinv_v, data_xi_v)
-
-        # Evaluate the solution fields/data fields (u, v)
-        soln_phys = {}
-
+        # Evaluate the solution fields/data fields (u)
+        soln_xi = self.soln_basis.eval(self, quad_point)
         data_xi = self.data_basis.eval(self, quad_point)
         geo = self.geo_basis.eval(self, quad_point)
+
+        # Perform the mapping from computational to physical coordinates (u)
         detJ, Jinv = self.geo_basis.compute_transform(geo)
+        soln_phys = self.soln_basis.transform(detJ, Jinv, soln_xi)
         data_phys = self.data_basis.transform(detJ, Jinv, data_xi)
-
-        for name in self.input_names:
-            # Eval basis at quad point
-            soln_xi = self.soln_basis[name].eval(self, quad_point)
-
-            # Perform the mapping from computational to physical coordinates (u)
-            soln_phys[name] = self.soln_basis[name].transform(detJ, Jinv, soln_xi)
 
         # Add the contributions directly to the Lagrangian
         self.objective["obj"] = quad_weight * detJ * self.weakform(soln_phys, geo=geo)
@@ -411,9 +372,6 @@ def weakform(soln, data=None, geo=None):
     alpha = 1.0
     pi = 3.14159265358979
 
-    # Manufactured RHS derived from exact solution
-    # u_exact = sin(πx)sin(πy)  →  -Δu_exact = 2π²·sin(πx)sin(πy)
-    # v_exact = cos(πx)cos(πy)  →  -Δv_exact = 2π²·cos(πx)cos(πy)
     f1 = 2 * pi**2 * am.sin(pi * x) * am.sin(pi * y) + alpha * am.cos(
         pi * x
     ) * am.cos(pi * y)
@@ -432,12 +390,13 @@ def weakform(soln, data=None, geo=None):
     return comp1
 
 
+# Initialize the spaces
 soln_space = basis.SolutionSpace({"u": "H1", "v": "H1"})
 data_space = basis.SolutionSpace({"x": "H1", "y": "H1"})
 geo_space = basis.SolutionSpace({"x": "H1", "y": "H1"})
 
-mesh = Mesh("magnet_order_1.inp")
-# mesh = Mesh("plate.inp")
+# mesh = Mesh("magnet_order_1.inp")
+mesh = Mesh("plate.inp")
 problem = Problem(
     mesh,
     soln_space,

@@ -34,7 +34,7 @@ gmsh.initialize()
 gmsh.model.add("magnet")
 
 # Mesh refinement at nodes
-lc = 3e-1
+lc = 9e-2
 lc1 = 9e-2
 
 # Geometry dimentions

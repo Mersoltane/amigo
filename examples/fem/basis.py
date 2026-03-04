@@ -65,6 +65,27 @@ def build_2d_lagrange_vandermonde(n, p, pts, exps):
     return np.linalg.solve(V, I)
 
 
+class BasisCollection:
+    def __init__(self, basis=[]):
+        self.basis = basis
+
+    def add_declarations(self, comp):
+        for basis in self.basis:
+            basis.add_declarations(comp)
+
+    def eval(self, comp, pt):
+        soln = {}
+        for basis in self.basis:
+            soln.update(basis.eval(comp, pt))
+        return soln
+
+    def transform(self, detJ, Jinv, orig):
+        soln = {}
+        for basis in self.basis:
+            soln.update(basis.transform(detJ, Jinv, orig))
+        return soln
+
+
 class Basis:
     def __init__(self, names, nnodes=1, kind="input"):
         if isinstance(names, (list, tuple)):
@@ -370,11 +391,3 @@ class SolutionSpace:
 
     def get_names(self, space):
         return self.names[space]
-
-
-class BasisCollection:
-    def __init__(self):
-        self.basis = []
-
-    def add_basis(self, basis):
-        self.basis.append(basis)
