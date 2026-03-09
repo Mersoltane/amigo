@@ -139,8 +139,10 @@ class DirichletDegreesOfFreedom:
         names = self.bc.keys()
         for name in names:
             # Loop through each bc_type name
-            bc_src = DirichletBCSource(input_name=self.bc[name]["input"])
-            nnodes = mesh.get_num_nodes_on_bc(name, "T3D2")
+            input_name = self.bc[name]["input"]
+            target_name = self.bc[name]["target"]
+            bc_src = DirichletBCSource(input_name=input_name)
+            nnodes = mesh.get_num_nodes_on_bc(target_name, "T3D2")
 
             # Update the number of components based on whether to include start and end
             if self.bc[name]["start"] == False:
@@ -158,9 +160,10 @@ class DirichletDegreesOfFreedom:
     def link_bc_dof(self, model):
         names = self.bc.keys()
         for name in names:
-            # Loop through each bc_type name
+            # Loop through each bc target
+            target = self.bc[name]["target"]
             input_name = self.bc[name]["input"][0]  # Extract "u"
-            conn = mesh.get_bc_nodes(name, "T3D2")
+            conn = mesh.get_bc_nodes(target, "T3D2")
 
             # Slice the nodes based on start and end requirement
             if self.bc[name]["start"] == False and self.bc[name]["end"] == True:
@@ -384,7 +387,7 @@ class Problem:
         weakform_map={},
         data_space=[],
         geo_space=[],
-        bc_map={},
+        dirichlet_bc_map={},
         sym_bc_map={},
         ndim=2,
     ):
@@ -397,7 +400,7 @@ class Problem:
         self.geo_space = geo_space
 
         self.weakform_map = weakform_map
-        self.bc_map = bc_map
+        self.dirichlet_bc_map = dirichlet_bc_map
         self.sym_bc_map = sym_bc_map
 
         # Initialize Dof's
@@ -420,9 +423,9 @@ class Problem:
             kind="data",
             name="data",
         )
-        self.bc_dof = DirichletDegreesOfFreedom(
+        self.dirichlet_bc_dof = DirichletDegreesOfFreedom(
             self.mesh,
-            self.bc_map,
+            self.dirichlet_bc_map,
         )
         self.sym_bc_dof = SymmetryDegreesOfFreedom(
             self.mesh,
@@ -476,12 +479,13 @@ class Problem:
                 self.geo_dof.link_dof(model, domain, etype, elem_name)
 
         # Add BC components and links
-        self.bc_dof.add_bc_source(model)
-        self.bc_dof.link_bc_dof(model)
+        self.dirichlet_bc_dof.add_bc_source(model)
+        self.dirichlet_bc_dof.link_bc_dof(model)
 
         # Add symmetric bcs
         self.sym_bc_dof.add_bc_source(model)
         self.sym_bc_dof.link_bc_dof(model)
+
         return model
 
 
@@ -620,42 +624,46 @@ weakform_map = {
 }
 
 # Boundary Condition
-bc_map = {
-    "LINE1": {
+dirichlet_bc_map = {
+    "DirichletLine1": {
         "type": "dirichlet",
+        "target": "LINE1",
         "input": ["u"],
         "start": True,
         "end": True,
     },
-    # "LINE2": {
-    #     "type": "dirichlet",
-    #     "input": ["u"],
-    #     "start": False,
-    #     "end": False,
-    # },
-    "LINE3": {
+    "DirichletLine3": {
         "type": "dirichlet",
+        "target": "LINE3",
         "input": ["u"],
         "start": True,
         "end": True,
     },
-    # "LINE4": {
-    #     "type": "dirichlet",
-    #     "input": ["u"],
-    #     "start": False,
-    #     "end": False,
-    # },
-}
-
-symmetery_bc_map = {
-    "bruh": {
+    "DirichletLine2": {
+        "type": "dirichlet",
+        "target": "LINE2",
         "input": ["u"],
         "start": False,
         "end": False,
-        "target": ["LINE2", "LINE4"],
-        "flip": [False, True],
-        "scale": [1.0, -1.0],
     },
+    "DirichletLine4": {
+        "type": "dirichlet",
+        "target": "LINE4",
+        "input": ["u"],
+        "start": False,
+        "end": False,
+    },
+}
+
+symmetery_bc_map = {
+    # "bruh": {
+    #     "input": ["u"],
+    #     "start": False,
+    #     "end": False,
+    #     "target": ["LINE2", "LINE4"],
+    #     "flip": [False, True],
+    #     "scale": [1.0, -1.0],
+    # },
 }
 
 bc_map_unified = {
@@ -701,7 +709,7 @@ problem = Problem(
     weakform_map,
     data_space=data_space,
     geo_space=geo_space,
-    bc_map=bc_map,
+    dirichlet_bc_map=dirichlet_bc_map,
     sym_bc_map=symmetery_bc_map,
     ndim=2,
 )
