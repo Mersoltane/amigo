@@ -283,7 +283,7 @@ class DegreesOfFreedom:
         elif etype == "T3D2":
             if space == "H1":
                 return basis.LagrangeBasis1D(1, names, kind=kind)
-        
+
         raise NotImplementedError(
             f"Basis for element {etype} with space {space} not implemented"
         )
@@ -374,7 +374,7 @@ class Mesh:
         for name in volumes:
             for etype in volumes[name]:
                 if etype == "T3D2":
-                    ''' do not attempt to plot when line element found'''
+                    """do not attempt to plot when line element found"""
                     continue
                 # Get the connectivity
                 conn = self.convert_conn(etype, self.get_conn(name, etype))

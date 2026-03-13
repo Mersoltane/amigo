@@ -493,13 +493,14 @@ class QuadQuadrature(Quadrature):
         wt = self.weights[n] * self.weights[m]
         pt = [self.points[n], self.points[m]]
         return wt, pt
-    
+
+
 class LineQuadrature(Quadrature):
     def __init__(self, npts):
         pts, wts = np.polynomial.legendre.leggauss(npts)
-        self.xi      = pts
+        self.xi = pts
         self.weights = wts
-        self.args    = [{"n": n} for n in range(npts)]
+        self.args = [{"n": n} for n in range(npts)]
 
     def get_args(self):
         return self.args
