@@ -342,6 +342,7 @@ class Mesh:
     def plot(
         self,
         u,
+        fig=None,
         ax=None,
         nlevels=30,
         cmap="coolwarm",
@@ -371,7 +372,7 @@ class Mesh:
                 tri = mtri.Triangulation(x, y, conn)
 
                 # Set the contour plot
-                ax.tricontourf(tri, u, levels=levels, cmap=cmap)
+                cntr = ax.tricontourf(tri, u, levels=levels, cmap=cmap)
                 ax.tricontour(
                     tri, u, levels=levels, colors="k", linewidths=0.3, alpha=0.5
                 )
@@ -393,6 +394,7 @@ class Mesh:
                     ax.set_title(title)
 
                 ax.set_aspect("equal")
+                fig.colorbar(cntr, ax=ax)
         return ax
 
     def convert_conn(self, etype, conn):
@@ -439,6 +441,7 @@ class Problem:
         mesh,
         soln_space,
         weakform_map={},
+        output_map={},
         data_space=[],
         geo_space=[],
         dirichlet_bc_map={},
@@ -455,6 +458,7 @@ class Problem:
         self.weakform_map = weakform_map
         self.dirichlet_bc_map = dirichlet_bc_map
         self.sym_bc_map = sym_bc_map
+        self.output_map = output_map
 
         # Initialize Dof's
         # Take in the soln space -> removes "H1" input
@@ -485,19 +489,18 @@ class Problem:
             self.sym_bc_map,
         )
 
+        # self.output_dof = DegreesOfFreedom(
+        # kind="output", ndof=len(self.output_map.keys())
+        # )
+
         return
 
     def create_model(self, module_name: str):
         """Create and link the Amigo model"""
         model = am.Model(module_name)
 
-        # print("\nsoln_dof source called")
         self.soln_dof.add_source(model)
-
-        # print("\ndata_dof source called")
         self.data_dof.add_source(model)
-
-        # print("\ngeo_dof source called")
         self.geo_dof.add_source(model)
 
         # Build the elements for all domains
@@ -533,13 +536,8 @@ class Problem:
                 model.add_component(elem_name, nelems, elem)
 
                 # Link all the element dof to the component
-                # print("\nsoln_dof link called")
                 self.soln_dof.link_dof(model, domain, etype, elem_name)
-
-                # print("\ndata_dof link called")
                 self.data_dof.link_dof(model, domain, etype, elem_name)
-
-                # print("\ngeo_dof link called")
                 self.geo_dof.link_dof(model, domain, etype, elem_name)
 
         # Add BC components and links
@@ -550,6 +548,39 @@ class Problem:
         self.sym_bc_dof.add_bc_source(model)
         self.sym_bc_dof.link_bc_dof(model)
 
+        # Output loop
+        for output_name in self.output_map.keys():
+            for domain in domains:
+                # Loop through each domain
+                for etype in domains[domain]:
+                    # Each element type has a dictionary of solution basis's
+                    soln_basis = {}
+
+                    # Build a finite-element for each weak form
+                    elem_name = f"{output_name}_Element{etype}_{domain}"
+                    print(elem_name)
+
+                    soln_basis = self.soln_dof.get_basis(etype)
+                    data_basis = self.data_dof.get_basis(etype)
+                    geo_basis = self.geo_dof.get_basis(etype)
+
+                    # Create the quadrature instance
+                    quadrature = self.soln_dof.get_quadrature(etype)
+
+                    print(self.output_map[output_name][domain])
+                    elem = FiniteElementOutput(
+                        elem_name,=
+                        soln_basis,
+                        data_basis,
+                        geo_basis,
+                        quadrature,
+                        output_name,
+                        self.output_map
+                        # self.output_map["name"],
+                        # self.output_map[output_domain_name],
+                    )
+
+        # Link the output to the finite element class
         return model
 
 
@@ -605,41 +636,64 @@ class FiniteElement(am.Component):
         return
 
 
-def weakform(soln, data=None, geo=None):
-    u = soln["u"]
-    v = soln["v"]
+class FiniteElementOutput(am.Component):
+    def __init__(
+        self,
+        name,
+        soln_basis,
+        data_basis,
+        geo_basis,
+        quadrature,
+        # output_names,
+        # output_function,
+        output_name,
+        output_function,
+    ):
+        super().__init__(name=name)
 
-    uvalue = u["value"]
-    ugrad = u["grad"]
+        self.soln_basis = soln_basis
+        self.data_basis = data_basis
+        self.geo_basis = geo_basis
+        self.quadrature = quadrature
+        # self.output_names = output_names
+        # self.output_function = output_function
 
-    vvalue = v["value"]
-    vgrad = v["grad"]
+        # From BasisCollection
+        self.soln_basis.add_declarations(self)
+        self.geo_basis.add_declarations(self)
+        self.data_basis.add_declarations(self)
 
-    x = geo["x"]["value"]
-    y = geo["y"]["value"]
+        # add the output declarations
+        for name in self.output_names:
+            self.add_output(name)  # assumes scalar
 
-    # f = am.sin(x) ** 2 * am.cos(y) ** 2
-    # comp1 = 0.5 * (uvalue**2 + basis.dot_product(ugrad, ugrad, n=2) - 2.0 * uvalue * f)
+        # Set the arguments to the compute function for each quadrature point
+        self.set_args(self.quadrature.get_args())
 
-    alpha = 1.0
-    pi = 3.14159265358979
+        return
 
-    f1 = 2 * pi**2 * am.sin(pi * x) * am.sin(pi * y) + alpha * am.cos(
-        pi * x
-    ) * am.cos(pi * y)
-    f2 = 2 * pi**2 * am.cos(pi * x) * am.cos(pi * y) + alpha * am.sin(
-        pi * x
-    ) * am.sin(pi * y)
+    def compute_output(self, **args):
+        quad_weight, quad_point = self.quadrature.get_point(**args)
 
-    comp1 = (
-        basis.dot_product(ugrad, ugrad, n=2)
-        + alpha * uvalue * uvalue
-        + f1 * uvalue
-        + basis.dot_product(vgrad, vgrad, n=2)
-        + alpha * vvalue * vvalue
-        + f2 * vvalue
-    )
-    return comp1
+        # Evaluate the solution fields/data fields (u)
+        soln_xi = self.soln_basis.eval(self, quad_point)
+        data_xi = self.data_basis.eval(self, quad_point)
+        geo = self.geo_basis.eval(self, quad_point)
+
+        # Perform the mapping from computational to physical coordinates (u)
+        detJ, Jinv = self.geo_basis.compute_transform(geo)
+        soln_phys = self.soln_basis.transform(detJ, Jinv, soln_xi)
+        data_phys = self.data_basis.transform(detJ, Jinv, data_xi)
+
+        # Add the contributions directly to the Lagrangian
+        outputs = self.output_function(soln_phys, data=data_phys, geo=geo)
+
+        for name in self.output_names:
+            if name in outputs:
+                self.outputs[name] = quad_weight * detJ * outputs[name]
+            else:
+                self.outputs[name] = 0.0
+        return
 
 
 def weakform_air(soln, data=None, geo=None):
@@ -692,3 +746,22 @@ def weakform_coils(soln, data=None, geo=None):
 
     wf = 0.5 * (basis.dot_product(ugrad, ugrad, n=2) - f)
     return wf
+
+
+def torque_output(soln, data=None, geo=None):
+    u = soln["u"]
+    uvalue = u["value"]
+    ugrad = u["grad"]
+    x = geo["x"]["value"]
+    y = geo["y"]["value"]
+
+    Bx = ugrad[1]  # du/dy
+    By = -ugrad[0]  # -du/dx
+
+    ag = 1.0  # air gap width
+    L = 1.0  # Ro-Ri
+    mu0 = 4 * np.pi * 1e-7
+
+    torque = L * (1 / mu0) * (L / ag) * (Bx * By)
+
+    return {"torque": torque}

@@ -13,7 +13,7 @@ gmsh.model.add("plate")
 lc = 0.1
 
 # Geometry definition
-L = 3.0  # plate size
+L = 1.0  # plate size
 
 # Geometry points rectangle
 gmsh.model.geo.addPoint(-0.5 * L, -0.5 * L, 0, lc, 1)
@@ -36,7 +36,10 @@ gmsh.model.geo.addPlaneSurface([1], 1)
 gmsh.model.geo.synchronize()
 
 # Generate a 2D mesh
+# gmsh.model.mesh.setRecombine(2, 1)
+
 gmsh.model.mesh.generate(2)
+# gmsh.model.mesh.setOrder(order)  # set the order
 
 # Save the mesh
 gmsh.write("plate.inp")
