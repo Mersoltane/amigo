@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import numpy as np
@@ -173,6 +174,268 @@ class DirectScipySolver:
             raise RuntimeError("Must call factor() before get_inertia()")
         u_diag = self.lu.U.diagonal()
         return int(np.sum(u_diag > 0)), int(np.sum(u_diag < 0))
+
+
+class MumpsSolver(_HessianDiagMixin):
+    """Sparse LDL^T solver via MUMPS with inertia detection.
+
+    Uses the MUMPS C interface (dmumps_c) via ctypes to perform symmetric
+    indefinite factorization (sym=2) with Bunch-Kaufman pivoting. Provides
+    exact inertia counts from MUMPS info arrays after factorization.
+
+    Requires libdmumps.dll (and its dependencies: libblas.dll, liblapack.dll,
+    libmumps_common.dll, libpord.dll, libmpiseq.dll, etc.) to be on the DLL
+    search path. These are provided by the mumps-build third-party repo.
+    """
+
+    def __init__(self, problem):
+        import ctypes
+
+        self._ct = ctypes
+        try:
+            self._libmumps = ctypes.CDLL("libdmumps.dll")
+        except OSError:
+            raise ImportError(
+                "libdmumps.dll not found. Set MUMPS_DLL_DIR env var or "
+                "ensure mumps-build/build is on the DLL search path."
+            )
+        self._dmumps_c = self._libmumps.dmumps_c
+        self._dmumps_c.restype = None
+
+        self.problem = problem
+        loc = MemoryLocation.HOST_AND_DEVICE
+        self.hess = self.problem.create_matrix(loc)
+        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
+            self.hess.get_nonzero_structure()
+        )
+        self._diag_indices = _find_diag_indices(self.rowp, self.cols, self.nrows)
+
+        # Build COO triplet arrays from CSR (MUMPS uses 1-based COO)
+        # Only store lower triangle for sym=2 (symmetric indefinite)
+        irn_list = []
+        jcn_list = []
+        data_map = []
+        for i in range(self.nrows):
+            for k in range(self.rowp[i], self.rowp[i + 1]):
+                j = self.cols[k]
+                if j <= i:  # lower triangle
+                    irn_list.append(i + 1)
+                    jcn_list.append(j + 1)
+                    data_map.append(k)
+        self._irn = np.array(irn_list, dtype=np.int32)
+        self._jcn = np.array(jcn_list, dtype=np.int32)
+        self._data_map = np.array(data_map, dtype=np.intc)
+        self._nnz_lower = len(irn_list)
+        self._a = np.empty(self._nnz_lower, dtype=np.float64)
+
+        # Build the MUMPS struct via ctypes
+        self._build_struct()
+
+        # Initialize MUMPS (job=-1)
+        self._mumps.job = -1
+        self._mumps.par = 1
+        self._mumps.sym = 2  # symmetric indefinite (LDL^T)
+        self._mumps.comm_fortran = -987654  # MPISEQ sequential
+        self._call_mumps()
+
+        # Set ICNTL parameters
+        self._mumps.icntl[0] = -1  # suppress error output
+        self._mumps.icntl[1] = -1  # suppress diagnostic output
+        self._mumps.icntl[2] = -1  # suppress global info output
+        self._mumps.icntl[3] = 0  # no output
+        self._mumps.icntl[6] = 5  # ordering: METIS if available
+        self._mumps.icntl[7] = 0  # no scaling (preserve KKT structure)
+        self._mumps.icntl[12] = 1  # ScaLAPACK (no effect in sequential)
+        self._mumps.icntl[13] = 1000  # percent increase in workspace (IPOPT default)
+        self._mumps.icntl[23] = 0  # no null pivot detection
+        self._mumps.cntl[0] = 1e-6  # pivot threshold (IPOPT default: minimal pivoting)
+
+        # Set matrix structure
+        self._mumps.n = self.nrows
+        self._mumps.nz = int(self._nnz_lower) if self._nnz_lower < 2**31 else 0
+        self._mumps.nnz = self._nnz_lower
+        self._mumps.irn = self._irn.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+        self._mumps.jcn = self._jcn.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+        self._mumps.a = self._a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+
+        # Symbolic analysis (job=1) - done once
+        self._mumps.job = 1
+        self._call_mumps()
+        if self._mumps.infog[0] < 0:
+            raise RuntimeError(
+                f"MUMPS analysis failed: infog(1)={self._mumps.infog[0]}"
+            )
+
+        self._rhs = np.empty(self.nrows, dtype=np.float64)
+
+    def _build_struct(self):
+        """Build the ctypes Structure matching DMUMPS_STRUC_C."""
+        ct = self._ct
+
+        class DMUMPS_STRUC_C(ct.Structure):
+            _fields_ = [
+                ("sym", ct.c_int),
+                ("par", ct.c_int),
+                ("job", ct.c_int),
+                ("comm_fortran", ct.c_int),
+                ("icntl", ct.c_int * 60),
+                ("keep", ct.c_int * 500),
+                ("cntl", ct.c_double * 15),
+                ("dkeep", ct.c_double * 230),
+                ("keep8", ct.c_int64 * 150),
+                ("n", ct.c_int),
+                ("nblk", ct.c_int),
+                ("nz_alloc", ct.c_int),
+                ("nz", ct.c_int),
+                ("nnz", ct.c_int64),
+                ("irn", ct.POINTER(ct.c_int)),
+                ("jcn", ct.POINTER(ct.c_int)),
+                ("a", ct.POINTER(ct.c_double)),
+                ("nz_loc", ct.c_int),
+                ("nnz_loc", ct.c_int64),
+                ("irn_loc", ct.POINTER(ct.c_int)),
+                ("jcn_loc", ct.POINTER(ct.c_int)),
+                ("a_loc", ct.POINTER(ct.c_double)),
+                ("nelt", ct.c_int),
+                ("eltptr", ct.POINTER(ct.c_int)),
+                ("eltvar", ct.POINTER(ct.c_int)),
+                ("a_elt", ct.POINTER(ct.c_double)),
+                ("blkptr", ct.POINTER(ct.c_int)),
+                ("blkvar", ct.POINTER(ct.c_int)),
+                ("perm_in", ct.POINTER(ct.c_int)),
+                ("sym_perm", ct.POINTER(ct.c_int)),
+                ("uns_perm", ct.POINTER(ct.c_int)),
+                ("colsca", ct.POINTER(ct.c_double)),
+                ("rowsca", ct.POINTER(ct.c_double)),
+                ("colsca_from_mumps", ct.c_int),
+                ("rowsca_from_mumps", ct.c_int),
+                ("colsca_loc", ct.POINTER(ct.c_double)),
+                ("rowsca_loc", ct.POINTER(ct.c_double)),
+                ("rowind", ct.POINTER(ct.c_int)),
+                ("colind", ct.POINTER(ct.c_int)),
+                ("pivots", ct.POINTER(ct.c_double)),
+                ("rhs", ct.POINTER(ct.c_double)),
+                ("redrhs", ct.POINTER(ct.c_double)),
+                ("rhs_sparse", ct.POINTER(ct.c_double)),
+                ("sol_loc", ct.POINTER(ct.c_double)),
+                ("rhs_loc", ct.POINTER(ct.c_double)),
+                ("rhsintr", ct.POINTER(ct.c_double)),
+                ("irhs_sparse", ct.POINTER(ct.c_int)),
+                ("irhs_ptr", ct.POINTER(ct.c_int)),
+                ("isol_loc", ct.POINTER(ct.c_int)),
+                ("irhs_loc", ct.POINTER(ct.c_int)),
+                ("glob2loc_rhs", ct.POINTER(ct.c_int)),
+                ("glob2loc_sol", ct.POINTER(ct.c_int)),
+                ("nrhs", ct.c_int),
+                ("lrhs", ct.c_int),
+                ("lredrhs", ct.c_int),
+                ("nz_rhs", ct.c_int),
+                ("lsol_loc", ct.c_int),
+                ("nloc_rhs", ct.c_int),
+                ("lrhs_loc", ct.c_int),
+                ("nsol_loc", ct.c_int),
+                ("schur_mloc", ct.c_int),
+                ("schur_nloc", ct.c_int),
+                ("schur_lld", ct.c_int),
+                ("mblock", ct.c_int),
+                ("nblock", ct.c_int),
+                ("nprow", ct.c_int),
+                ("npcol", ct.c_int),
+                ("ld_rhsintr", ct.c_int),
+                ("info", ct.c_int * 80),
+                ("infog", ct.c_int * 80),
+                ("rinfo", ct.c_double * 40),
+                ("rinfog", ct.c_double * 40),
+                ("deficiency", ct.c_int),
+                ("pivnul_list", ct.POINTER(ct.c_int)),
+                ("mapping", ct.POINTER(ct.c_int)),
+                ("singular_values", ct.POINTER(ct.c_double)),
+                ("size_schur", ct.c_int),
+                ("listvar_schur", ct.POINTER(ct.c_int)),
+                ("schur", ct.POINTER(ct.c_double)),
+                ("wk_user", ct.POINTER(ct.c_double)),
+                ("version_number", ct.c_char * 32),
+                ("ooc_tmpdir", ct.c_char * 1024),
+                ("ooc_prefix", ct.c_char * 256),
+                ("write_problem", ct.c_char * 1024),
+                ("lwk_user", ct.c_int),
+                ("save_dir", ct.c_char * 1024),
+                ("save_prefix", ct.c_char * 256),
+                ("metis_options", ct.c_int * 40),
+                ("instance_number", ct.c_int),
+            ]
+
+        self._DMUMPS_STRUC_C = DMUMPS_STRUC_C
+        self._mumps = DMUMPS_STRUC_C()
+        self._dmumps_c.argtypes = [ct.POINTER(DMUMPS_STRUC_C)]
+
+    def _call_mumps(self):
+        self._dmumps_c(self._ct.byref(self._mumps))
+
+    def _factorize_current(self):
+        self._mumps.job = 2
+        self._call_mumps()
+        if self._mumps.infog[0] < 0:
+            raise RuntimeError(
+                f"MUMPS factorize failed: infog(1)={self._mumps.infog[0]}, "
+                f"infog(2)={self._mumps.infog[1]}"
+            )
+
+    def _update_values(self):
+        data = self.hess.get_data()
+        self._a[:] = data[self._data_map]
+
+    def add_diagonal_and_factor(self, diag):
+        self.problem.add_diagonal(diag, self.hess)
+        self.hess.copy_data_device_to_host()
+        self._update_values()
+        self._factorize_current()
+
+    def factor(self, alpha, x, diag):
+        self.problem.hessian(alpha, x, self.hess)
+        self.problem.add_diagonal(diag, self.hess)
+        self.hess.copy_data_device_to_host()
+        self._update_values()
+        self._factorize_current()
+
+    def get_inertia(self):
+        """Return (n_positive, n_negative) from MUMPS infog(12).
+
+        infog(12) = number of negative pivots in LDL^T factorization.
+        n_positive is inferred as n - n_negative (no zero pivot detection).
+        """
+        n_neg = int(self._mumps.infog[11])
+        n_pos = self.nrows - n_neg
+        return n_pos, n_neg
+
+    def solve(self, bx, px):
+        bx.copy_device_to_host()
+        self._rhs[:] = bx.get_array()
+        self._mumps.rhs = self._rhs.ctypes.data_as(self._ct.POINTER(self._ct.c_double))
+        self._mumps.nrhs = 1
+        self._mumps.lrhs = self.nrows
+        self._mumps.job = 3
+        self._call_mumps()
+        if self._mumps.infog[0] < 0:
+            raise RuntimeError(f"MUMPS solve failed: infog(1)={self._mumps.infog[0]}")
+        px.get_array()[:] = self._rhs
+        px.copy_host_to_device()
+
+    def solve_array(self, rhs):
+        self._rhs[:] = rhs
+        self._mumps.rhs = self._rhs.ctypes.data_as(self._ct.POINTER(self._ct.c_double))
+        self._mumps.nrhs = 1
+        self._mumps.lrhs = self.nrows
+        self._mumps.job = 3
+        self._call_mumps()
+        return self._rhs.copy()
+
+    def __del__(self):
+        try:
+            self._mumps.job = -2
+            self._call_mumps()
+        except Exception:
+            pass
 
 
 class PardisoSolver(_HessianDiagMixin):
@@ -537,6 +800,7 @@ class InertiaCorrector:
         zero_hessian_eps,
         comm_rank,
         max_corrections=40,
+        inertia_tolerance=0,
     ):
         """Assemble the KKT matrix, check inertia, and correct if needed.
 
@@ -579,6 +843,15 @@ class InertiaCorrector:
         n_dual = int(np.sum(self.mult_ind))
         n_total = n_primal + n_dual
         has_inertia = hasattr(solver, "get_inertia")
+        itol = inertia_tolerance
+
+        def _inertia_ok(np_, nn_):
+            return (
+                abs(np_ - n_primal) <= itol
+                and abs(nn_ - n_dual) <= itol
+                and np_ + nn_ >= n_total - itol
+            )
+
         mu = self._barrier
 
         # IPOPT Algorithm IC constants (Table 3 in Wachter & Biegler 2006)
@@ -665,8 +938,8 @@ class InertiaCorrector:
                 else:
                     solver.add_diagonal_and_factor(diag)
                 n_pos, n_neg = solver.get_inertia()
-                inertia_ok = n_pos == n_primal and n_neg == n_dual
-                has_zero_eigs = n_pos + n_neg < n_total
+                inertia_ok = _inertia_ok(n_pos, n_neg)
+                has_zero_eigs = n_pos + n_neg < n_total - itol
             except Exception:
                 has_zero_eigs = True  # Factorization failure => singular
 
@@ -697,11 +970,13 @@ class InertiaCorrector:
                     try:
                         solver.factor(1.0, x, diag)
                         n_pos, n_neg = solver.get_inertia()
-                    except Exception:
+                    except Exception as e:
                         n_pos = n_neg = 0
+                        if comm_rank == 0:
+                            print(f"  Factorize error: {e}")
 
                     # IC-4: Check if inertia is now correct
-                    if n_pos == n_primal and n_neg == n_dual:
+                    if _inertia_ok(n_pos, n_neg):
                         self.last_inertia_delta = delta_w
                         # Learn: if corrections were needed early, always
                         # warm-start in future iterations
@@ -879,10 +1154,23 @@ class Optimizer:
             self.problem.scatter_vector(self.upper, self.mpi_problem, self.mpi_upper)
 
         # Set the solver for the KKT system
+        # AMIGO_SOLVER env var: "scipy", "mumps", "pardiso" (default: auto)
         if solver is None and self.distribute:
             self.solver = DirectPetscSolver(self.comm, self.mpi_problem)
         elif solver is None:
-            self.solver = DirectScipySolver(self.problem)
+            solver_pref = os.environ.get("AMIGO_SOLVER", "").lower()
+            if solver_pref == "scipy":
+                self.solver = DirectScipySolver(self.problem)
+            elif solver_pref == "pardiso":
+                self.solver = PardisoSolver(self.problem)
+            else:
+                try:
+                    self.solver = MumpsSolver(self.problem)
+                except (ImportError, Exception):
+                    try:
+                        self.solver = PardisoSolver(self.problem)
+                    except (ImportError, Exception):
+                        self.solver = DirectScipySolver(self.problem)
         else:
             self.solver = solver
 
@@ -1003,6 +1291,7 @@ class Optimizer:
             "max_consecutive_rejections": 5,  # Before barrier increase
             "barrier_increase_factor": 5.0,  # Barrier *= this when stuck
             "max_inertia_corrections": 40,  # Max refactorizations for inertia (IPOPT: ~45)
+            "inertia_tolerance": 0,  # Allow n_pos/n_neg to differ by this many from expected
             "quality_function_sigma_max": 4.0,
             "quality_function_golden_iters": 12,
             "quality_function_kappa_free": 0.9999,
@@ -1378,6 +1667,7 @@ class Optimizer:
                 zero_hessian_eps,
                 comm_rank,
                 max_corrections=options["max_inertia_corrections"],
+                inertia_tolerance=options.get("inertia_tolerance", 0),
             )
         else:
             try:
