@@ -1,6 +1,20 @@
-# Convert from/to strings to/from type
-_type_to_str = {float: "float", int: "int"}
-_str_to_type = {"float": float, "int": int}
+# SED mode flag: when True, ops in hprod mode emit A2D_SED:: namespace
+_sed_mode = False
+
+# Unary ops that have SED-filtered versions in a2d_sed.h
+_sed_unary_ops = {
+    "sin",
+    "cos",
+    "exp",
+    "sqrt",
+    "log",
+    "acos",
+    "asin",
+    "atan",
+    "tan",
+    "tanh",
+    "atanh",
+}
 
 
 def _normalize_shape(shape):
@@ -29,7 +43,6 @@ class ExprNode:
 
     def compute_cost(self):
         raise NotImplementedError
-
 
 class ConstNode(ExprNode):
     def __init__(self, name=None, value=None, type=float):

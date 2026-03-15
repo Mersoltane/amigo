@@ -1053,6 +1053,7 @@ class Component:
             builder = ExprBuilder(consts, data, inputs, vars, rhs=rhs, lhs=lhs)
 
             for mode in ["eval", "grad", "hprod"]:
+                _expressions._sed_mode = mode == "hprod"
                 cpp += self._generate_compute_cpp(
                     builder,
                     lhs,

@@ -294,20 +294,44 @@ def plot_results(t, q, u):
         axes[2, 1].legend()
         axes[2, 1].grid(True)
 
-        # Trajectory in x-y plane
-        axes[2, 2].plot(q[:, 0], q[:, 1], "b-", linewidth=2)
-        axes[2, 2].plot(q[0, 0], q[0, 1], "go", markersize=10, label="Start (-10,-10)")
-        axes[2, 2].plot(q[-1, 0], q[-1, 1], "ro", markersize=10, label="End (0,0)")
-        axes[2, 2].set_xlabel("x (position)")
-        axes[2, 2].set_ylabel("y (position)")
-        axes[2, 2].set_title("Robot Trajectory")
-        axes[2, 2].axis("equal")
-        axes[2, 2].legend()
-        axes[2, 2].grid(True)
+    # Row 3: Trajectory and Controls
+    axes[2, 0].plot(q[:, 0], q[:, 1], color=blue_color, linewidth=2.0)
+    axes[2, 0].set_xlabel("x (m)", fontsize=11)
+    axes[2, 0].set_ylabel("y (m)", fontsize=12)
+    axes[2, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 0].tick_params(labelsize=10)
+    axes[2, 0].set_title("Trajectory", fontsize=14, fontweight="bold", pad=10)
+    axes[2, 0].axis("equal")
 
-        plt.tight_layout()
-        plt.savefig("freeflyingrobot_results.png", dpi=300, bbox_inches="tight")
-        plt.show()
+    axes[2, 1].plot(t, T1, color=purple_color, linewidth=2.0)
+    axes[2, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 1].set_ylabel("T1 (N)", fontsize=12)
+    axes[2, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 1].tick_params(labelsize=10)
+    axes[2, 1].set_title("Thruster 1", fontsize=14, fontweight="bold", pad=10)
+
+    axes[2, 2].plot(t, T2, color=purple_color, linewidth=2.0)
+    axes[2, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 2].set_ylabel("T2 (N)", fontsize=12)
+    axes[2, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 2].tick_params(labelsize=10)
+    axes[2, 2].set_title("Thruster 2", fontsize=14, fontweight="bold", pad=10)
+
+    # Set font for all axes
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.xaxis.label.set_fontname(fontname)
+            ax.yaxis.label.set_fontname(fontname)
+            for tick in ax.get_xticklabels():
+                tick.set_fontname(fontname)
+            for tick in ax.get_yticklabels():
+                tick.set_fontname(fontname)
+
+    plt.tight_layout()
+    plt.savefig(
+        "freeflyingrobot_results.png", dpi=300, bbox_inches="tight", facecolor="white"
+    )
+    plt.show()
 
 
 def plot_convergence(nrms):
