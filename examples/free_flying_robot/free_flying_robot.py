@@ -289,7 +289,7 @@ def plot_results(t, q, u):
     axes[2, 0].grid(True, alpha=0.25, linewidth=0.5)
     axes[2, 0].tick_params(labelsize=10)
     axes[2, 0].set_title("Trajectory", fontsize=14, fontweight="bold", pad=10)
-    axes[2, 0].axis('equal')
+    axes[2, 0].axis("equal")
 
     axes[2, 1].plot(t, T1, color=purple_color, linewidth=2.0)
     axes[2, 1].set_xlabel("Time (s)", fontsize=11)
@@ -316,7 +316,9 @@ def plot_results(t, q, u):
                 tick.set_fontname(fontname)
 
     plt.tight_layout()
-    plt.savefig("freeflyingrobot_results.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.savefig(
+        "freeflyingrobot_results.png", dpi=300, bbox_inches="tight", facecolor="white"
+    )
     plt.show()
 
 
