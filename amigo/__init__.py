@@ -10,7 +10,9 @@ if sys.platform == "win32":
     # BLAS/LAPACK + MUMPS from mumps-build (OpenBLAS-based, no MKL)
     _mumps_build = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "..", "mumps-build", "build",
+        "..",
+        "mumps-build",
+        "build",
     )
     if os.path.isdir(_mumps_build):
         dll_dirs.append(_mumps_build)
