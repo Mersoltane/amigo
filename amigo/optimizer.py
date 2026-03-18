@@ -2846,13 +2846,8 @@ class Optimizer:
                     f"zero-Hessian vars, eps_x_zero={zero_hessian_eps:.2e}"
                 )
 
-        # 5. Quality function barrier strategy setup
-        # Used by barrier_strategy="quality_function" AND by filter_line_search
-        # (which uses adaptive mu via Mehrotra PC + free/fixed mode toggle).
-        quality_func = (
-            options["barrier_strategy"] == "quality_function"
-            or options["filter_line_search"]
-        )
+        # 5. Quality function barrier strategy setup (if selected)
+        quality_func = options["barrier_strategy"] == "quality_function"
         qf_free_mode = True
         qf_kappa = options["quality_function_kappa_free"]
         qf_l_max = options["quality_function_l_max"]
@@ -3047,25 +3042,56 @@ class Optimizer:
 
             prev_res_norm = res_norm
 
-            # Step D+E: Barrier parameter update + search direction
+            # Step D: Barrier parameter update
+            # IPOPT Algorithm A, Step A-3: reduce mu when the barrier
+            # subproblem is solved to sufficient accuracy.
+            # E_mu = max(dual_err, primal_err, comp_err) <= kappa_eps * mu.
+            if filter_ls and i > 0 and self.barrier_param > tol:
+                kappa_eps_ipopt = 10.0
+                kappa_mu_ipopt = 0.2
+                theta_mu_ipopt = 1.5
+                comp_val, _ = self.optimizer.compute_complementarity(self.vars)
+                d_sq_a3, p_sq_a3, _ = self.optimizer.compute_kkt_error(
+                    self.vars, self.grad
+                )
+                e_mu = max(np.sqrt(d_sq_a3), np.sqrt(p_sq_a3), comp_val)
+                if e_mu <= kappa_eps_ipopt * self.barrier_param:
+                    old_mu = self.barrier_param
+                    new_mu = max(
+                        tol / 10.0,
+                        min(kappa_mu_ipopt * old_mu, old_mu**theta_mu_ipopt),
+                    )
+                    if new_mu < old_mu:
+                        self.barrier_param = new_mu
+                        if inertia_corrector:
+                            inertia_corrector.update_barrier(self.barrier_param)
+                        inner_filter.entries.clear()
+                        self._filter_theta_0 = self._compute_filter_theta()
+                        if comm_rank == 0:
+                            print(
+                                f"  IPOPT A-3: mu {old_mu:.2e} -> "
+                                f"{new_mu:.2e} "
+                                f"(E_mu={e_mu:.2e}, filter reset)"
+                            )
+
+            # Step E: Compute search direction
             step_rejected = False
-            if not filter_ls:
-                if inertia_corrector:
-                    inertia_corrector.update_barrier(self.barrier_param)
-                else:
-                    # Legacy zero-step recovery (no inertia corrector)
-                    if i > 0 and max(alpha_x_prev, alpha_z_prev) < 1e-10:
-                        zero_step_count += 1
-                        if zero_step_count >= 3:
-                            old_barrier = self.barrier_param
-                            self.barrier_param = min(self.barrier_param * 10.0, 1.0)
-                            if comm_rank == 0 and self.barrier_param != old_barrier:
-                                print(
-                                    f"  Zero step recovery: barrier {old_barrier:.2e} -> {self.barrier_param:.2e}"
-                                )
-                            zero_step_count = 0
-                    else:
+            if inertia_corrector:
+                inertia_corrector.update_barrier(self.barrier_param)
+            else:
+                # Legacy zero-step recovery (no inertia corrector)
+                if i > 0 and max(alpha_x_prev, alpha_z_prev) < 1e-10:
+                    zero_step_count += 1
+                    if zero_step_count >= 3:
+                        old_barrier = self.barrier_param
+                        self.barrier_param = min(self.barrier_param * 10.0, 1.0)
+                        if comm_rank == 0 and self.barrier_param != old_barrier:
+                            print(
+                                f"  Zero step recovery: barrier {old_barrier:.2e} -> {self.barrier_param:.2e}"
+                            )
                         zero_step_count = 0
+                else:
+                    zero_step_count = 0
 
             # Compute and cache the base diagonal (barrier Sigma)
             self.optimizer.compute_diagonal(self.vars, self.diag)
@@ -3074,13 +3100,9 @@ class Optimizer:
             self.solver.factor(1.0, x, self.diag)
             self.solver.solve(self.res, self.px)
 
-            # Filter LS path: adaptive mu via quality function (IPOPT adaptive
-            # strategy) with free/fixed mode.  Factorize once, then use
-            # Mehrotra PC (free mode) or fixed-mu back-solve (fixed mode).
-            # Filter LS handles globalization in Step F below.
+            # Filter LS path: monotone A-3 handles mu, compute direction.
             if filter_ls:
-                old_mu = self.barrier_param
-                self._factorize_kkt(
+                self._find_direction(
                     x,
                     diag_base,
                     inertia_corrector,
@@ -3090,40 +3112,6 @@ class Optimizer:
                     zero_hessian_eps,
                     comm_rank,
                 )
-
-                if qf_free_mode:
-                    # Adaptive: Mehrotra PC selects mu from affine step
-                    _, mu_qf = self._compute_quality_function_barrier(
-                        tau_min,
-                        use_adaptive_tau,
-                        options,
-                        comm_rank,
-                    )
-                    self.barrier_param = max(mu_qf, qf_mu_floor)
-                else:
-                    # Fixed: hold mu, reduce when subproblem solved
-                    if res_norm <= options["barrier_progress_tol"] * qf_monotone_mu:
-                        new_mono_mu = max(
-                            qf_monotone_mu * options["monotone_barrier_fraction"],
-                            qf_mu_floor,
-                        )
-                        if comm_rank == 0:
-                            print(
-                                f"  QF monotone mu: "
-                                f"{qf_monotone_mu:.4e} -> {new_mono_mu:.4e}"
-                            )
-                        qf_monotone_mu = new_mono_mu
-                    self.barrier_param = qf_monotone_mu
-                    if comm_rank == 0:
-                        print(f"  QF fixed step: mu={self.barrier_param:.4e}")
-                    self._solve_with_mu(self.barrier_param)
-
-                if inertia_corrector:
-                    inertia_corrector.update_barrier(self.barrier_param)
-                # Reset inner filter when mu decreases significantly
-                if self.barrier_param < 0.5 * old_mu:
-                    inner_filter.entries.clear()
-                    self._filter_theta_0 = self._compute_filter_theta()
             elif filter_monotone_mode:
                 if res_norm <= options["barrier_progress_tol"] * filter_monotone_mu:
                     new_mu = max(
