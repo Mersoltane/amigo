@@ -196,6 +196,14 @@ class MumpsSolver(_HessianDiagMixin):
         try:
             if sys.platform == "win32":
                 self._libmumps = ctypes.CDLL("libdmumps.dll")
+            elif sys.platform == "darwin":
+                lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
+                lib_path = (
+                    os.path.join(lib_dir, "libdmumps.dylib")
+                    if lib_dir
+                    else "libdmumps.dylib"
+                )
+                self._libmumps = ctypes.CDLL(lib_path)
             else:
                 lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
                 lib_path = (
@@ -206,7 +214,8 @@ class MumpsSolver(_HessianDiagMixin):
             raise ImportError(
                 "MUMPS library not found. On Windows, ensure libdmumps.dll "
                 "is on the DLL search path. On Linux, install libmumps-dev "
-                "or set MUMPS_LIB_DIR."
+                "or set MUMPS_LIB_DIR. On Mac, install via "
+                "brew tap brewsci/num && brew install brewsci-mumps."
             )
         self._dmumps_c = self._libmumps.dmumps_c
         self._dmumps_c.restype = None
@@ -221,20 +230,13 @@ class MumpsSolver(_HessianDiagMixin):
 
         # Build COO triplet arrays from CSR (MUMPS uses 1-based COO)
         # Only store lower triangle for sym=2 (symmetric indefinite)
-        irn_list = []
-        jcn_list = []
-        data_map = []
-        for i in range(self.nrows):
-            for k in range(self.rowp[i], self.rowp[i + 1]):
-                j = self.cols[k]
-                if j <= i:  # lower triangle
-                    irn_list.append(i + 1)
-                    jcn_list.append(j + 1)
-                    data_map.append(k)
-        self._irn = np.array(irn_list, dtype=np.int32)
-        self._jcn = np.array(jcn_list, dtype=np.int32)
-        self._data_map = np.array(data_map, dtype=np.intc)
-        self._nnz_lower = len(irn_list)
+        row_idx = np.repeat(np.arange(self.nrows, dtype=np.int32), np.diff(self.rowp))
+        col_idx = np.array(self.cols, dtype=np.int32)
+        lower_mask = col_idx <= row_idx
+        self._irn = row_idx[lower_mask] + 1
+        self._jcn = col_idx[lower_mask] + 1
+        self._data_map = np.nonzero(lower_mask)[0].astype(np.intc)
+        self._nnz_lower = int(lower_mask.sum())
         self._a = np.empty(self._nnz_lower, dtype=np.float64)
 
         # Build the MUMPS struct via ctypes
@@ -276,6 +278,9 @@ class MumpsSolver(_HessianDiagMixin):
             )
 
         self._rhs = np.empty(self.nrows, dtype=np.float64)
+        self._mumps.rhs = self._rhs.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        self._mumps.nrhs = 1
+        self._mumps.lrhs = self.nrows
 
     def _build_struct(self):
         """Build the ctypes Structure matching DMUMPS_STRUC_C."""
@@ -376,7 +381,7 @@ class MumpsSolver(_HessianDiagMixin):
                 ("instance_number", ct.c_int),
             ]
         else:
-            # Layout matching MUMPS 5.6.2 (Ubuntu libmumps-dev)
+            # Layout matching MUMPS 5.x (Linux/Mac)
             _mumps_fields = [
                 ("sym", ct.c_int),
                 ("par", ct.c_int),
@@ -507,9 +512,6 @@ class MumpsSolver(_HessianDiagMixin):
     def solve(self, bx, px):
         bx.copy_device_to_host()
         self._rhs[:] = bx.get_array()
-        self._mumps.rhs = self._rhs.ctypes.data_as(self._ct.POINTER(self._ct.c_double))
-        self._mumps.nrhs = 1
-        self._mumps.lrhs = self.nrows
         self._mumps.job = 3
         self._call_mumps()
         if self._mumps.infog[0] < 0:
@@ -519,9 +521,6 @@ class MumpsSolver(_HessianDiagMixin):
 
     def solve_array(self, rhs):
         self._rhs[:] = rhs
-        self._mumps.rhs = self._rhs.ctypes.data_as(self._ct.POINTER(self._ct.c_double))
-        self._mumps.nrhs = 1
-        self._mumps.lrhs = self.nrows
         self._mumps.job = 3
         self._call_mumps()
         return self._rhs.copy()
@@ -1519,7 +1518,7 @@ class Optimizer:
         dpx = px1 - px0
 
         tol_qf = options["convergence_tolerance"]
-        mu_floor = max(tol_qf * 0.01, 1e-14)
+        mu_floor = 1e-14
 
         tau_qf = options["fraction_to_boundary"]
 
@@ -2847,13 +2846,18 @@ class Optimizer:
                     f"zero-Hessian vars, eps_x_zero={zero_hessian_eps:.2e}"
                 )
 
-        # 5. Quality function barrier strategy setup (if selected)
-        quality_func = options["barrier_strategy"] == "quality_function"
+        # 5. Quality function barrier strategy setup
+        # Used by barrier_strategy="quality_function" AND by filter_line_search
+        # (which uses adaptive mu via Mehrotra PC + free/fixed mode toggle).
+        quality_func = (
+            options["barrier_strategy"] == "quality_function"
+            or options["filter_line_search"]
+        )
         qf_free_mode = True
         qf_kappa = options["quality_function_kappa_free"]
         qf_l_max = options["quality_function_l_max"]
         qf_kkt_history = deque(maxlen=qf_l_max + 1)
-        qf_mu_floor = max(tol * 0.01, 1e-14)
+        qf_mu_floor = 1e-14
         qf_monotone_mu = None
         qf_M_k_at_entry = None
         qf_sd = qf_sp = qf_sc = 1.0
@@ -3043,60 +3047,25 @@ class Optimizer:
 
             prev_res_norm = res_norm
 
-            # Step D: Barrier parameter update
-            # IPOPT Algorithm A, Step A-3: reduce mu when the barrier
-            # subproblem is solved to sufficient accuracy.
-            # E_mu = max(dual_err, primal_err, comp_err) <= kappa_eps * mu.
-            # All three KKT components must be small -- missing the dual
-            # term causes premature mu reduction and ill-conditioning.
-            if filter_ls and i > 0 and self.barrier_param > tol:
-                kappa_eps_ipopt = 10.0
-                kappa_mu_ipopt = 0.2
-                theta_mu_ipopt = 1.5
-                comp_val, _ = self.optimizer.compute_complementarity(self.vars)
-                d_sq_a3, p_sq_a3, _ = self.optimizer.compute_kkt_error(
-                    self.vars, self.grad
-                )
-                e_mu = max(np.sqrt(d_sq_a3), np.sqrt(p_sq_a3), comp_val)
-                if e_mu <= kappa_eps_ipopt * self.barrier_param:
-                    old_mu = self.barrier_param
-                    new_mu = max(
-                        tol / 10.0,
-                        min(kappa_mu_ipopt * old_mu, old_mu**theta_mu_ipopt),
-                        old_mu / 10.0,  # cap: never reduce by more than 10x
-                    )
-                    if new_mu < old_mu:
-                        self.barrier_param = new_mu
-                        if inertia_corrector:
-                            inertia_corrector.update_barrier(self.barrier_param)
-                        inner_filter.entries.clear()
-                        # Reset theta_0 for the new barrier subproblem
-                        self._filter_theta_0 = self._compute_filter_theta()
-                        if comm_rank == 0:
-                            print(
-                                f"  IPOPT A-3: mu {old_mu:.2e} -> "
-                                f"{new_mu:.2e} "
-                                f"(E_mu={e_mu:.2e}, filter reset)"
-                            )
-
-            # Step E: Compute search direction
+            # Step D+E: Barrier parameter update + search direction
             step_rejected = False
-            if inertia_corrector:
-                inertia_corrector.update_barrier(self.barrier_param)
-            else:
-                # Legacy zero-step recovery (no inertia corrector)
-                if i > 0 and max(alpha_x_prev, alpha_z_prev) < 1e-10:
-                    zero_step_count += 1
-                    if zero_step_count >= 3:
-                        old_barrier = self.barrier_param
-                        self.barrier_param = min(self.barrier_param * 10.0, 1.0)
-                        if comm_rank == 0 and self.barrier_param != old_barrier:
-                            print(
-                                f"  Zero step recovery: barrier {old_barrier:.2e} -> {self.barrier_param:.2e}"
-                            )
-                        zero_step_count = 0
+            if not filter_ls:
+                if inertia_corrector:
+                    inertia_corrector.update_barrier(self.barrier_param)
                 else:
-                    zero_step_count = 0
+                    # Legacy zero-step recovery (no inertia corrector)
+                    if i > 0 and max(alpha_x_prev, alpha_z_prev) < 1e-10:
+                        zero_step_count += 1
+                        if zero_step_count >= 3:
+                            old_barrier = self.barrier_param
+                            self.barrier_param = min(self.barrier_param * 10.0, 1.0)
+                            if comm_rank == 0 and self.barrier_param != old_barrier:
+                                print(
+                                    f"  Zero step recovery: barrier {old_barrier:.2e} -> {self.barrier_param:.2e}"
+                                )
+                            zero_step_count = 0
+                    else:
+                        zero_step_count = 0
 
             # Compute and cache the base diagonal (barrier Sigma)
             self.optimizer.compute_diagonal(self.vars, self.diag)
@@ -3105,10 +3074,13 @@ class Optimizer:
             self.solver.factor(1.0, x, self.diag)
             self.solver.solve(self.res, self.px)
 
-            # IPOPT filter LS path: barrier is handled by Step A-3 above.
-            # Just compute the search direction with the current mu.
+            # Filter LS path: adaptive mu via quality function (IPOPT adaptive
+            # strategy) with free/fixed mode.  Factorize once, then use
+            # Mehrotra PC (free mode) or fixed-mu back-solve (fixed mode).
+            # Filter LS handles globalization in Step F below.
             if filter_ls:
-                self._find_direction(
+                old_mu = self.barrier_param
+                self._factorize_kkt(
                     x,
                     diag_base,
                     inertia_corrector,
@@ -3118,6 +3090,40 @@ class Optimizer:
                     zero_hessian_eps,
                     comm_rank,
                 )
+
+                if qf_free_mode:
+                    # Adaptive: Mehrotra PC selects mu from affine step
+                    _, mu_qf = self._compute_quality_function_barrier(
+                        tau_min,
+                        use_adaptive_tau,
+                        options,
+                        comm_rank,
+                    )
+                    self.barrier_param = max(mu_qf, qf_mu_floor)
+                else:
+                    # Fixed: hold mu, reduce when subproblem solved
+                    if res_norm <= options["barrier_progress_tol"] * qf_monotone_mu:
+                        new_mono_mu = max(
+                            qf_monotone_mu * options["monotone_barrier_fraction"],
+                            qf_mu_floor,
+                        )
+                        if comm_rank == 0:
+                            print(
+                                f"  QF monotone mu: "
+                                f"{qf_monotone_mu:.4e} -> {new_mono_mu:.4e}"
+                            )
+                        qf_monotone_mu = new_mono_mu
+                    self.barrier_param = qf_monotone_mu
+                    if comm_rank == 0:
+                        print(f"  QF fixed step: mu={self.barrier_param:.4e}")
+                    self._solve_with_mu(self.barrier_param)
+
+                if inertia_corrector:
+                    inertia_corrector.update_barrier(self.barrier_param)
+                # Reset inner filter when mu decreases significantly
+                if self.barrier_param < 0.5 * old_mu:
+                    inner_filter.entries.clear()
+                    self._filter_theta_0 = self._compute_filter_theta()
             elif filter_monotone_mode:
                 if res_norm <= options["barrier_progress_tol"] * filter_monotone_mu:
                     new_mu = max(
