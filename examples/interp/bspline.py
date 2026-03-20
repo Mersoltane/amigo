@@ -49,7 +49,7 @@ ans = xm["interp_values.CD"]
 plt.plot(xi, ans)
 
 # Cubic spline degree
-k = 3
+degree = 3
 
 # Knot vector
 t = bspline._compute_knots()
@@ -58,7 +58,7 @@ t = bspline._compute_knots()
 c = xm["control_points.Mach"]
 
 # Construct spline
-spline = scipyBSpline(t, c, k)
+spline = scipyBSpline(t, c, degree)
 
 # Evaluation points
 x = np.linspace(t[0], t[-1], 200)

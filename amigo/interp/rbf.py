@@ -86,7 +86,13 @@ class RBF:
     """
 
     def __init__(
-        self, num_points, input_names: List[str], output_name: str, xt, yt, theta
+        self,
+        num_points,
+        input_names: List[str],
+        output_name: str,
+        xt: np.ndarray,
+        yt: np.ndarray,
+        theta: List | np.ndarray,
     ):
         num_basis = len(yt)
         if xt.shape[0] != num_basis:
