@@ -90,7 +90,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Two displacement DOFs per node
+# Create the solution spaces
 soln_space = SolutionSpace({"w": "H1", "tx": "H1", "ty": "H1"})
 geo_space = SolutionSpace({"x": "H1", "y": "H1"})
 data_space = SolutionSpace({})
