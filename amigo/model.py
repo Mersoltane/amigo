@@ -1102,6 +1102,7 @@ class Model:
         # C++ file contents
         cpp = '#include "amigo.h"\n'
         cpp += '#include "a2dcore.h"\n'
+        # a2d_sed.h removed - use standard a2d for exact Hessians
         cpp += "namespace amigo {"
 
         # pybind11 file contents
