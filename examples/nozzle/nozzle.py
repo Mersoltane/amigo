@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import amigo as am
+from amigo.interp import BSpline
 import numpy as np
 import nozzle_plots
 
@@ -308,13 +309,6 @@ class Objective(am.Component):
         self.objective["obj"] = dx * (p - p0) ** 2
 
 
-class AreaControlPoints(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        self.add_input("area")
-
-
 class PseudoTransient(am.Component):
     def __init__(self, gamma=1.4, dx=1.0):
         super().__init__()
@@ -475,19 +469,19 @@ def get_initial_point_and_bounds(model):
     lower["nozzle.Q[:, 0]"] = 1e-3
 
     # Set the initial values
-    x["nozzle.dAdx"] = 0.0
-    x["area.output"] = 1.0
+    x["area_derivative.interp_values.dAdx"] = 0.0
+    x["area.interp_values.A"] = 1.0
 
     # Set the bounds on the the areas
-    x["area_ctrl.area"] = 1.5
-    lower["area_ctrl.area"] = -3.0
-    upper["area_ctrl.area"] = 3.0
+    x["area.control_points.area_ctrl"] = 1.5
+    lower["area.control_points.area_ctrl"] = -3.0
+    upper["area.control_points.area_ctrl"] = 3.0
 
     # Set the remaining variable lower and upper bounds
-    lower["area.output"] = -float("inf")
-    upper["area.output"] = float("inf")
-    lower["area_derivative.output"] = float("-inf")
-    upper["area_derivative.output"] = float("inf")
+    lower["area.interp_values.A"] = -float("inf")
+    upper["area.interp_values.A"] = float("inf")
+    lower["area_derivative.interp_values.dAdx"] = float("-inf")
+    upper["area_derivative.interp_values.dAdx"] = float("inf")
     lower["flux.F"] = float("-inf")
     upper["flux.F"] = float("inf")
     lower["inlet.F"] = float("-inf")
@@ -593,22 +587,31 @@ model.add_component(
     "objective", args.num_cells, Objective(gamma=gamma, dx=(length / args.num_cells))
 )
 
-# Add the area source
-model.add_component("area_ctrl", nctrl, AreaControlPoints())
-
 # Add the Bspline area calculation component
 xi_interface = np.linspace(0, length, args.num_cells + 1)
-area = am.BSplineInterpolant(xi=xi_interface, k=4, n=nctrl, deriv=0, length=length)
-model.add_component("area", args.num_cells + 1, area)
+area_bspline = BSpline(
+    input_name="area_ctrl",
+    output_name="A",
+    interp_points=xi_interface,
+    num_ctrl_points=nctrl,
+    length=length,
+)
+model.add_model("area", area_bspline.create_model())
 
 # Add the Bspline derivative evaluation component
 first_cell = 0.5 * dx
 last_cell = length - 0.5 * dx
 xi_cell_center = np.linspace(first_cell, last_cell, args.num_cells)
-area_derivative = am.BSplineInterpolant(
-    xi=xi_cell_center, k=4, n=nctrl, deriv=1, length=length
+
+area_deriv_bspline = BSpline(
+    input_name="area_ctrl",
+    output_name="dAdx",
+    interp_points=xi_cell_center,
+    num_ctrl_points=nctrl,
+    length=length,
+    deriv=1,
 )
-model.add_component("area_derivative", args.num_cells, area_derivative)
+model.add_model("area_derivative", area_deriv_bspline.create_model())
 
 # Add the continuation components
 pseudo_transient = PseudoTransient(gamma=gamma, dx=(length / args.num_cells))
@@ -625,23 +628,22 @@ model.link(f"nozzle.Q[1:, :]", "flux.QR")
 model.link(f"nozzle.FL[1:, :]", "flux.F")
 model.link(f"nozzle.FR[:-1, :]", "flux.F")
 
+# Link the control areas
+model.link("area.control_points.area_ctrl", "area_derivative.control_points.area_ctrl")
+
 # Link the area evaluations to the fluxes and boundary conditions
-model.link("area.output[1:-1]", "flux.A")
+model.link("area.interp_values.A[1:-1]", "flux.A")
 
 # Link the Area and dAdx values to the nozzle equations
-model.link("nozzle.dAdx", "area_derivative.output")
-
-# Set the control points
-area.add_links("area", model, "area_ctrl.area")
-area_derivative.add_links("area_derivative", model, "area_ctrl.area")
+model.link("nozzle.dAdx", "area_derivative.interp_values.dAdx")
 
 # Link the input boundary states and fluxes
-model.link("area.output[0]", "inlet.A_inlet")
+model.link("area.interp_values.A[0]", "inlet.A_inlet")
 model.link("nozzle.Q[0, :]", "inlet.Q[0, :]")
 model.link("nozzle.FL[0, :]", "inlet.F[0, :]")
 
 # Link the output boundary states and fluxes
-model.link("area.output[-1]", "outlet.A_outlet")
+model.link("area.interp_values.A[-1]", "outlet.A_outlet")
 model.link("nozzle.Q[-1, :]", "outlet.Q[0, :]")
 model.link("nozzle.FR[-1, :]", "outlet.F[0, :]")
 
@@ -649,10 +651,10 @@ model.link("nozzle.FR[-1, :]", "outlet.F[0, :]")
 model.link("nozzle.Q", "objective.Q")
 
 # Connect the nozzle boundary condition calculations
-model.link("area.output[0]", "calc.A[0]")
+model.link("area.interp_values.A[0]", "calc.A[0]")
 model.link("inlet.M_inlet", "calc.M[0]")
 
-model.link("area.output[-1]", "calc.A[1]")
+model.link("area.interp_values.A[-1]", "calc.A[1]")
 model.link("outlet.M_outlet", "calc.M[1]")
 
 # Link the pseudo-transient continuation values
@@ -661,7 +663,7 @@ model.link("pseudo_transient.res", "nozzle.res")
 model.link("pseudo_transient.CFL[1:]", "pseudo_transient.CFL[0]")
 
 # Link the design continuation parameters
-model.link("design_continuation.area_ctrl", "area_ctrl.area")
+model.link("design_continuation.area_ctrl", "area.control_points.area_ctrl")
 model.link(
     "design_continuation.diagonal_weight[1:]", "design_continuation.diagonal_weight[0]"
 )
@@ -715,7 +717,7 @@ def continuation_control(iteration, res_norm):
 print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
 
-for opt_iter in range(2):
+for opt_iter in range(1):
     # Evaluate the target pressure distribution
     M_target, p_target = compute_pressure_target(A_target, p_res, gamma, Astar)
 
@@ -727,8 +729,6 @@ for opt_iter in range(2):
     data["design_continuation.diagonal_weight[0]"] = 100.0
 
     # Set the area derivative data
-    area.set_data("area", data)
-    area_derivative.set_data("area_derivative", data)
     data.get_vector().copy_host_to_device()
 
     # Set the initial point and bounds
@@ -740,7 +740,7 @@ for opt_iter in range(2):
     opt_history = opt.optimize(
         {
             "max_iterations": 1000,
-            "record_components": ["area_ctrl.area"],
+            "record_components": ["area.control_points.area_ctrl"],
             "max_line_search_iterations": 4,
             "convergence_tolerance": 1e-9,
             "monotone_barrier_fraction": 0.1,
@@ -781,7 +781,11 @@ nozzle_plots.plot_solution(rho, u, p, M_target, p_target, args.num_cells, length
 
 # Plot the nozzle problem solution
 nozzle_plots.plot_nozzle(
-    x["area.output"], x["area_derivative.output"], A_target, args.num_cells, length
+    x["area.interp_values.A"],
+    x["area_derivative.interp_values.dAdx"],
+    A_target,
+    args.num_cells,
+    length,
 )
 
 norms = []

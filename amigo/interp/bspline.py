@@ -46,8 +46,8 @@ class BSplineKernel(am.Component):
 class BSpline:
     def __init__(
         self,
-        input_name: str,
-        output_name: str,
+        input_name: str = "input",
+        output_name: str = "output",
         interp_points=None,
         num_interp_points: int = 0,
         length: float = 1.0,

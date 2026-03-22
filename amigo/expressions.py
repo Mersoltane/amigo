@@ -18,6 +18,9 @@ def _normalize_shape(shape):
 
 
 class ExprNode:
+    def is_zero(self):
+        raise NotImplementedError
+
     def serialize(self):
         raise NotImplementedError
 
@@ -37,6 +40,11 @@ class ConstNode(ExprNode):
         self.name = name
         self.value = value
         self.type = type
+
+    def is_zero(self):
+        if self.value is not None and (self.value == 0 or self.value == 0.0):
+            return True
+        return False
 
     def serialize(self):
         return ("const", self.name, self.value, _type_to_str[self.type])
@@ -61,6 +69,9 @@ class VarNode(ExprNode):
         self.type = type
         self.active = active
 
+    def is_zero(self):
+        return False
+
     def serialize(self):
         return ("var", self.name, self.shape, _type_to_str[self.type], self.active)
 
@@ -79,6 +90,9 @@ class IndexNode(ExprNode):
         super().__init__()
         self.expr = expr
         self.index = index
+
+    def is_zero(self):
+        return False
 
     def serialize(self):
         return ("index", self.expr.serialize(), self.index)
@@ -101,6 +115,9 @@ class PassiveNode(ExprNode):
     def __init__(self, expr):
         self.expr = expr
 
+    def is_zero(self):
+        return False
+
     def serialize(self):
         return ("passive", self.expr.serialize())
 
@@ -120,6 +137,9 @@ class UnaryNode(ExprNode):
         super().__init__()
         self.op = op
         self.expr = expr
+
+    def is_zero(self):
+        return self.expr.is_zero()
 
     def serialize(self):
         return ("unary", self.op, self.expr.serialize())
@@ -160,6 +180,9 @@ class BinaryNode(ExprNode):
         self.op = op
         self.left = left
         self.right = right
+
+    def is_zero(self):
+        return False
 
     def serialize(self):
         return ("binary", self.op, self.left.serialize(), self.right.serialize())
@@ -223,15 +246,30 @@ class Expr:
         return Expr(UnaryNode("-", self))
 
     def __add__(self, other):
-        return Expr(BinaryNode("+", self, _to_expr(other)))
+        expr = _to_expr(other)
+        if self.is_zero():
+            return expr
+        elif expr.is_zero():
+            return self
+        return Expr(BinaryNode("+", self, expr))
 
     def __sub__(self, other):
-        return Expr(BinaryNode("-", self, _to_expr(other)))
+        expr = _to_expr(other)
+        if self.is_zero():
+            return Expr(UnaryNode("-", expr))
+        elif expr.is_zero():
+            return self
+        return Expr(BinaryNode("-", self, expr))
 
     def __mul__(self, other):
-        return Expr(BinaryNode("*", self, _to_expr(other)))
+        expr = _to_expr(other)
+        if self.is_zero() or expr.is_zero():
+            return Expr(ConstNode(value=0.0))
+        return Expr(BinaryNode("*", self, expr))
 
     def __truediv__(self, other):
+        if self.is_zero():
+            return Expr(ConstNode(value=0.0))
         return Expr(BinaryNode("/", self, _to_expr(other)))
 
     def __pow__(self, other):
@@ -251,16 +289,32 @@ class Expr:
         return Expr(BinaryNode("**", self, _to_expr(other)))
 
     def __radd__(self, other):
-        return Expr(BinaryNode("+", _to_expr(other), self))
+        expr = _to_expr(other)
+        if self.is_zero():
+            return expr
+        elif expr.is_zero():
+            return self
+        return Expr(BinaryNode("+", expr, self))
 
     def __rsub__(self, other):
-        return Expr(BinaryNode("-", _to_expr(other), self))
+        expr = _to_expr(other)
+        if self.is_zero():
+            return expr
+        elif expr.is_zero():
+            return Expr(UnaryNode("-", self))
+        return Expr(BinaryNode("-", expr, self))
 
     def __rmul__(self, other):
-        return Expr(BinaryNode("*", _to_expr(other), self))
+        expr = _to_expr(other)
+        if self.is_zero() or expr.is_zero():
+            return Expr(ConstNode(value=0.0))
+        return Expr(BinaryNode("*", expr, self))
 
     def __rtruediv__(self, other):
-        return Expr(BinaryNode("/", _to_expr(other), self))
+        expr = _to_expr(other)
+        if expr.is_zero():
+            return Expr(ConstNode(value=0.0))
+        return Expr(BinaryNode("/", expr, self))
 
     def __rpow__(self, other):
         return Expr(BinaryNode("**", _to_expr(other), self))
@@ -287,6 +341,9 @@ class Expr:
             return Expr(IndexNode(self, index))
         else:
             raise TypeError("You can only index variables, not general expressions")
+
+    def is_zero(self):
+        return self.node.is_zero()
 
     def serialize(self):
         return self.node.serialize()
