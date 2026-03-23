@@ -52,7 +52,7 @@ class MITC4PlateTying(MITCTyingStrain):
         return out
 
 
-def potential(soln, data=None, geo=None):
+def integrand(soln, data=None, geo=None):
     """Strain energy density (integrand of TPE equation)"""
 
     E = 1.0  # Young's modulus
@@ -95,10 +95,10 @@ soln_space = SolutionSpace({"w": "H1", "tx": "H1", "ty": "H1"})
 geo_space = SolutionSpace({"x": "H1", "y": "H1"})
 data_space = SolutionSpace({})
 
-potential_map = {
+integrand_map = {
     "plate": {
         "target": ["SURFACE1"],
-        "potential": potential,
+        "integrand": integrand,
     },
 }
 bc_map = {
@@ -122,7 +122,7 @@ mitc = MITC4PlateTying()
 
 # Create the MITC4 element
 quad_elem = MITCElement(
-    "MITC4", soln_basis, data_basis, geo_basis, quadrature, mitc, potential
+    "MITC4", soln_basis, data_basis, geo_basis, quadrature, mitc, integrand
 )
 
 # Set the element objects
@@ -134,7 +134,7 @@ problem = Problem(
     soln_space,
     data_space,
     geo_space,
-    potential_map=potential_map,
+    integrand_map=integrand_map,
     bc_map=bc_map,
     element_objs=element_objs,
 )

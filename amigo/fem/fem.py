@@ -209,12 +209,17 @@ class DegreesOfFreedom:
             # Create amigo source component with input names and geo names
             input_names = []
             data_names = []
+            con_names = []
             if self.kind == "input":
                 input_names = names
             elif self.kind == "data":
                 data_names = names
+            elif self.kind == "multiplier":
+                con_names = names
 
-            dof_src = DofSource(input_names=input_names, data_names=data_names)
+            dof_src = DofSource(
+                input_names=input_names, con_names=con_names, data_names=data_names
+            )
 
             # Add global mesh source component
             if sp == "H1":
@@ -544,7 +549,8 @@ class Problem:
         soln_space: basis.SolutionSpace,
         data_space: basis.SolutionSpace,
         geo_space: basis.SolutionSpace,
-        potential_map={},
+        integrand_map={},
+        integrand_formulation="potential",
         output_map={},
         bc_map={},
         element_objs={},
@@ -555,7 +561,8 @@ class Problem:
         self.data_space = data_space
         self.geo_space = geo_space
 
-        self.potential_map = potential_map
+        self.integrand_map = integrand_map
+        self.integrand_formulation = integrand_formulation
         self.bc_map = bc_map
         self.output_map = output_map
 
@@ -563,14 +570,15 @@ class Problem:
         self.element_objs = element_objs
         self.output_objs = output_objs
 
-        # Create the degrees of freedom
-        # if self.use_weakform:
-        #     self.test_dof = DegreesOfFreedom(
-        #         self.mesh,
-        #         self.soln_space,
-        #         kind="multipliers",
-        #         name=None,
-        #     )
+        # Allocate constraints for the weak formulation
+        self.test_dof = None
+        if self.integrand_formulation == "weak":
+            self.test_dof = DegreesOfFreedom(
+                self.mesh,
+                self.soln_space,
+                kind="multiplier",
+                name="multiplier",
+            )
 
         # Initialize Dofs
         self.soln_dof = DegreesOfFreedom(
@@ -612,9 +620,9 @@ class Problem:
         # Get the domain names from the mesh
         domains = self.mesh.get_domains()
 
-        for potential_name in self.potential_map:
-            targets = self.potential_map[potential_name]["target"]
-            potential = self.potential_map[potential_name]["potential"]
+        for integrand_name in self.integrand_map:
+            targets = self.integrand_map[integrand_name]["target"]
+            integrand = self.integrand_map[integrand_name]["integrand"]
 
             # Figure out the element types that we need
             etypes = []
@@ -623,15 +631,18 @@ class Problem:
                     if not etype in etypes:
                         etypes.append(etype)
 
-            # Loop over the element types for this potential
+            # Loop over the element types for this integrand
             for etype in etypes:
-                if (potential_name, etype) in self.element_objs:
+                if (integrand_name, etype) in self.element_objs:
                     continue
 
                 # Set the element name
-                elem_name = f"Element{potential_name}{etype}"
+                elem_name = f"Element{integrand_name}{etype}"
 
                 # Get the basis objects for the element type
+                test_basis = None
+                if self.test_dof is not None:
+                    test_basis = self.test_dof.get_basis(etype)
                 soln_basis = self.soln_dof.get_basis(etype)
                 data_basis = self.data_dof.get_basis(etype)
                 geo_basis = self.geo_dof.get_basis(etype)
@@ -641,11 +652,17 @@ class Problem:
 
                 # Create the element object
                 obj = FiniteElement(
-                    elem_name, soln_basis, data_basis, geo_basis, quadrature, potential
+                    elem_name,
+                    soln_basis,
+                    data_basis,
+                    geo_basis,
+                    quadrature,
+                    integrand,
+                    test_basis=test_basis,
                 )
 
                 # Set this into the element dictionary
-                self.element_objs[(potential_name, etype)] = obj
+                self.element_objs[(integrand_name, etype)] = obj
 
         return
 
@@ -701,6 +718,8 @@ class Problem:
         """Create and link the Amigo model"""
         model = am.Model(module_name)
 
+        if self.test_dof is not None:
+            self.test_dof.add_source(model)
         self.soln_dof.add_source(model)
         self.data_dof.add_source(model)
         self.geo_dof.add_source(model)
@@ -712,13 +731,13 @@ class Problem:
         self._create_element_objs()
 
         # Add the element component objects
-        for potential_name in self.potential_map:
-            targets = self.potential_map[potential_name]["target"]
+        for integrand_name in self.integrand_map:
+            targets = self.integrand_map[integrand_name]["target"]
 
             for target in targets:
                 for etype in domains[target]:
-                    elem = self.element_objs[(potential_name, etype)]
-                    comp_name = f"Element{potential_name}{etype}{target}"
+                    elem = self.element_objs[(integrand_name, etype)]
+                    comp_name = f"Element{integrand_name}{etype}{target}"
 
                     # Add the element/component
                     nelems = self.mesh.get_num_elements(target, etype)
@@ -728,6 +747,10 @@ class Problem:
                     self.soln_dof.link_dof(model, target, etype, comp_name)
                     self.data_dof.link_dof(model, target, etype, comp_name)
                     self.geo_dof.link_dof(model, target, etype, comp_name)
+
+                    # Link the constraints (if using the weak formulation)
+                    if self.test_dof is not None:
+                        self.test_dof.link_dof(model, target, etype, comp_name)
 
         # Add BC components and links
         for dof in self.dirichlet_dof:

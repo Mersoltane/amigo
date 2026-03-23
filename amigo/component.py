@@ -613,6 +613,8 @@ class Component:
 
         # Set the compute function arguments
         self.args = [{}]
+        self.lagrangian = {}
+        self.alpha = Expr(VarNode("alpha__", active=False))
 
         # Set default flags
         self.compute_empty = False
@@ -640,6 +642,11 @@ class Component:
         data["objective"] = self.objective.serialize()
         data["outputs"] = self.outputs.serialize()
 
+        d = {}
+        for args in self.lagrangian:
+            d[args] = self.lagrangian[args].serialize()
+        data["lagrangian"] = d
+
         return data
 
     @classmethod
@@ -655,6 +662,10 @@ class Component:
         obj.constraints = ConstraintSet.deserialize(data["constraints"])
         obj.objective = ObjectiveSet.deserialize(data["objective"])
         obj.outputs = OutputSet.deserialize(data["outputs"])
+
+        d = data["lagrangian"]
+        for args in d:
+            obj.lagrangian[int(args)] = Expr.deserialize(d[args])
 
         # The expressions in this object have been initialized
         obj.initialized = True
@@ -825,11 +836,17 @@ class Component:
             self.outputs.arg_index = index
 
             if len(args) > 0:
-                self.compute(**args)
+                lagrangian = self.compute(**args)
                 self.compute_output(**args)
             else:
-                self.compute()
+                lagrangian = self.compute()
                 self.compute_output()
+
+            # Compute the Lagrangian if the user hasn't done so
+            if lagrangian is None:
+                self.lagrangian[index] = self._compute_lagrangian()
+            else:
+                self.lagrangian[index] = lagrangian
 
         self.initialized = True
 
@@ -837,12 +854,9 @@ class Component:
 
     def _compute_lagrangian(self):
         # Compute the Lagrangian
-        lhs = Expr(VarNode("lagrangian__"))
-        alpha = Expr(VarNode("alpha__", active=False))
-        rhs = 0.0
-
+        rhs = Expr(ConstNode(value=0.0))
         for name in self.objective:
-            rhs = alpha * self.objective[name]
+            rhs = self.alpha * self.objective[name]
 
         # Get the multipliers indexed by the constraint name
         multipliers = self.constraints.get_multipliers()
@@ -863,7 +877,7 @@ class Component:
                     for j in range(shape[1]):
                         rhs = rhs + con[i, j] * lam[i, j]
 
-        return rhs, lhs
+        return rhs
 
     def _get_using_statement(self, name="input", template_name="R__"):
         # Generate the using statement
@@ -1014,7 +1028,7 @@ class Component:
         multipliers = self.constraints.get_multipliers()
         inputs += [multipliers[name] for name in multipliers]
 
-        for index in range(len(self.args)):
+        for index, args in enumerate(self.args):
             self.constraints.arg_index = index
             self.objective.arg_index = index
             self.outputs.arg_index = index
@@ -1029,7 +1043,8 @@ class Component:
             )
 
             # Get the expression for the Lagrangian
-            rhs, lhs = self._compute_lagrangian()
+            rhs = self.lagrangian[index]
+            lhs = Expr(VarNode("lagrangian__"))
 
             if rhs is None:
                 rhs = []
@@ -1037,6 +1052,7 @@ class Component:
                 lhs = []
 
             # Create the expression builder
+            print(rhs, lhs)
             vars = []
             builder = ExprBuilder(consts, data, inputs, vars, rhs=rhs, lhs=lhs)
 
