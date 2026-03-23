@@ -349,12 +349,19 @@ class ConstraintSet:
 
     def __init__(self):
         self.cons = {}
+        self.multipliers = {}
         self.meta = {}
         self.arg_index = 0
 
     def add(self, name, shape=None, type=float, **kwargs):
+        # Add the constraint
         self.cons[name] = self.ConstrExpr(name, shape=shape, type=type)
         self.meta[name] = Meta(name, "constraint", shape=shape, type=type, **kwargs)
+
+        # Add the associated multiplier
+        multiplier_name = self._get_multiplier_name(name)
+        self.multipliers[name] = Expr(VarNode(multiplier_name, shape=shape))
+
         return
 
     def __len__(self):
@@ -389,7 +396,10 @@ class ConstraintSet:
     def get_meta(self, name):
         return self.meta[name]
 
-    def get_multiplier_name(self, name):
+    def get_multipliers(self):
+        return self.multipliers
+
+    def _get_multiplier_name(self, name):
         if name in self.cons:
             return f"lam_{name}__"
         else:
@@ -601,9 +611,6 @@ class Component:
         self.objective = ObjectiveSet()
         self.outputs = OutputSet()
 
-        # Variables associated with the constraints
-        self.multipliers = {}
-
         # Set the compute function arguments
         self.args = [{}]
 
@@ -793,15 +800,6 @@ class Component:
             out_shapes[name] = shape
         return out_shapes
 
-    def _initialize_multipliers(self):
-        for name in self.constraints:
-            mult_name = self.constraints.get_multiplier_name(name)
-            if mult_name not in self.inputs:
-                shape = self.constraints.get_shape(name)
-                self.multipliers[mult_name] = Expr(VarNode(mult_name, shape=shape))
-
-        return
-
     def _is_overridden(self, method_name):
         instance_method = getattr(self, method_name)
         base_method = getattr(type(self).__bases__[0], method_name, None)
@@ -841,37 +839,28 @@ class Component:
         # Compute the Lagrangian
         lhs = Expr(VarNode("lagrangian__"))
         alpha = Expr(VarNode("alpha__", active=False))
-        rhs = None
+        rhs = 0.0
 
         for name in self.objective:
             rhs = alpha * self.objective[name]
 
+        # Get the multipliers indexed by the constraint name
+        multipliers = self.constraints.get_multipliers()
+
         for name in self.constraints:
-            mult_name = self.constraints.get_multiplier_name(name)
             con = self.constraints[name]
-            lam = self.multipliers[mult_name]
+            lam = multipliers[name]
 
             shape = self.constraints.get_shape(name)
 
             if shape is None:
-                if rhs is None:
-                    rhs = con * lam
-                else:
-                    rhs = rhs + con * lam
+                rhs = rhs + con * lam
             elif len(shape) == 1:
-                if rhs is None:
-                    rhs = con[0] * lam[0]
-                else:
-                    rhs = rhs + con[0] * lam[0]
-                for i in range(1, shape[0]):
+                for i in range(shape[0]):
                     rhs = rhs + con[i] * lam[i]
             else:
                 for i in range(shape[0]):
-                    if rhs is None:
-                        rhs = con[i, 0] * lam[i, 0]
-                    else:
-                        rhs = rhs + con[i, 0] * lam[i, 0]
-                    for j in range(1, shape[1]):
+                    for j in range(shape[1]):
                         rhs = rhs + con[i, j] * lam[i, j]
 
         return rhs, lhs
@@ -1015,14 +1004,15 @@ class Component:
 
         cpp = ""
 
-        # Initialize the multipliers that are added to the inputs
-        self._initialize_multipliers()
-
         # Make lists of the constants
         consts = [self.constants[name] for name in self.constants]
         data = [self.data[name] for name in self.data]
+
+        # The variables consists of inputs and multipliers
         inputs = [self.inputs[name] for name in self.inputs]
-        inputs += [self.multipliers[name] for name in self.multipliers]
+
+        multipliers = self.constraints.get_multipliers()
+        inputs += [multipliers[name] for name in multipliers]
 
         for index in range(len(self.args)):
             self.constraints.arg_index = index
@@ -1046,10 +1036,8 @@ class Component:
             if lhs is None:
                 lhs = []
 
-            # Get any variables that might have been set
-            vars = []
-
             # Create the expression builder
+            vars = []
             builder = ExprBuilder(consts, data, inputs, vars, rhs=rhs, lhs=lhs)
 
             for mode in ["eval", "grad", "hprod"]:
