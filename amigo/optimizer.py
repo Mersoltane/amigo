@@ -227,46 +227,82 @@ class DirectScipySolver(_HessianDiagMixin):
 
 
 class MumpsSolver(_HessianDiagMixin):
-    """Sparse LDL^T solver via MUMPS with inertia detection.
+    """Sparse symmetric indefinite solver via MUMPS (LDL^T with inertia).
 
-    Uses the MUMPS C interface (dmumps_c) via ctypes to perform symmetric
-    indefinite factorization (sym=2) with Bunch-Kaufman pivoting. Provides
-    exact inertia counts from MUMPS info arrays after factorization.
+    Uses the MUMPS C interface (dmumps_c) via ctypes. Provides exact
+    inertia counts from MUMPS info arrays after factorization.
 
-    Requires libdmumps.dll (and its dependencies: libblas.dll, liblapack.dll,
-    libmumps_common.dll, libpord.dll, libmpiseq.dll, etc.) to be on the DLL
-    search path. These are provided by the mumps-build third-party repo.
+    Requires coin-or/ThirdParty-Mumps (with METIS ordering and scaling).
+    Windows: build via MSYS2 with mingw-w64-x86_64-metis.
+    Linux: apt install libmumps-dev or conda install mumps-seq.
+    Mac: brew install brewsci/num/mumps.
     """
+
+    @staticmethod
+    def _load_mumps_library():
+        """Locate and load the MUMPS shared library.
+
+        Search order: MUMPS_LIB_DIR env var, coin-or ThirdParty-Mumps
+        install, conda environment, system PATH.
+        """
+        import ctypes
+
+        lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
+
+        # Platform-specific library names and search paths
+        if sys.platform == "win32":
+            # Register dependency directories for Windows DLL resolution
+            for d in [
+                r"C:\msys64\mingw64\bin",
+                os.path.expanduser("~/mumps-coinor/bin"),
+            ]:
+                if os.path.isdir(d):
+                    os.add_dll_directory(d)
+
+            names = ["libcoinmumps-3.dll", "libdmumps.dll", "dmumps.dll"]
+            search_dirs = [
+                lib_dir,
+                os.path.expanduser("~/mumps-coinor/bin"),
+            ]
+            conda = os.environ.get("CONDA_PREFIX", "")
+            if conda:
+                search_dirs.append(os.path.join(conda, "Library", "bin"))
+        elif sys.platform == "darwin":
+            names = ["libdmumps.dylib"]
+            search_dirs = [lib_dir] if lib_dir else []
+        else:
+            names = ["libdmumps.so"]
+            search_dirs = [lib_dir] if lib_dir else []
+
+        # Try each directory + name combination, then bare names for PATH
+        for d in search_dirs:
+            if not d:
+                continue
+            for name in names:
+                path = os.path.join(d, name)
+                try:
+                    return ctypes.CDLL(path)
+                except OSError:
+                    pass
+        for name in names:
+            try:
+                return ctypes.CDLL(name)
+            except OSError:
+                pass
+
+        raise ImportError(
+            "MUMPS library not found. "
+            "Windows: build coin-or/ThirdParty-Mumps via MSYS2. "
+            "Linux: apt install libmumps-dev or conda install mumps-seq. "
+            "Mac: brew install brewsci/num/mumps. "
+            "Or set MUMPS_LIB_DIR to the directory containing the library."
+        )
 
     def __init__(self, problem):
         import ctypes
-        import sys
 
         self._ct = ctypes
-        try:
-            if sys.platform == "win32":
-                self._libmumps = ctypes.CDLL("libdmumps.dll")
-            elif sys.platform == "darwin":
-                lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
-                lib_path = (
-                    os.path.join(lib_dir, "libdmumps.dylib")
-                    if lib_dir
-                    else "libdmumps.dylib"
-                )
-                self._libmumps = ctypes.CDLL(lib_path)
-            else:
-                lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
-                lib_path = (
-                    os.path.join(lib_dir, "libdmumps.so") if lib_dir else "libdmumps.so"
-                )
-                self._libmumps = ctypes.CDLL(lib_path)
-        except OSError:
-            raise ImportError(
-                "MUMPS library not found. On Windows, ensure libdmumps.dll "
-                "is on the DLL search path. On Linux, install libmumps-dev "
-                "or set MUMPS_LIB_DIR. On Mac, install via "
-                "brew tap brewsci/num && brew install brewsci-mumps."
-            )
+        self._libmumps = self._load_mumps_library()
         self._dmumps_c = self._libmumps.dmumps_c
         self._dmumps_c.restype = None
 
@@ -299,19 +335,21 @@ class MumpsSolver(_HessianDiagMixin):
         self._mumps.comm_fortran = -987654  # MPISEQ sequential
         self._call_mumps()
 
-        # Set ICNTL parameters
-        self._mumps.icntl[0] = -1  # suppress error output
-        self._mumps.icntl[1] = -1  # suppress diagnostic output
-        self._mumps.icntl[2] = -1  # suppress global info output
-        self._mumps.icntl[3] = 0  # no output
-        self._mumps.icntl[6] = 5  # ordering: METIS if available
-        self._mumps.icntl[7] = 0  # no scaling (77 causes OOM on some builds)
-        self._mumps.icntl[12] = 1  # ScaLAPACK (no effect in sequential)
-        self._mumps.icntl[13] = 1000  # percent increase in workspace
-        self._mumps.icntl[23] = 1  # null pivot detection
-        self._mumps.cntl[0] = 1e-2  # pivot threshold
+        # MUMPS solver parameters
+        self._mumps.icntl[0] = -1  # ICNTL(1):  suppress error output
+        self._mumps.icntl[1] = -1  # ICNTL(2):  suppress diagnostic output
+        self._mumps.icntl[2] = -1  # ICNTL(3):  suppress global info
+        self._mumps.icntl[3] = 0  # ICNTL(4):  no output
+        self._mumps.icntl[5] = 7  # ICNTL(6):  permuting and scaling
+        self._mumps.icntl[6] = 7  # ICNTL(7):  pivot ordering (automatic)
+        self._mumps.icntl[7] = 77  # ICNTL(8):  scaling (automatic)
+        self._mumps.icntl[9] = 0  # ICNTL(10): no iterative refinement
+        self._mumps.icntl[12] = 1  # ICNTL(13): proper inertia detection
+        self._mumps.icntl[13] = 1000  # ICNTL(14): workspace increase %
+        self._mumps.icntl[23] = 1  # ICNTL(24): null pivot detection
+        self._mumps.cntl[0] = 1e-6  # CNTL(1):  pivot tolerance
 
-        # Set matrix structure
+        # Set matrix structure and values pointer
         self._mumps.n = self.nrows
         self._mumps.nz = int(self._nnz_lower) if self._nnz_lower < 2**31 else 0
         self._mumps.nnz = self._nnz_lower
@@ -319,13 +357,8 @@ class MumpsSolver(_HessianDiagMixin):
         self._mumps.jcn = self._jcn.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
         self._mumps.a = self._a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
 
-        # Symbolic analysis (job=1) - done once
-        self._mumps.job = 1
-        self._call_mumps()
-        if self._mumps.infog[0] < 0:
-            raise RuntimeError(
-                f"MUMPS analysis failed: infog(1)={self._mumps.infog[0]}"
-            )
+        # Symbolic analysis deferred to first factorization (with real values)
+        self._have_symbolic = False
 
         self._rhs = np.empty(self.nrows, dtype=np.float64)
         self._mumps.rhs = self._rhs.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
@@ -524,7 +557,15 @@ class MumpsSolver(_HessianDiagMixin):
         self._dmumps_c(self._ct.byref(self._mumps))
 
     def _factorize_current(self):
-        self._mumps.job = 2
+        if not self._have_symbolic:
+            self._mumps.job = 1  # symbolic analysis with actual values
+            self._call_mumps()
+            if self._mumps.infog[0] < 0:
+                raise RuntimeError(
+                    f"MUMPS analysis failed: infog(1)={self._mumps.infog[0]}"
+                )
+            self._have_symbolic = True
+        self._mumps.job = 2  # numerical factorization
         self._call_mumps()
         if self._mumps.infog[0] < 0:
             raise RuntimeError(
@@ -840,17 +881,32 @@ class DirectPetscSolver:
 
 
 class InertiaCorrector:
-    """Inertia correction for the KKT system (Algorithm IC).
+    """Inertia correction for the KKT system (Algorithm IC, Wachter & Biegler 2006).
 
-    Adds regularization to the KKT matrix when the inertia is wrong:
-      - delta_x * I on the primal block  (fixes indefinite Hessian)
-      - -delta_c * I on the constraint block (fixes rank-deficient Jacobian)
-
-    The algorithm:
-      1. Try delta_x=0 first, save last successful value.
-      2. On wrong inertia: warm-start from last, then grow exponentially.
-      3. On singularity: add delta_c for rank deficiency.
+    Manages primal (delta_w) and constraint (delta_c) regularization to
+    ensure correct inertia (n positive, m negative eigenvalues):
+      - ConsiderNewSystem: save last perturbation, reset current to zero.
+        If structurally degenerate, pre-apply delta_c / delta_x.
+      - PerturbForSingularity: add delta_c first, then delta_x.
+      - PerturbForWrongInertia: grow delta_x; on overflow, add delta_c
+        and restart delta_x search.
+      - finalize_test: structural degeneracy detection after consecutive
+        iterations needing the same perturbation type.
+      - IncreaseQuality: when too few negative eigenvalues, try improving
+        pivot tolerance before treating as singular.
     """
+
+    # Degeneracy status
+    _NOT_YET = 0
+    _NOT_DEGEN = 1
+    _DEGENERATE = 2
+
+    # Test status for finalize_test
+    _NO_TEST = 0
+    _TEST_DC0_DX0 = 1
+    _TEST_DC1_DX0 = 2
+    _TEST_DC0_DX1 = 3
+    _TEST_DC1_DX1 = 4
 
     def __init__(
         self,
@@ -865,9 +921,7 @@ class InertiaCorrector:
         self._barrier = barrier_param
         self.numerical_eps = 1e-12
 
-        # Perturbation handler state
-        # "last" = last successful perturbation (persists across iterations)
-        # "curr" = current attempt (reset to 0 at start of each iteration)
+        # Perturbation state
         self._delta_x_last = 0.0
         self._delta_c_last = 0.0
         self._delta_x_curr = 0.0
@@ -877,7 +931,7 @@ class InertiaCorrector:
         self.last_delta_w = 0.0
         self.last_delta_c = 0.0
 
-        # Algorithm IC constants (Wachter & Biegler 2006, Table 3)
+        # Algorithm IC constants (Table 3, Wachter & Biegler 2006)
         self._dw_init = 1e-4  # first_hessian_perturbation
         self._dw_min = 1e-20  # min_hessian_perturbation
         self._dw_max = 1e20  # max_hessian_perturbation
@@ -886,6 +940,17 @@ class InertiaCorrector:
         self._kw_dec = 1.0 / 3  # perturb_dec_fact
         self._dc_val = 1e-8  # jacobian_regularization_value
         self._dc_exp = 0.25  # jacobian_regularization_exponent
+
+        # Structural degeneracy detection
+        self._hess_degen = self._NOT_YET
+        self._jac_degen = self._NOT_YET
+        self._degen_iters = 0
+        self._degen_iters_max = 3
+        self._test_status = self._NO_TEST
+
+        # Adaptive pivot tolerance
+        self._pivtol = 1e-6
+        self._pivtolmax = 0.1
 
         # Amigo extensions: selective eps_z for nonconvex constraints
         self.cz = options.get("convex_eps_z_coeff", 10.0)
@@ -914,9 +979,8 @@ class InertiaCorrector:
         return self._dc_val * self._barrier**self._dc_exp
 
     def _get_deltas_for_wrong_inertia(self):
-        """Grow delta_x for wrong inertia. Returns False if delta_x exceeds max."""
+        """Grow delta_x geometrically. Returns False if delta_x exceeds max."""
         if self._delta_x_curr == 0.0:
-            # First perturbation attempt for this matrix
             if self._delta_x_last == 0.0:
                 self._delta_x_curr = self._dw_init
             else:
@@ -924,19 +988,164 @@ class InertiaCorrector:
                     self._dw_min, self._delta_x_last * self._kw_dec
                 )
         else:
-            # Subsequent attempts: grow delta_x
             if (
                 self._delta_x_last == 0.0
                 or 1e5 * self._delta_x_last < self._delta_x_curr
             ):
-                self._delta_x_curr *= self._kw_first_inc  # ×100
+                self._delta_x_curr *= self._kw_first_inc
             else:
-                self._delta_x_curr *= self._kw_inc  # ×8
+                self._delta_x_curr *= self._kw_inc
 
         if self._delta_x_curr > self._dw_max:
             self._delta_x_last = 0.0
             return False
         return True
+
+    def _perturb_for_wrong_inertia(self):
+        """Perturb for wrong inertia (too many negative eigenvalues).
+
+        Calls finalize_test, then grows delta_x.
+        On overflow with delta_c==0: add delta_c and restart delta_x.
+        """
+        self._finalize_test()
+        if self._get_deltas_for_wrong_inertia():
+            return True
+        # delta_x overflow: if delta_c==0, add it and retry from scratch
+        if self._delta_c_curr == 0.0:
+            self._delta_c_curr = self._delta_cd()
+            self._delta_x_curr = 0.0
+            if self._hess_degen == self._DEGENERATE:
+                self._hess_degen = self._NOT_YET
+            self._test_status = self._NO_TEST
+            return self._get_deltas_for_wrong_inertia()
+        return False
+
+    def _perturb_for_singularity(self):
+        """Perturb for singular system (too few negative eigenvalues).
+
+        Handles the degeneracy test state machine for singular systems.
+        """
+        if self._hess_degen == self._NOT_YET or self._jac_degen == self._NOT_YET:
+            # Degeneracy test state machine
+            ts = self._test_status
+
+            if ts == self._TEST_DC0_DX0:
+                # Haven't tried anything yet for this matrix
+                if self._jac_degen == self._NOT_YET:
+                    # Try adding delta_c only (test if jac is degenerate)
+                    self._delta_c_curr = self._delta_cd()
+                    self._test_status = self._TEST_DC1_DX0
+                else:
+                    # jac known, hess NOT_YET: try delta_x only
+                    if not self._get_deltas_for_wrong_inertia():
+                        return False
+                    self._test_status = self._TEST_DC0_DX1
+
+            elif ts == self._TEST_DC1_DX0:
+                # Already tried delta_c>0, delta_x=0 — still singular.
+                # Now try delta_x>0, delta_c=0
+                self._delta_c_curr = 0.0
+                if not self._get_deltas_for_wrong_inertia():
+                    return False
+                self._test_status = self._TEST_DC0_DX1
+
+            elif ts == self._TEST_DC0_DX1:
+                # Tried delta_x>0, delta_c=0 — still singular.
+                # Now try both.
+                self._delta_c_curr = self._delta_cd()
+                if not self._get_deltas_for_wrong_inertia():
+                    return False
+                self._test_status = self._TEST_DC1_DX1
+
+            elif ts == self._TEST_DC1_DX1:
+                # Both active — just grow delta_x.
+                if not self._get_deltas_for_wrong_inertia():
+                    return False
+
+            # else: NO_TEST should not occur here
+
+        else:
+            # Both hess/jac degeneracy resolved
+            if self._delta_c_curr > 0.0:
+                # Already perturbing constraints: treat like wrong inertia
+                if not self._get_deltas_for_wrong_inertia():
+                    return False
+            else:
+                # First singular encounter: add constraint regularization
+                self._delta_c_curr = self._delta_cd()
+
+        return True
+
+    def _finalize_test(self):
+        """Conclude degeneracy test after successful factorization.
+
+        After degen_iters_max consecutive iterations needing the same
+        perturbation type, declare structural degeneracy.
+        """
+        ts = self._test_status
+        if ts == self._NO_TEST:
+            return
+
+        if ts == self._TEST_DC0_DX0:
+            if self._hess_degen == self._NOT_YET:
+                self._hess_degen = self._NOT_DEGEN
+            if self._jac_degen == self._NOT_YET:
+                self._jac_degen = self._NOT_DEGEN
+        elif ts == self._TEST_DC1_DX0:
+            if self._hess_degen == self._NOT_YET:
+                self._hess_degen = self._NOT_DEGEN
+            if self._jac_degen == self._NOT_YET:
+                self._degen_iters += 1
+                if self._degen_iters >= self._degen_iters_max:
+                    self._jac_degen = self._DEGENERATE
+        elif ts == self._TEST_DC0_DX1:
+            if self._jac_degen == self._NOT_YET:
+                self._jac_degen = self._NOT_DEGEN
+            if self._hess_degen == self._NOT_YET:
+                self._degen_iters += 1
+                if self._degen_iters >= self._degen_iters_max:
+                    self._hess_degen = self._DEGENERATE
+        elif ts == self._TEST_DC1_DX1:
+            self._degen_iters += 1
+            if self._degen_iters >= self._degen_iters_max:
+                self._hess_degen = self._DEGENERATE
+                self._jac_degen = self._DEGENERATE
+
+        self._test_status = self._NO_TEST
+
+    def _consider_new_system(self):
+        """Prepare for a new KKT system.
+
+        Save last perturbation, reset current to zero. Pre-apply delta_c
+        if Jacobian is structurally degenerate, and pre-populate delta_x
+        if Hessian is structurally degenerate.
+        """
+        self._finalize_test()
+
+        # Save last perturbation
+        if self._delta_x_curr > 0.0:
+            self._delta_x_last = self._delta_x_curr
+        if self._delta_c_curr > 0.0:
+            self._delta_c_last = self._delta_c_curr
+
+        # Set up degeneracy test for this iteration
+        if self._hess_degen == self._NOT_YET or self._jac_degen == self._NOT_YET:
+            self._test_status = self._TEST_DC0_DX0
+        else:
+            self._test_status = self._NO_TEST
+
+        # Pre-apply delta_c if Jacobian structurally degenerate
+        if self._jac_degen == self._DEGENERATE:
+            self._delta_c_curr = self._delta_cd()
+        else:
+            self._delta_c_curr = 0.0
+
+        # Pre-apply delta_x if Hessian structurally degenerate
+        if self._hess_degen == self._DEGENERATE:
+            self._delta_x_curr = 0.0
+            self._get_deltas_for_wrong_inertia()
+        else:
+            self._delta_x_curr = 0.0
 
     def factorize(
         self,
@@ -951,37 +1160,32 @@ class InertiaCorrector:
         max_corrections=40,
         inertia_tolerance=0,
     ):
-        """Assemble, regularize, and factorize the KKT matrix.
-
-        Assembles the KKT matrix with perturbation management.
-        """
+        """Assemble, regularize, and factorize the KKT matrix."""
         solver.assemble_hessian(1.0, x)
 
         primal_mask = ~self.mult_ind
         n_primal = int(np.sum(primal_mask))
         n_dual = int(np.sum(self.mult_ind))
         n_total = n_primal + n_dual
-        has_inertia = hasattr(solver, "get_inertia")
         itol = inertia_tolerance
 
-        def _inertia_ok(np_, nn_):
+        def _ok(np_, nn_):
             return (
                 abs(np_ - n_primal) <= itol
                 and abs(nn_ - n_dual) <= itol
                 and np_ + nn_ >= n_total - itol
             )
 
-        # Build baseline diagonal: Sigma + numerical eps + extensions
+        # Build baseline diagonal: Sigma + small numerical eps
         diag_arr = diag.get_array()
         diag_arr[primal_mask] += self.numerical_eps
-
         if self._nonconvex_indices is not None and self.eps_z > 0:
             ineq_dual_mask = self.mult_ind & (diag_arr < -1e-30)
-            nc_ineq = np.isin(self._nonconvex_indices, np.where(ineq_dual_mask)[0])
-            nc_ineq_idx = self._nonconvex_indices[nc_ineq]
+            nc_ineq_idx = self._nonconvex_indices[
+                np.isin(self._nonconvex_indices, np.where(ineq_dual_mask)[0])
+            ]
             if len(nc_ineq_idx) > 0:
                 diag_arr[nc_ineq_idx] -= self.eps_z
-
         if zero_hessian_indices is not None and zero_hessian_eps is not None:
             np.maximum(
                 diag_arr[zero_hessian_indices],
@@ -990,7 +1194,8 @@ class InertiaCorrector:
             )
         diag.copy_host_to_device()
 
-        if not has_inertia:
+        # No inertia check available: simple fallback
+        if not hasattr(solver, "get_inertia"):
             try:
                 solver.add_diagonal_and_factor(diag)
             except Exception:
@@ -1001,64 +1206,40 @@ class InertiaCorrector:
 
         reg_diag = diag.get_array().copy()
 
-        # ConsiderNewSystem: save last, reset current to zero
-        # Save last successful perturbation, reset current to zero.
-        if self._delta_x_curr > 0.0:
-            self._delta_x_last = self._delta_x_curr
-        if self._delta_c_curr > 0.0:
-            self._delta_c_last = self._delta_c_curr
-        self._delta_x_curr = 0.0
-        self._delta_c_curr = 0.0
+        # Prepare new system: save last perturbation, reset current
+        self._consider_new_system()
 
-        # First factorization: unmodified (delta_x=0, delta_c=0)
-        n_pos = n_neg = 0
-        try:
-            solver.add_diagonal_and_factor(diag)
-            n_pos, n_neg = solver.get_inertia()
-        except Exception:
-            pass  # Treat as singular
+        # Sync pivot tolerance to solver
+        if hasattr(solver, "_mumps"):
+            solver._mumps.cntl[0] = self._pivtol
+        augsys_improved = False
 
-        if _inertia_ok(n_pos, n_neg):
-            # Unmodified KKT has correct inertia
-            self.last_delta_w = 0.0
-            self.last_delta_c = 0.0
-            return
-
-        # Inertia correction needed
-        has_zero_eigs = n_pos + n_neg < n_total - itol
-
-        # PerturbForSingularity: add delta_c if zero eigenvalues detected
-        if has_zero_eigs:
-            self._delta_c_curr = self._delta_cd()
-
-        # PerturbForWrongInertia: first call (delta_x_curr == 0)
-        if not self._get_deltas_for_wrong_inertia():
-            self.last_delta_w = self._delta_x_curr
-            self.last_delta_c = self._delta_c_curr
-            return
-
-        # Retry loop: grow delta_x until correct inertia
-        for attempt in range(max_corrections):
+        def _apply_and_factor(first=False):
+            """Apply perturbation, factorize. Returns (n_pos, n_neg, singular)."""
             diag.get_array()[:] = reg_diag
-            diag.get_array()[primal_mask] += self._delta_x_curr
+            if self._delta_x_curr > 0:
+                diag.get_array()[primal_mask] += self._delta_x_curr
             if self._delta_c_curr > 0:
                 diag.get_array()[self.mult_ind] -= self._delta_c_curr
             diag.copy_host_to_device()
-
             try:
-                solver.factor(1.0, x, diag)
-                n_pos, n_neg = solver.get_inertia()
-            except Exception as e:
-                n_pos = n_neg = 0
-                if self._delta_c_curr == 0:
-                    self._delta_c_curr = self._delta_cd()
-                if comm_rank == 0:
-                    print(f"  Factorize error: {e}")
+                if first:
+                    solver.add_diagonal_and_factor(diag)
+                else:
+                    solver.factor(1.0, x, diag)
+                return *solver.get_inertia(), False
+            except Exception:
+                return 0, 0, True
 
-            if _inertia_ok(n_pos, n_neg):
+        # Main retry loop
+        for attempt in range(max_corrections + 1):
+            n_pos, n_neg, singular = _apply_and_factor(first=(attempt == 0))
+
+            if not singular and _ok(n_pos, n_neg):
+                # Success
                 self.last_delta_w = self._delta_x_curr
                 self.last_delta_c = self._delta_c_curr
-                if comm_rank == 0:
+                if self._delta_x_curr > 0 and comm_rank == 0:
                     print(
                         f"  Inertia correction: "
                         f"delta_w={self._delta_x_curr:.2e}, "
@@ -1067,22 +1248,49 @@ class InertiaCorrector:
                     )
                 return
 
-            # Zero eigenvalues on this attempt → add delta_c
-            if n_pos + n_neg < n_total - itol and self._delta_c_curr == 0:
-                self._delta_c_curr = self._delta_cd()
+            if comm_rank == 0 and not singular:
+                print(
+                    f"  Inertia: expected ({n_primal}+, {n_dual}-), "
+                    f"got ({n_pos}+, {n_neg}-), "
+                    f"dw={self._delta_x_curr:.1e}, pivtol={self._pivtol:.1e}"
+                )
 
-            # PerturbForWrongInertia: subsequent calls (delta_x_curr > 0)
-            if not self._get_deltas_for_wrong_inertia():
-                if comm_rank == 0:
-                    print(
-                        f"  Inertia: delta_w={self._delta_x_curr:.2e} > max, "
-                        f"aborting correction"
-                    )
-                break
+            # Dispatch based on failure type
+            if singular and n_dual > 0:
+                if not self._perturb_for_singularity():
+                    break
+            elif not singular and n_neg < n_dual:
+                # Too few negatives: IncreaseQuality first, then singular
+                assume_singular = True
+                if not augsys_improved:
+                    augsys_improved = self._increase_quality(solver)
+                    if augsys_improved:
+                        assume_singular = False
+                if assume_singular:
+                    if not self._perturb_for_singularity():
+                        break
+            else:
+                # SYMSOLVER_WRONG_INERTIA (too many negatives) or
+                # SYMSOLVER_SINGULAR with no constraints
+                if not self._perturb_for_wrong_inertia():
+                    if comm_rank == 0:
+                        print(
+                            f"  Inertia: delta_w={self._delta_x_curr:.2e} "
+                            f"> max, aborting correction"
+                        )
+                    break
 
-        # Correction failed — save state for warm-start anyway
         self.last_delta_w = self._delta_x_curr
         self.last_delta_c = self._delta_c_curr
+
+    def _increase_quality(self, solver):
+        """Increase pivot tolerance: pivtol = min(pivtolmax, sqrt(pivtol))."""
+        if self._pivtol >= self._pivtolmax:
+            return False
+        self._pivtol = min(self._pivtolmax, self._pivtol**0.5)
+        if hasattr(solver, "_mumps"):
+            solver._mumps.cntl[0] = self._pivtol
+        return True
 
 
 class Filter:
@@ -1317,7 +1525,7 @@ class Optimizer:
             "backtracking_factor": 0.5,
             "record_components": [],
             "equal_primal_dual_step": False,
-            "init_least_squares_multipliers": False,
+            "init_least_squares_multipliers": True,
             "init_affine_step_multipliers": False,
             # Heuristic barrier parameter options
             "heuristic_barrier_gamma": 0.1,
@@ -1592,29 +1800,33 @@ class Optimizer:
         return sigma_star, mu_new
 
     def _compute_least_squares_multipliers(self, lambda_max=1e3):
-        """Least-squares multiplier initialization (Section 3.6, eq 36).
+        """Least-squares constraint multiplier initialization (Section 3.6).
 
-        Solves for lambda that minimizes the dual infeasibility:
+        Solves for lambda that minimizes the dual infeasibility norm:
 
-            [ I  A^T ] [ w      ] = -[ grad - zl + zu ]
-            [ A   0  ] [ lambda ]    [ 0              ]
+            [ I  A^T ] [ w      ]   [ -(grad_f - zl + zu) ]
+            [ A   0  ] [ lambda ] = [         0           ]
 
-        The w components are discarded. If the resulting lambda is too
-        large (||lambda||_inf > lambda_max), the estimate is discarded
-        and lambda is set to zero to avoid poor initial guesses when
-        the constraint Jacobian is nearly rank deficient.
+        The (1,1) block is I (no Hessian), making this a least-squares
+        normal equation. w is discarded; lambda is the multiplier estimate.
+
+        Safeguard: if ||lambda||_inf > lambda_max, discard and set to 0.
         """
         x = self.vars.get_solution()
-        self.optimizer.compute_residual(0.0, self.vars, self.grad, self.res)
-        self.optimizer.set_multipliers_value(0.0, self.res)
 
+        # Build RHS: -(grad_f - zl + zu) for primals, 0 for constraints
+        self.optimizer.compute_dual_residual_vector(self.vars, self.grad, self.res)
+        self.res.get_array()[:] *= -1.0
+        self.res.copy_host_to_device()
+
+        # Factor [I, A^T; A, 0]: W_factor=0 (no Hessian), diag=I on primals
         self.diag.zero()
         self.optimizer.set_design_vars_value(1.0, self.diag)
-
+        self.diag.copy_host_to_device()
         self.solver.factor(0.0, x, self.diag)
         self.solver.solve(self.res, self.px)
 
-        # Safeguard: discard if multipliers are too large (Section 3.6)
+        # Safeguard: discard if multipliers are too large
         self.px.copy_device_to_host()
         px_arr = self.px.get_array()
         problem_ref = self.mpi_problem if self.distribute else self.problem
@@ -2804,15 +3016,26 @@ class Optimizer:
         if not self.distribute:
             xview = ModelVector(self.model, x=x)
 
-        self._zero_multipliers(x)
-        self._update_gradient(x)
+        # Initial iterate setup (Section 3.6):
+        #   1. Relax bounds
+        #   2. Push x into bounds, set z = 1.0
+        #   3. Recompute gradient at pushed x
+        #   4. Least-squares constraint multiplier init
+        #   5. Recompute gradient at final (x, lam)
 
-        # Initialize slack variables and multipliers from the barrier parameter
+        # Step 1: Relax bounds (bound_relax_factor = 1e-8)
+        self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
+
+        # Step 2: Project x into bounds, initialize z = 1.0
+        self._zero_multipliers(x)
         self.optimizer.initialize_multipliers_and_slacks(
             self.barrier_param, self.grad, self.vars
         )
 
-        # Optionally compute better initial multiplier estimates
+        # Step 3: Recompute gradient at the pushed x with lam=0
+        self._update_gradient(x)
+
+        # Step 4: Least-squares constraint multiplier initialization
         if options["init_affine_step_multipliers"]:
             self._compute_least_squares_multipliers()
             self.barrier_param = self._compute_affine_multipliers(
@@ -2821,6 +3044,7 @@ class Optimizer:
         elif options["init_least_squares_multipliers"]:
             self._compute_least_squares_multipliers()
 
+        # Step 5: Recompute gradient at (x, lam) for the main loop
         self._update_gradient(x)
 
         # Step size tracking (for log output)
