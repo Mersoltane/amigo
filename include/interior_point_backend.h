@@ -97,15 +97,41 @@ void copy_constraints(const ProblemInfo<T>& p, const T* src, T* dst) {
   }
 }
 
+// Relax bounds by a small factor to avoid numerical issues at exact bounds.
+//   x_L -= min(constr_viol_tol, factor * max(1, |x_L|))
+//   x_U += min(constr_viol_tol, factor * max(1, |x_U|))
+// Default: bound_relax_factor = 1e-8, constr_viol_tol = 1e-4.
+template <typename T>
+void relax_bounds(ProblemInfo<T>& p, T* lbx_buf, T* ubx_buf,
+                  T factor = 1e-8, T constr_viol_tol = 1e-4) {
+  for (int i = 0; i < p.n_primal; i++) {
+    if (!std::isinf(p.lbx[i])) {
+      T delta = A2D::min2(constr_viol_tol, factor * A2D::max2(T(1), std::abs(p.lbx[i])));
+      lbx_buf[i] = p.lbx[i] - delta;
+    } else {
+      lbx_buf[i] = p.lbx[i];
+    }
+    if (!std::isinf(p.ubx[i])) {
+      T delta = A2D::min2(constr_viol_tol, factor * A2D::max2(T(1), std::abs(p.ubx[i])));
+      ubx_buf[i] = p.ubx[i] + delta;
+    } else {
+      ubx_buf[i] = p.ubx[i];
+    }
+  }
+  p.lbx = lbx_buf;
+  p.ubx = ubx_buf;
+}
+
 // Project all primals into the strict interior of their bounds (Section 3.6).
 // For one-sided bounds: x <- max(x, lb + kappa1 * max(1, |lb|))  or similar.
 // For two-sided bounds: x is projected into [lb + p_l, ub - p_u] where
 //   p_l = min(kappa1 * max(1, |lb|), kappa2 * (ub - lb))
 //   p_u = min(kappa1 * max(1, |ub|), kappa2 * (ub - lb))
-// This must be called before initialize_bound_duals.
+// Defaults: kappa1 = 0.01, kappa2 = 0.01.
+// Must be called before initialize_bound_duals.
 template <typename T>
 void project_primals_into_interior(const ProblemInfo<T>& p, T* xlam,
-                                   T kappa1 = 1e-2, T kappa2 = 0.5) {
+                                   T kappa1 = 1e-2, T kappa2 = 1e-2) {
   for (int i = 0; i < p.n_primal; i++) {
     int idx = p.primal_indices[i];
     T x = xlam[idx];
@@ -127,7 +153,6 @@ void project_primals_into_interior(const ProblemInfo<T>& p, T* xlam,
   }
 }
 
-// Set zl = mu/gap_l, zu = mu/gap_u for each finite bound.
 // Initialize bound duals to 1.0 for all finite bounds (Section 3.6).
 // Must be called after project_primals_into_interior.
 template <typename T>

@@ -365,7 +365,7 @@ PYBIND11_MODULE(amigo, mod) {
       }));
 
   // SlackCouplingGroup: couples slack variables to inequality constraints
-  // for the IPOPT 2x2 augmented system (Wachter & Biegler 2006, eq. 13).
+  // for the 2x2 augmented system (Wachter & Biegler 2006, eq. 13).
   py::class_<
       amigo::SlackCouplingGroup<double, detail::policy>,
       amigo::ComponentGroupBase<double, detail::policy>,
@@ -664,5 +664,7 @@ PYBIND11_MODULE(amigo, mod) {
              return std::vector<double>(a, a + v.get_size());
            })
       .def("get_num_inequalities", &IPOpt::get_num_inequalities)
-      .def("get_num_design_variables", &IPOpt::get_num_design_variables);
+      .def("get_num_design_variables", &IPOpt::get_num_design_variables)
+      .def("relax_bounds", &IPOpt::relax_bounds,
+           py::arg("factor") = 1e-8, py::arg("constr_viol_tol") = 1e-4);
 }

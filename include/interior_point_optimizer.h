@@ -377,6 +377,19 @@ class InteriorPointOptimizer {
   std::shared_ptr<Vector<T>> get_lbx() const { return lbx_; }
   std::shared_ptr<Vector<T>> get_ubx() const { return ubx_; }
 
+  // Relax bounds by bound_relax_factor (default 1e-8).
+  // Must be called before initialize_multipliers_and_slacks.
+  void relax_bounds(T factor = 1e-8, T constr_viol_tol = 1e-4) {
+    if (factor <= 0) return;
+    lbx_relaxed_ = std::make_shared<Vector<T>>(np_, 0, lbx_->get_memory_location());
+    ubx_relaxed_ = std::make_shared<Vector<T>>(np_, 0, ubx_->get_memory_location());
+    T* lb_buf = lbx_relaxed_->template get_array<policy>();
+    T* ub_buf = ubx_relaxed_->template get_array<policy>();
+    ipm::relax_bounds(info_, lb_buf, ub_buf, factor, constr_viol_tol);
+    lbx_relaxed_->copy_host_to_device();
+    ubx_relaxed_->copy_host_to_device();
+  }
+
  private:
   std::shared_ptr<OptimizationProblem<T, policy>> problem_;
   std::shared_ptr<Vector<T>> lower_, upper_;
@@ -384,6 +397,7 @@ class InteriorPointOptimizer {
   int np_, nc_;
   std::shared_ptr<Vector<int>> pidx_, cidx_;
   std::shared_ptr<Vector<T>> lbx_, ubx_, lbh_;
+  std::shared_ptr<Vector<T>> lbx_relaxed_, ubx_relaxed_;
   ipm::ProblemInfo<T> info_;
 };
 
