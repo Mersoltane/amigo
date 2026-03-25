@@ -143,8 +143,9 @@ model = problem.create_model("plate")
 if args.build:
     model.build_module()
 
-model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
+model.initialize()
 
+# Create the vectors and matrices for the model
 x = model.create_vector()
 g = model.create_vector()
 mat = model.create_matrix()
@@ -153,21 +154,22 @@ print("Evaluating the Hessian...")
 model.eval_gradient(x, g)
 model.eval_hessian(x, mat)
 
-plt.spy(am.tocsr(mat), markersize=1)
+# Solve the equations
+print("Solving...")
+chol = am.SparseCholesky(mat)
+flag = chol.factor()
+
+# Solve the equations
+x[:] = g[:]
+chol.solve(x.get_vector())
+
+print("Plotting...")
+w = x["soln.w"]
+tx = x["soln.tx"]
+ty = x["soln.ty"]
+
+fig, ax = plt.subplots(1, 3, figsize=(8, 3))
+for index, soln in enumerate([w, tx, ty]):
+    mesh.plot(soln, ax=ax[index])
+
 plt.show()
-
-# # Solve the equations
-# print("Solving...")
-# chol = am.SparseCholesky(mat)
-# flag = chol.factor()
-
-# print("Plotting...")
-# w = x["soln.w"]
-# tx = x["soln.tx"]
-# ty = x["soln.ty"]
-
-# fig, ax = plt.subplots(1, 3, figsize=(8, 3))
-# for index, soln in enumerate([w, tx, ty]):
-#     mesh.plot(soln, ax=ax[index])
-
-# plt.show()

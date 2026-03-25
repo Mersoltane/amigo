@@ -28,44 +28,6 @@ class DofSource(am.Component):
         return
 
 
-class DirichletBC_potential(am.Component):
-    def __init__(self, name, input_names=[]):
-        super().__init__(name=name)
-
-        self.input_names = input_names
-        for name in self.input_names:
-            self.add_input(f"{name}")
-            self.add_constraint(f"res_{name}")
-
-        return
-
-    def compute(self):
-        for name in self.input_names:
-            self.constraints[f"res_{name}"] = self.inputs[f"{name}"]
-        return
-
-
-class DirichletBC_weakform(am.Component):
-    def __init__(self, name, input_names=[]):
-        super().__init__(name=name)
-
-        self.input_names = input_names
-        for name in self.input_names:
-            self.add_input(name)
-            self.add_input(f"lam_{name}")
-
-            self.add_constraint(f"res_bc_{name}")
-            self.add_constraint(f"res_disp_{name}")
-
-        return
-
-    def compute(self):
-        for name in self.input_names:
-            self.constraints[f"res_bc_{name}"] = self.inputs[f"{name}"]
-            self.constraints[f"res_disp_{name}"] = self.inputs[f"lam_{name}"]
-        return
-
-
 class DirichletDegreesOfFreedom:
     def __init__(self, bc_name, mesh, bc={}, integrand_formulation="potential"):
         self.bc_name = bc_name
@@ -82,36 +44,16 @@ class DirichletDegreesOfFreedom:
 
         return np.unique(all_nodes)
 
-    def add_and_link_source(self, model):
+    def add_fixed(self, model):
         targets = self.bc["target"]
         nodes = self._get_bc_nodes(targets)
 
         input_names = self.bc["input"]
-        if self.integrand_formulation == "weak":
-            bc_src = DirichletBC_weakform(self.bc_name, input_names=input_names)
-        else:
-            bc_src = DirichletBC_potential(self.bc_name, input_names=input_names)
+        for name in input_names:
+            model.add_fixed(f"soln.{name}", nodes)
 
-        if len(nodes) > 0:
-            model.add_component(
-                f"{self.bc_name}",
-                len(nodes),
-                bc_src,
-            )
-
-            for name in input_names:
-                model.link(
-                    f"soln.{name}",
-                    f"{self.bc_name}.{name}",
-                    src_indices=nodes,
-                )
-
-                if self.integrand_formulation == "weak":
-                    model.link(
-                        f"multiplier.res_{name}",
-                        f"{self.bc_name}.res_disp_{name}",
-                        src_indices=nodes,
-                    )
+            if self.integrand_formulation == "weak":
+                model.add_fixed(f"multiplier.res_{name}", nodes)
 
         return
 
@@ -792,7 +734,7 @@ class Problem:
 
         # Add BC components and links
         for dof in self.dirichlet_dof:
-            dof.add_and_link_source(model)
+            dof.add_fixed(model)
 
         for dof in self.symm_dof:
             dof.add_and_link_source(model)
