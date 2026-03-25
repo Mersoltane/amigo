@@ -1,7 +1,7 @@
 """
-HS118: Large LP-like problem (15 vars, 29 ineq): biggest standard HS
+HS118: Large LP-like problem (15 vars, 29 ineq)
   min  sum of quadratic terms in x1..x15
-  s.t. 29 linear inequality constraints
+  s.t. 24 two-sided difference constraints + 5 row-sum constraints
        bounds on all variables
   x0 = (20,55,15,20,60,20,20,60,20,20,60,20,20,60,20)
   f* = 664.82045
@@ -22,8 +22,12 @@ class HS118(am.Component):
                 f"x{i+1}", value=float(x0[i]), lower=float(lb[i]), upper=float(ub[i])
             )
         self.add_objective("obj")
-        for i in range(17):
-            self.add_constraint(f"c{i+1}", lower=0.0, upper=float("inf"))
+        # 12 two-sided difference constraints (split into 24 one-sided)
+        for i in range(24):
+            self.add_constraint(f"d{i+1}", lower=0.0, upper=float("inf"))
+        # 5 summation constraints
+        for i in range(5):
+            self.add_constraint(f"s{i+1}", lower=0.0, upper=float("inf"))
 
     def compute(self):
         x = [self.inputs[f"x{i+1}"] for i in range(15)]
@@ -61,24 +65,26 @@ class HS118(am.Component):
             + 0.00015 * x[14] ** 2
         )
 
-        # Difference constraints: -7 <= x[i+3] - x[i] <= 6 for groups
-        self.constraints["c1"] = x[3] - x[0] + 7
-        self.constraints["c2"] = x[4] - x[1] + 7
-        self.constraints["c3"] = x[5] - x[2] + 7
-        self.constraints["c4"] = 6 - x[3] + x[0]
-        self.constraints["c5"] = 6 - x[4] + x[1]
-        self.constraints["c6"] = 6 - x[5] + x[2]
-        self.constraints["c7"] = x[6] - x[3] + 7
-        self.constraints["c8"] = x[7] - x[4] + 7
-        self.constraints["c9"] = x[8] - x[5] + 7
-        self.constraints["c10"] = 6 - x[6] + x[3]
-        self.constraints["c11"] = 6 - x[7] + x[4]
-        self.constraints["c12"] = 6 - x[8] + x[5]
-        self.constraints["c13"] = x[9] - x[6] + 7
-        self.constraints["c14"] = x[10] - x[7] + 7
-        self.constraints["c15"] = x[11] - x[8] + 7
-        self.constraints["c16"] = 6 - x[9] + x[6]
-        self.constraints["c17"] = 6 - x[10] + x[7]
+        # Difference constraints: 0 <= x[j] - x[i] + 7 <= upper
+        # Column 1 (indices 0,3,6,9,12): upper = 13
+        # Column 2 (indices 1,4,7,10,13): upper = 14
+        # Column 3 (indices 2,5,8,11,14): upper = 13
+        upper = [13, 14, 13]  # per column
+        k = 0
+        for group in range(4):  # 4 groups of differences
+            for col in range(3):
+                i = group * 3 + col        # source index
+                j = (group + 1) * 3 + col  # target index
+                diff = x[j] - x[i] + 7
+                self.constraints[f"d{k+1}"] = diff               # >= 0 (lower)
+                self.constraints[f"d{k+2}"] = upper[col] - diff   # >= 0 (upper)
+                k += 2
+
+        # Summation constraints: sum of each row >= threshold
+        thresholds = [60, 50, 70, 85, 100]
+        for row in range(5):
+            s = x[row*3] + x[row*3+1] + x[row*3+2]
+            self.constraints[f"s{row+1}"] = s - thresholds[row]
 
 
 parser = argparse.ArgumentParser()

@@ -18,10 +18,10 @@ import argparse
 class HS44(am.Component):
     def __init__(self):
         super().__init__()
-        self.add_input("x1", value=1.0, lower=0.0)
-        self.add_input("x2", value=1.0, lower=0.0)
-        self.add_input("x3", value=1.0, lower=0.0)
-        self.add_input("x4", value=1.0, lower=0.0)
+        self.add_input("x1", value=0.0, lower=0.0)
+        self.add_input("x2", value=0.0, lower=0.0)
+        self.add_input("x3", value=0.0, lower=0.0)
+        self.add_input("x4", value=0.0, lower=0.0)
         self.add_objective("obj")
         self.add_constraint("c1", lower=0.0, upper=float("inf"))
         self.add_constraint("c2", lower=0.0, upper=float("inf"))
