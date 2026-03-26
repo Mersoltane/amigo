@@ -28,75 +28,59 @@ class DofSource(am.Component):
         return
 
 
-class DirichletDegreesOfFreedom:
+class ScaledBC(am.Component):
+    def __init__(self, name, input_name=[], scale=[1.0, 1.0]):
+        super().__init__(name)
+
+        if len(scale) != 2:
+            raise ValueError("scale must be of length 2")
+
+        self.input_name = input_name
+
+        self.add_constant(f"scale_left", value=scale[0])
+        self.add_constant(f"scale_right", value=scale[1])
+
+        for name in self.input_name:
+            self.add_input(f"{name}_left", value=1.0)
+            self.add_input(f"{name}_right", value=1.0)
+            self.add_constraint(f"res_{name}")
+
+        return
+
+    def compute(self):
+        scale_left = self.constants["scale_left"]
+        scale_right = self.constants["scale_right"]
+
+        for name in self.input_name:
+            self.constraints[f"res_{name}"] = (
+                scale_left * self.inputs[f"{name}_left"]
+                + scale_right * self.inputs[f"{name}_right"]
+            )
+        return
+
+
+class BoundaryConditions:
     def __init__(self, bc_name, mesh, bc={}, integrand_formulation="potential"):
+        if not (
+            bc["type"] == "dirichlet"
+            or bc["type"] == "continuity"
+            or bc["type"] == "scaled"
+        ):
+            typ = bc["type"]
+            raise ValueError(f"Unrecognized boundary condition type {typ}")
         self.bc_name = bc_name
         self.mesh = mesh
         self.bc = bc
         self.integrand_formulation = integrand_formulation
         return
 
-    def _get_bc_nodes(self, targets):
-        all_nodes = []
-        for target in targets:
-            nodes = self.mesh.get_bc_nodes(target, "T3D2")
-            all_nodes.append(nodes)
-
-        return np.unique(all_nodes)
-
-    def add_fixed(self, model):
-        targets = self.bc["target"]
-        nodes = self._get_bc_nodes(targets)
-
-        input_names = self.bc["input"]
-        for name in input_names:
-            model.add_fixed(f"soln.{name}", nodes)
-
-            if self.integrand_formulation == "weak":
-                model.add_fixed(f"multiplier.res_{name}", nodes)
-
-        return
-
-
-class SymmBC(am.Component):
-    def __init__(self, input_name=[], scale=[]):
-        super().__init__()
-
-        self.input_name = input_name
-        self.scale = scale
-
-        for name in self.input_name:
-            self.add_input(f"{name}0", value=1.0)
-            self.add_input(f"{name}1", value=1.0)
-            self.add_constraint(f"res_{name}")
-
-        return
-
-    def compute(self):
-        scale_node_0 = self.scale[0]
-        scale_node_1 = self.scale[1]
-        for name in self.input_name:
-            self.constraints[f"res_{name}"] = (
-                scale_node_0 * self.inputs[f"{name}0"]
-                + scale_node_1 * self.inputs[f"{name}1"]
-            )
-        return
-
-
-class SymmetryDegreesOfFreedom:
-    def __init__(self, bc_name, mesh, bc={}):
-        self.bc_name = bc_name
-        self.mesh = mesh
-        self.bc = bc
-        return
-
-    def _get_bc_nodes(self, targets, start, end):
+    def _get_bc_nodes(self, targets, start=True, end=True):
         all_nodes = []
         for target in targets:
             nodes = self.mesh.get_bc_nodes(target, "T3D2")
             all_nodes.extend(nodes)
 
-        unique = list(dict.fromkeys(all_nodes))  # preserve order
+        unique = list(dict.fromkeys(all_nodes))
 
         if not start:
             unique = unique[1:]
@@ -117,13 +101,7 @@ class SymmetryDegreesOfFreedom:
 
         return nodes_left[idx_left], nodes_right[idx_right]
 
-    def add_and_link_source(self, model):
-        targets = self.bc["target"]
-        start = self.bc["start"]
-        end = self.bc["end"]
-        input_names = self.bc["input"]
-        scale = self.bc["scale"]
-
+    def _get_matched_nodes(self, targets, start=True, end=True):
         left_target_lines = targets[0]
         right_target_lines = targets[1]
         nodes_left = self._get_bc_nodes(left_target_lines, start, end)
@@ -133,29 +111,63 @@ class SymmetryDegreesOfFreedom:
             raise Exception(f"nnodes left != nnodes right")
 
         # Reorder the nodes to match
-        nodes_a, nodes_b = self._reorder_nodes(nodes_left, nodes_right)
+        return self._reorder_nodes(nodes_left, nodes_right)
 
-        bc_src = SymmBC(input_names, scale=scale)
+    def add_bcs(self, model):
+        """Add the boundary conditions to the model"""
 
-        if len(nodes_left) > 0:
+        if self.bc["type"] == "dirichlet":
+            nodes = self._get_bc_nodes(self.bc["target"])
+
+            input_names = self.bc["input"]
             for name in input_names:
-                model.add_component(
-                    f"{self.bc_name}",
-                    len(nodes_left),
-                    bc_src,
-                )
+                model.add_fixed(f"soln.{name}", nodes)
 
-                model.link(
-                    f"soln.{name}",
-                    f"{self.bc_name}.{name}0",
-                    src_indices=nodes_a,
-                )
-                model.link(
-                    f"soln.{name}",
-                    f"{self.bc_name}.{name}1",
-                    src_indices=nodes_b,
-                )
-        return
+                if self.integrand_formulation == "weak":
+                    model.add_fixed(f"multiplier.res_{name}", nodes)
+
+        else:
+            targets = self.bc["target"]
+            start = self.bc["start"] if "start" in self.bc else True
+            end = self.bc["end"] if "end" in self.bc else True
+
+            nodes_left, nodes_right = self._get_matched_nodes(
+                targets, start=start, end=end
+            )
+
+            input_names = self.bc["input"]
+            if self.bc["type"] == "continuity":
+                for name in input_names:
+                    model.link(
+                        "soln.{name}",
+                        "soln.{name}",
+                        src_indices=nodes_left,
+                        tgt_indices=nodes_right,
+                    )
+
+            elif self.bc["type"] == "scaled":
+                scale = self.bc["scale"]
+                class_name = f"ScaledBC_{self.bc_name}"
+                bc_src = ScaledBC(class_name, input_names, scale=scale)
+
+                if len(nodes_left) > 0:
+                    model.add_component(
+                        f"{self.bc_name}",
+                        len(nodes_left),
+                        bc_src,
+                    )
+
+                    for name in input_names:
+                        model.link(
+                            f"soln.{name}",
+                            f"{self.bc_name}.{name}_left",
+                            src_indices=nodes_left,
+                        )
+                        model.link(
+                            f"soln.{name}",
+                            f"{self.bc_name}.{name}_right",
+                            src_indices=nodes_right,
+                        )
 
 
 class DegreesOfFreedom:
@@ -255,7 +267,6 @@ class Mesh:
 
     def get_domains(self):
         domains = self.parser.get_domains()
-
         element_types = ["CPS3", "CPS4", "CPS6", "M3D9", "T3D2"]
 
         volumes = {}
@@ -578,21 +589,14 @@ class Problem:
             name="data",
         )
 
-        self.dirichlet_dof = []
-        self.symm_dof = []
+        # Build the boundary conditions
+        self.boundary_conditions = []
 
         for name in bc_map:
             bc = bc_map[name]
-            if bc["type"] == "dirichlet":
-                self.dirichlet_dof.append(
-                    DirichletDegreesOfFreedom(
-                        name, self.mesh, bc, self.integrand_formulation
-                    )
-                )
-            elif bc["type"] == "symmetry":
-                self.symm_dof.append(SymmetryDegreesOfFreedom(name, self.mesh, bc))
-            else:
-                raise Exception(f"{bc["type"]} not recognized")
+            self.boundary_conditions.append(
+                BoundaryConditions(name, self.mesh, bc, self.integrand_formulation)
+            )
 
         return
 
@@ -733,11 +737,8 @@ class Problem:
                         self.test_dof.link_dof(model, target, etype, comp_name)
 
         # Add BC components and links
-        for dof in self.dirichlet_dof:
-            dof.add_fixed(model)
-
-        for dof in self.symm_dof:
-            dof.add_and_link_source(model)
+        for bc in self.boundary_conditions:
+            bc.add_bcs(model)
 
         # Make a list of all of the outputs
         all_outputs = []

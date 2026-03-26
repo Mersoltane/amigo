@@ -102,7 +102,7 @@ integrand_map = {
     },
 }
 bc_map = {
-    "clamp_w": {
+    "clamped": {
         "type": "dirichlet",
         "input": ["w", "tx", "ty"],
         "target": ["LINE1", "LINE2", "LINE3", "LINE4"],
