@@ -1689,8 +1689,20 @@ class Optimizer:
         return best_sigma, best_q
 
     def _evaluate_quality_function(
-        self, sigma, px0, dpx, mu_nat, tau, dual_inf, primal_inf, comp_inf,
-        qf_sd, qf_sp, qf_sc, centrality, balancing_term,
+        self,
+        sigma,
+        px0,
+        dpx,
+        mu_nat,
+        tau,
+        dual_inf,
+        primal_inf,
+        comp_inf,
+        qf_sd,
+        qf_sp,
+        qf_sc,
+        centrality,
+        balancing_term,
     ):
         """Evaluate the quality function q_L(sigma).
 
@@ -1752,9 +1764,7 @@ class Optimizer:
         # --- Solve the two linear systems (one factorization) -----------
         # px0: affine-scaling direction (mu = 0)
         self.optimizer.compute_residual(0.0, self.vars, self.grad, self.res)
-        dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(
-            self.vars, self.grad
-        )
+        dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(self.vars, self.grad)
         if hasattr(self.solver, "solve_array"):
             px0 = self.solver.solve_array(self.res.get_array().copy()).copy()
         else:
@@ -1814,7 +1824,10 @@ class Optimizer:
 
         # --- Branch B: Golden-section quality function search -----------
         tau_qf = options["fraction_to_boundary"]
-        sigma_min = max(options["quality_function_sigma_min"], mu_min / mu_nat if mu_nat > mu_min else 1e-6)
+        sigma_min = max(
+            options["quality_function_sigma_min"],
+            mu_min / mu_nat if mu_nat > mu_min else 1e-6,
+        )
         sigma_max = options["quality_function_sigma_max"]
         n_gs = options["quality_function_golden_iters"]
         sigma_tol = options["quality_function_section_sigma_tol"]
@@ -1825,9 +1838,19 @@ class Optimizer:
 
         def _eval(sigma):
             return self._evaluate_quality_function(
-                sigma, px0, dpx, mu_nat, tau_qf,
-                dual_inf, primal_inf, 0.0,
-                qf_sd, qf_sp, qf_sc, centrality, balancing,
+                sigma,
+                px0,
+                dpx,
+                mu_nat,
+                tau_qf,
+                dual_inf,
+                primal_inf,
+                0.0,
+                qf_sd,
+                qf_sp,
+                qf_sc,
+                centrality,
+                balancing,
             )
 
         # Determine search direction by testing slope at sigma=1
@@ -1922,7 +1945,7 @@ class Optimizer:
                 max(f_curr, theta_curr, 1e-30),
             )
             for f_filt, theta_filt in self._qf_glob_filter:
-                if (f_curr + margin < f_filt or theta_curr + margin < theta_filt):
+                if f_curr + margin < f_filt or theta_curr + margin < theta_filt:
                     return True
             return len(self._qf_glob_filter) == 0
 
@@ -1950,9 +1973,7 @@ class Optimizer:
         if factor == 0.0:
             return 0.0
 
-        d_inf, p_inf, _ = self.optimizer.compute_kkt_error_mu(
-            0.0, self.vars, self.grad
-        )
+        d_inf, p_inf, _ = self.optimizer.compute_kkt_error_mu(0.0, self.vars, self.grad)
         safe = max(
             factor * d_inf / max(self._qf_init_dual_inf, 1.0),
             factor * p_inf / max(self._qf_init_primal_inf, 1.0),
@@ -2567,9 +2588,7 @@ class Optimizer:
                     # at the current point.
                     res_arr = self.res.get_array()  # residual at trial
                     c_soc = res_orig.copy()
-                    c_soc[mult_ind] = (
-                        res_arr[mult_ind] + alpha * res_orig[mult_ind]
-                    )
+                    c_soc[mult_ind] = res_arr[mult_ind] + alpha * res_orig[mult_ind]
                     self.res.get_array()[:] = c_soc
                     self.res.copy_host_to_device()
 
@@ -2876,9 +2895,7 @@ class Optimizer:
                         self.barrier_param, self.temp, self.grad, self.res
                     )
                     trial_res = self.res.get_array().copy()
-                    c_soc[mult_ind] = (
-                        trial_res[mult_ind] + alpha_soc * c_soc[mult_ind]
-                    )
+                    c_soc[mult_ind] = trial_res[mult_ind] + alpha_soc * c_soc[mult_ind]
                     # Stationarity and complementarity rows stay from current point
                     # (c_soc[~mult_ind] = res_orig[~mult_ind], unchanged)
 
@@ -3616,9 +3633,7 @@ class Optimizer:
 
                 # Compute mu_max on first iteration
                 if qf_mu_max < 0:
-                    avg_comp_init, _ = self.optimizer.compute_complementarity(
-                        self.vars
-                    )
+                    avg_comp_init, _ = self.optimizer.compute_complementarity(self.vars)
                     qf_mu_max = options["mu_max_fact"] * max(avg_comp_init, 1.0)
 
                 # Record initial infeasibility for safeguard
@@ -3632,9 +3647,7 @@ class Optimizer:
                 # -- Mode switching (before direction computation) --
                 if not qf_free_mode:
                     # Fixed mode: check if we can return to free mode
-                    sufficient = self._adaptive_mu_check_sufficient_progress(
-                        options
-                    )
+                    sufficient = self._adaptive_mu_check_sufficient_progress(options)
                     if sufficient:
                         if comm_rank == 0 and options.get("verbose_barrier"):
                             print("  QF: switching back to free mode")
@@ -3657,24 +3670,19 @@ class Optimizer:
                             new_mu = min(new_mu, qf_mu_max)
                             if comm_rank == 0 and options.get("verbose_barrier"):
                                 print(
-                                    f"  QF monotone: "
-                                    f"{old_mu:.3e} -> {new_mu:.3e}"
+                                    f"  QF monotone: " f"{old_mu:.3e} -> {new_mu:.3e}"
                                 )
                             self.barrier_param = new_mu
                             qf_monotone_mu = new_mu
 
                 if qf_free_mode:
                     # Free mode: check progress, then call oracle
-                    sufficient = self._adaptive_mu_check_sufficient_progress(
-                        options
-                    )
+                    sufficient = self._adaptive_mu_check_sufficient_progress(options)
                     glob = options["adaptive_mu_globalization"]
                     if not sufficient and glob != "never-monotone":
                         # -> monotone mode
                         qf_free_mode = False
-                        avg_c, _ = self.optimizer.compute_complementarity(
-                            self.vars
-                        )
+                        avg_c, _ = self.optimizer.compute_complementarity(self.vars)
                         new_mu = options["adaptive_mu_monotone_init_factor"] * avg_c
                         safe = self._adaptive_mu_lower_safeguard(options)
                         new_mu = max(new_mu, safe, qf_mu_min)
@@ -3692,8 +3700,14 @@ class Optimizer:
 
                 # -- Factorize KKT system --
                 factorize_ok = self._factorize_kkt(
-                    x, diag_base, inertia_corrector, mult_ind, options,
-                    zero_hessian_indices, zero_hessian_eps, comm_rank,
+                    x,
+                    diag_base,
+                    inertia_corrector,
+                    mult_ind,
+                    options,
+                    zero_hessian_indices,
+                    zero_hessian_eps,
+                    comm_rank,
                 )
 
                 if qf_free_mode and factorize_ok:
@@ -3739,9 +3753,7 @@ class Optimizer:
 
                     heuristic = options["barrier_strategy"] == "heuristic"
                     if heuristic:
-                        comp_h, xi_h = self.optimizer.compute_complementarity(
-                            self.vars
-                        )
+                        comp_h, xi_h = self.optimizer.compute_complementarity(self.vars)
                         should_reduce = True
                     elif options["progress_based_barrier"]:
                         should_reduce = self._should_reduce_barrier(
@@ -3753,7 +3765,8 @@ class Optimizer:
                     if should_reduce:
                         if heuristic:
                             self.barrier_param, _ = self._compute_barrier_heuristic(
-                                xi_h, comp_h,
+                                xi_h,
+                                comp_h,
                                 options["heuristic_barrier_gamma"],
                                 options["heuristic_barrier_r"],
                                 tol,
@@ -3815,8 +3828,14 @@ class Optimizer:
                 if inertia_corrector:
                     inertia_corrector.update_barrier(self.barrier_param)
                 factorize_ok = self._find_direction(
-                    x, diag_base, inertia_corrector, mult_ind, options,
-                    zero_hessian_indices, zero_hessian_eps, comm_rank,
+                    x,
+                    diag_base,
+                    inertia_corrector,
+                    mult_ind,
+                    options,
+                    zero_hessian_indices,
+                    zero_hessian_eps,
+                    comm_rank,
                 )
 
             # -- Common: reset line search state when mu changed --
@@ -4001,7 +4020,9 @@ class Optimizer:
                         init_factor = options["adaptive_mu_monotone_init_factor"]
                         qf_monotone_mu_cand = init_factor * comp
                         safe_mu = self._adaptive_mu_lower_safeguard(options)
-                        qf_monotone_mu_cand = max(qf_monotone_mu_cand, safe_mu, qf_mu_min)
+                        qf_monotone_mu_cand = max(
+                            qf_monotone_mu_cand, safe_mu, qf_mu_min
+                        )
                         qf_monotone_mu_cand = min(qf_monotone_mu_cand, qf_mu_max)
                         qf_free_mode = False
                         qf_monotone_mu = qf_monotone_mu_cand
