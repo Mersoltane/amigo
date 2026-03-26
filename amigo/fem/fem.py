@@ -137,8 +137,8 @@ class BoundaryConditions:
             if self.bc["type"] == "continuity":
                 for name in input_names:
                     model.link(
-                        "soln.{name}",
-                        "soln.{name}",
+                        f"soln.{name}",
+                        f"soln.{name}",
                         src_indices=nodes_left,
                         tgt_indices=nodes_right,
                     )

@@ -133,7 +133,6 @@ model.link(
     tgt_indices=nodes_line_3_shared,
 )
 
-
 # BCs for the hanging edges
 nodes_line_1_hanging = (
     nodes_line_1[:] if slide_number == 0 else nodes_line_1[0:slide_number]
@@ -150,7 +149,7 @@ model.link(
 if args.build:
     model.build_module()
 
-model.initialize()
+model.initialize(order_for_block=False)
 
 # Set the problem data
 data = model.get_data_vector()
@@ -158,9 +157,9 @@ data["Mesh0.data.Jz.SURFACE1"] = 0.0
 data["Mesh0.data.Jz.SURFACE2"] = 10.0
 data["Mesh0.data.Jz.SURFACE3"] = 10.0
 
-data["Mesh1.data.Jz.SURFACE1"] = 0.0  # SURFACE1
-data["Mesh1.data.Jz.SURFACE2"] = 10.0  # SURFACE2
-data["Mesh1.data.Jz.SURFACE3"] = 10.0  # SURFACE3
+data["Mesh1.data.Jz.SURFACE1"] = 0.0
+data["Mesh1.data.Jz.SURFACE2"] = 10.0
+data["Mesh1.data.Jz.SURFACE3"] = 10.0
 
 x = model.create_vector()
 g = model.create_vector()
@@ -170,8 +169,8 @@ model.eval_gradient(x, g)
 model.eval_hessian(x, mat)
 
 csr_mat = am.tocsr(mat)
-
 x[:] = spsolve(csr_mat, g[:])
+
 u_domain0 = x["Mesh0.soln.u"]
 u_domain1 = x["Mesh1.soln.u"]
 
