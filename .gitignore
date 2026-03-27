@@ -1,23 +1,53 @@
-# Ignore the auto-generated file
+# Auto-generated
 include/amigo_include_paths.h
 
-# Ignore anything in the build directory
+# Build artifacts
 /build/*
 *.so
+*.o
+*.obj
+*.lib
+*.exp
+*.dll
+
+# Compiled Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+
+# Images and documents (keep website images)
 *.png
 !website/docs/**/*.png
 *.pdf
-*.aux
-*.log
 *.jpg
 *.jpeg
 *.svg
+!website/**/*.svg
 
-# Ignore anything in the pycache
-**/__pycache__
-**/*.pyd
+# LaTeX build artifacts
+*.aux
+*.log
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.synctex(busy)
 
-# Ignore in examples and all its subdirectories
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Examples: only track .py files and data (csv, tracks/)
 /examples/**/*.h
 /examples/**/*.cpp
 /examples/**/*.so
@@ -34,10 +64,8 @@ include/amigo_include_paths.h
 /examples/**/*.tex
 /examples/**/*.tikz
 
-
-# Virtual environments and packaging
-venv/
-amigo.egg-info/
+# OpenMDAO output
+.openmdao_out
 
 # Docusaurus / Node.js
 **/node_modules/
@@ -47,4 +75,9 @@ website/.cache/
 website/yarn-error.log
 website/npm-debug.log*
 logo/package-lock.json
+
+# Misc
 lib/
+docs/
+examples/raceproject/
+examples/river_crossing/

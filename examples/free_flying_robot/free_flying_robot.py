@@ -1,7 +1,6 @@
 import amigo as am
 import numpy as np
 import argparse
-import json
 import matplotlib.pyplot as plt
 import niceplots
 
@@ -100,20 +99,6 @@ class FreeFlyingRobotDynamics(am.Component):
         # Constraints
         self.add_constraint("res", shape=6, label="dynamics residuals")
 
-        # Control magnitude constraints
-        self.add_constraint(
-            "control_1_magnitude",
-            lower=-float("inf"),
-            upper=0.0,
-            label="u1 + u2 - 1 <= 0",
-        )
-        self.add_constraint(
-            "control_2_magnitude",
-            lower=-float("inf"),
-            upper=0.0,
-            label="u3 + u4 - 1 <= 0",
-        )
-
     def compute(self):
         # Get constants
         alpha = self.constants["alpha"]
@@ -146,13 +131,11 @@ class FreeFlyingRobotDynamics(am.Component):
         res[2] = qdot[2] - y6
         res[3] = qdot[3] - T_total * cos_y3
         res[4] = qdot[4] - T_total * sin_y3
-        res[5] = qdot[5] - (alpha * T1 - beta * T2)  # Eq. 8.235: minus sign is correct
+        # Angular dynamics: dω/dt = α*T1 - β*T2
+        # Thrusters on opposite sides of CoM create opposite torques
+        res[5] = qdot[5] - (alpha * T1 - beta * T2)
 
         self.constraints["res"] = res
-
-        # Control magnitude constraints
-        self.constraints["control_1_magnitude"] = u1 + u2 - 1.0
-        self.constraints["control_2_magnitude"] = u3 + u4 - 1.0
 
 
 class Objective(am.Component):
@@ -207,7 +190,7 @@ class InitialConditions(am.Component):
         self.constraints["res"] = [
             q[0] + 10.0,  # x(0) = -10
             q[1] + 10.0,  # y(0) = -10
-            q[2] - (np.pi / 2.0),
+            q[2] - pi / 2.0,  # Use constant, not np.pi!
             q[3] - 0.0,  # vx(0) = 0
             q[4] - 0.0,  # vy(0) = 0
             q[5] - 0.0,  # ω(0) = 0
@@ -244,70 +227,99 @@ class FinalConditions(am.Component):
 def plot_results(t, q, u):
     """Plot the optimization results"""
 
-    with plt.style.context(niceplots.get_style()):
-        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    # Colors matching tutorial style
+    blue_color = "#0072BD"
+    purple_color = "#8242A2"
 
-        # State variables - position
-        axes[0, 0].plot(t, q[:, 0])
-        axes[0, 0].set_ylabel("x (position)")
-        axes[0, 0].set_xlabel("Time (s)")
-        axes[0, 0].grid(True)
+    fig, axes = plt.subplots(3, 3, figsize=(15, 9))
+    fontname = "Arial"
 
-        axes[0, 1].plot(t, q[:, 1])
-        axes[0, 1].set_ylabel("y (position)")
-        axes[0, 1].set_xlabel("Time (s)")
-        axes[0, 1].grid(True)
+    # Compute net thrusts
+    T1 = u[:, 0] - u[:, 1]
+    T2 = u[:, 2] - u[:, 3]
 
-        axes[0, 2].plot(t, q[:, 2])
-        axes[0, 2].set_ylabel("θ (angle, rad)")
-        axes[0, 2].set_xlabel("Time (s)")
-        axes[0, 2].grid(True)
+    # Row 1: Position states
+    axes[0, 0].plot(t, q[:, 0], color=blue_color, linewidth=2.0)
+    axes[0, 0].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 0].set_ylabel("x (m)", fontsize=12)
+    axes[0, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 0].tick_params(labelsize=10)
+    axes[0, 0].set_title("Horizontal Position", fontsize=14, fontweight="bold", pad=10)
 
-        # State variables - velocity
-        axes[1, 0].plot(t, q[:, 3])
-        axes[1, 0].set_ylabel("vx (velocity x)")
-        axes[1, 0].set_xlabel("Time (s)")
-        axes[1, 0].grid(True)
+    axes[0, 1].plot(t, q[:, 1], color=blue_color, linewidth=2.0)
+    axes[0, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 1].set_ylabel("y (m)", fontsize=12)
+    axes[0, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 1].tick_params(labelsize=10)
+    axes[0, 1].set_title("Vertical Position", fontsize=14, fontweight="bold", pad=10)
 
-        axes[1, 1].plot(t, q[:, 4])
-        axes[1, 1].set_ylabel("vy (velocity y)")
-        axes[1, 1].set_xlabel("Time (s)")
-        axes[1, 1].grid(True)
+    axes[0, 2].plot(t, q[:, 2], color=blue_color, linewidth=2.0)
+    axes[0, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 2].set_ylabel("θ (rad)", fontsize=12)
+    axes[0, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 2].tick_params(labelsize=10)
+    axes[0, 2].set_title("Orientation", fontsize=14, fontweight="bold", pad=10)
 
-        axes[1, 2].plot(t, q[:, 5])
-        axes[1, 2].set_ylabel("ω (angular velocity)")
-        axes[1, 2].set_xlabel("Time (s)")
-        axes[1, 2].grid(True)
+    # Row 2: Velocity states
+    axes[1, 0].plot(t, q[:, 3], color=blue_color, linewidth=2.0)
+    axes[1, 0].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 0].set_ylabel("vx (m/s)", fontsize=12)
+    axes[1, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 0].tick_params(labelsize=10)
+    axes[1, 0].set_title("Horizontal Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        # Control variables
-        axes[2, 0].plot(t, u[:, 0], label="u1")
-        axes[2, 0].plot(t, u[:, 1], label="u2")
-        axes[2, 0].set_ylabel("Controls (Thruster 1)")
-        axes[2, 0].set_xlabel("Time (s)")
-        axes[2, 0].legend()
-        axes[2, 0].grid(True)
+    axes[1, 1].plot(t, q[:, 4], color=blue_color, linewidth=2.0)
+    axes[1, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 1].set_ylabel("vy (m/s)", fontsize=12)
+    axes[1, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 1].tick_params(labelsize=10)
+    axes[1, 1].set_title("Vertical Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        axes[2, 1].plot(t, u[:, 2], label="u3")
-        axes[2, 1].plot(t, u[:, 3], label="u4")
-        axes[2, 1].set_ylabel("Controls (Thruster 2)")
-        axes[2, 1].set_xlabel("Time (s)")
-        axes[2, 1].legend()
-        axes[2, 1].grid(True)
+    axes[1, 2].plot(t, q[:, 5], color=blue_color, linewidth=2.0)
+    axes[1, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 2].set_ylabel("ω (rad/s)", fontsize=12)
+    axes[1, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 2].tick_params(labelsize=10)
+    axes[1, 2].set_title("Angular Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        # Trajectory in x-y plane
-        axes[2, 2].plot(q[:, 0], q[:, 1], "b-", linewidth=2)
-        axes[2, 2].plot(q[0, 0], q[0, 1], "go", markersize=10, label="Start (-10,-10)")
-        axes[2, 2].plot(q[-1, 0], q[-1, 1], "ro", markersize=10, label="End (0,0)")
-        axes[2, 2].set_xlabel("x (position)")
-        axes[2, 2].set_ylabel("y (position)")
-        axes[2, 2].set_title("Robot Trajectory")
-        axes[2, 2].axis("equal")
-        axes[2, 2].legend()
-        axes[2, 2].grid(True)
+    # Row 3: Trajectory and Controls
+    axes[2, 0].plot(q[:, 0], q[:, 1], color=blue_color, linewidth=2.0)
+    axes[2, 0].set_xlabel("x (m)", fontsize=11)
+    axes[2, 0].set_ylabel("y (m)", fontsize=12)
+    axes[2, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 0].tick_params(labelsize=10)
+    axes[2, 0].set_title("Trajectory", fontsize=14, fontweight="bold", pad=10)
+    axes[2, 0].axis("equal")
 
-        plt.tight_layout()
-        plt.savefig("freeflyingrobot_results.png", dpi=300, bbox_inches="tight")
-        plt.show()
+    axes[2, 1].plot(t, T1, color=purple_color, linewidth=2.0)
+    axes[2, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 1].set_ylabel("T1 (N)", fontsize=12)
+    axes[2, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 1].tick_params(labelsize=10)
+    axes[2, 1].set_title("Thruster 1", fontsize=14, fontweight="bold", pad=10)
+
+    axes[2, 2].plot(t, T2, color=purple_color, linewidth=2.0)
+    axes[2, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 2].set_ylabel("T2 (N)", fontsize=12)
+    axes[2, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 2].tick_params(labelsize=10)
+    axes[2, 2].set_title("Thruster 2", fontsize=14, fontweight="bold", pad=10)
+
+    # Set font for all axes
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.xaxis.label.set_fontname(fontname)
+            ax.yaxis.label.set_fontname(fontname)
+            for tick in ax.get_xticklabels():
+                tick.set_fontname(fontname)
+            for tick in ax.get_yticklabels():
+                tick.set_fontname(fontname)
+
+    plt.tight_layout()
+    plt.savefig(
+        "freeflyingrobot_results.png", dpi=300, bbox_inches="tight", facecolor="white"
+    )
+    plt.show()
 
 
 def plot_convergence(nrms):
@@ -378,22 +390,12 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Create the model
-print("Creating free flying robot model...")
 model = create_freeflyingrobot_model()
 
-# Build the module if requested
 if args.build:
-    print("Building C++ module...")
     model.build_module()
 
-# Initialize the model
-print("Initializing model...")
 model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
-
-# Save model structure
-with open("freeflyingrobot_model.json", "w") as fp:
-    json.dump(model.get_serializable_data(), fp, indent=2)
 
 print(f"Number of variables:     {model.num_variables}")
 print(f"Number of constraints:   {model.num_constraints}")
@@ -405,20 +407,37 @@ x[:] = 0.0
 # Initial guess for states - linear interpolation from initial to final
 t_normalized = np.linspace(0, 1, num_time_steps + 1)
 
-# Position states: linear interpolation
+# Position states: linear interpolation (smooth S-curve would be better)
 # x: -10 -> 0, y: -10 -> 0, θ: π/2 -> 0
-x["robot.q[:, 0]"] = -10.0 + 10.0 * t_normalized  # x: -10 -> 0
-x["robot.q[:, 1]"] = -10.0 + 10.0 * t_normalized  # y: -10 -> 0
-x["robot.q[:, 2]"] = np.pi / 2.0 * (1.0 - t_normalized)  # θ: π/2 -> 0
+# Use smooth polynomial that satisfies BCs: x(0)=-10, x(1)=0, x'(0)=0, x'(1)=0
+s = t_normalized
+pos_profile = 3 * s**2 - 2 * s**3  # Smooth transition from 0 to 1
+x["robot.q[:, 0]"] = -10.0 + 10.0 * pos_profile  # x: -10 -> 0
+x["robot.q[:, 1]"] = -10.0 + 10.0 * pos_profile  # y: -10 -> 0
+x["robot.q[:, 2]"] = np.pi / 2.0 * (1.0 - pos_profile)  # θ: π/2 -> 0
 
-# Velocity states: parabolic profile (accelerate then decelerate)
-velocity_profile = 4 * t_normalized * (1 - t_normalized)  # peaks at 0.5
-x["robot.q[:, 3]"] = 3.0 * velocity_profile  # vx
-x["robot.q[:, 4]"] = 3.0 * velocity_profile  # vy
-x["robot.q[:, 5]"] = 0.5 * velocity_profile  # ω
+# Velocity states: derivative of position profile
+# d/dt(pos_profile) = (6s - 6s^2) * (1/tf)
+vel_profile = (6 * s - 6 * s**2) / final_time
+x["robot.q[:, 3]"] = 10.0 * vel_profile  # vx (scaled by position change)
+x["robot.q[:, 4]"] = 10.0 * vel_profile  # vy
+x["robot.q[:, 5]"] = -np.pi / 2.0 * vel_profile  # ω (angle rate)
 
-# Control initial guess: small positive values
-x["robot.u"] = 0.1
+# Initialize qdot consistent with the trajectory using numerical differentiation
+dt = final_time / num_time_steps
+for i in range(6):
+    x[f"robot.qdot[:, {i}]"] = np.gradient(x[f"robot.q[:, {i}]"], dt)
+
+# Control initial guess: bang-bang pattern for minimum fuel
+# Use smooth transition to help optimizer
+t_frac = np.linspace(0, 1, num_time_steps + 1)
+switch = 0.5 * (1 + np.tanh(10 * (t_frac - 0.5)))
+
+# First half: positive thrust, second half: negative thrust
+x["robot.u[:, 0]"] = 0.4 * (1 - switch)  # u1
+x["robot.u[:, 1]"] = 0.4 * switch  # u2
+x["robot.u[:, 2]"] = 0.4 * (1 - switch)  # u3
+x["robot.u[:, 3]"] = 0.4 * switch  # u4
 
 # Set bounds
 lower = model.create_vector()
@@ -432,28 +451,41 @@ upper["robot.q"] = float("inf")
 lower["robot.qdot"] = -float("inf")
 upper["robot.qdot"] = float("inf")
 
-# Control bounds: uk >= 0 (as specified in the problem)
+# Control bounds: 0 <= uk <= 1 (since u1+u2 <= 1 and u3+u4 <= 1)
 lower["robot.u"] = 0.0
-upper["robot.u"] = float("inf")
+upper["robot.u"] = 1.0
 
-# Create optimizer and solve
-print("\nStarting optimization...")
 opt = am.Optimizer(model, x, lower=lower, upper=upper)
 opt_data = opt.optimize(
     {
-        "initial_barrier_param": 0.1,
-        "convergence_tolerance": 1e-8,
-        "max_line_search_iterations": 5,
-        "max_iterations": 500,
-        "init_affine_step_multipliers": True,
         "barrier_strategy": "monotone",
-        "verbose_barrier": True,
+        "initial_barrier_param": 10.0,
+        "monotone_barrier_fraction": 0.1,
+        "max_line_search_iterations": 50,
+        "max_iterations": 1000,
+        "convergence_tolerance": 1e-6,
+        "init_least_squares_multipliers": True,
+        "init_affine_step_multipliers": False,
+        "use_armijo_line_search": True,
+        "regularization_eps_x": 1e-6,
+        "regularization_eps_z": 1e-6,
+        "adaptive_regularization": True,
+        "fraction_to_boundary": 0.99,
     }
 )
 
-# Save optimization data
-with open("freeflyingrobot_opt_data.json", "w") as fp:
-    json.dump(opt_data, fp, indent=2)
+print(f"\nConverged: {opt_data.get('converged', False)}")
+print(f"Final residual: {opt_data['iterations'][-1]['residual']:.2e}")
+print(f"Iterations: {len(opt_data['iterations'])}")
+
+# Compute total fuel consumption
+total_fuel = 0.0
+u_vals = x["robot.u"]
+for i in range(num_time_steps):
+    sum_u1 = np.sum(u_vals[i])
+    sum_u2 = np.sum(u_vals[i + 1])
+    total_fuel += 0.5 * dt * (sum_u1 + sum_u2)
+print(f"  Total fuel (objective): {total_fuel:.4f}")
 
 # Extract results
 q = x["robot.q"]

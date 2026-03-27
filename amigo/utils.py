@@ -1,4 +1,7 @@
+import numpy as np
 from scipy.sparse import csr_matrix
+from scipy.interpolate import BSpline
+from .component import Component
 
 try:
     from petsc4py import PETSc

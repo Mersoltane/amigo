@@ -23,7 +23,6 @@ class ComponentGroupBase {
   // Define whether this is a component intended for continuation or not
   virtual bool is_continuation() const { return false; }
 
-  // Group analysis functions
   virtual T lagrangian(T alpha, const Vector<T>& data,
                        const Vector<T>& x) const {
     return T(0.0);

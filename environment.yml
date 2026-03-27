@@ -1,0 +1,21 @@
+name: amigo
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9
+  - cmake>=3.25
+  - numpy
+  - scipy
+  - matplotlib
+  - pybind11
+  - mpi4py
+  - scikit-build-core>=0.7
+  - mkl
+  - mkl-devel
+  - networkx
+  - tabulate
+  - pip
+  - pip:
+    - niceplots
+    - pyvis
+    - icecream

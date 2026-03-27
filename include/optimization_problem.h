@@ -709,7 +709,7 @@ class OptimizationProblem {
   }
 
   /**
-   * @brief Compute the value of the Lagrangian
+   * @brief Compute the value of the Lagrangian L = alpha * f(x) + lam^T c(x)
    *
    * @param alpha Scalar multiplier for the objective function
    * @param x The design variable values

@@ -151,7 +151,6 @@ class ExternalComponentGroup : public ComponentGroupBase<T, policy> {
     xlocal = *extrn->get_variables();
   }
 
-  // Compute the Lagrangian
   T lagrangian(T alpha, const Vector<T>& data, const Vector<T>& x) const {
     T value = extrn->get_objective();
     const Vector<T>& constraints = *extrn->get_constraints();

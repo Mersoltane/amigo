@@ -45,6 +45,36 @@ Note that you cannot enable both CUDA and OpenMP at the same time.
 
 Amigo model modules inherit the build options that are selected during the install phase.
 
+## MUMPS sparse solver
+
+Amigo's interior-point optimizer requires [MUMPS](https://mumps-solver.org/) for symmetric indefinite factorization of the KKT system. MUMPS is loaded at runtime, so it is not needed at build time. It must be built with [METIS](http://glaros.dtc.umn.edu/gkhome/metis/metis/overview) and [Scotch](https://www.labri.fr/perso/pelegrin/scotch/) for correct pivot ordering and matrix scaling. We use [coin-or/ThirdParty-Mumps](https://github.com/coin-or-tools/ThirdParty-Mumps) to build from source on all platforms.
+
+### Linux
+
+```bash
+sudo apt install gfortran libopenblas-dev libmetis-dev libscotch-dev make autoconf automake libtool
+git clone https://github.com/coin-or-tools/ThirdParty-Mumps.git && cd ThirdParty-Mumps
+./get.Mumps && ./configure --prefix=/usr/local && make -j$(nproc) && sudo make install
+```
+
+### macOS
+
+```bash
+brew install mumps
+```
+
+### Windows
+
+Build via [MSYS2](https://www.msys2.org/) (UCRT64 shell):
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-{gcc-fortran,gcc,openblas,metis,scotch} make autoconf automake libtool
+git clone https://github.com/coin-or-tools/ThirdParty-Mumps.git && cd ThirdParty-Mumps
+./get.Mumps && ./configure --prefix=/ucrt64 && make -j$(nproc) && make install
+```
+
+Then add `C:\msys64\ucrt64\bin` to your Windows PATH so that `libdmumps.dll` is found at runtime.
+
 ## Rosenbrock example
 
 Below are two short examples that illustrate some of the features of Amigo.

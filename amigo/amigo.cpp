@@ -1,3 +1,4 @@
+// Force rebuild after header changes
 #include <mpi4py/mpi4py.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -11,8 +12,9 @@ typedef SSIZE_T ssize_t;
 #include "alias_tracker.h"
 #include "csr_matrix.h"
 #include "external_component.h"
+#include "interior_point_optimizer.h"
 #include "optimization_problem.h"
-#include "optimizer.h"
+#include "slack_coupling.h"
 #include "sparse_cholesky.h"
 
 #ifdef AMIGO_USE_CUDA
@@ -307,14 +309,16 @@ PYBIND11_MODULE(amigo, mod) {
              return py::make_tuple(nrows, ncols, nnz, rowp, cols);
            })
       .def("get_data",
-           [](amigo::CSRMat<double>& mat) -> py::array_t<double> {
+           [](py::object self) -> py::array_t<double> {
+             auto& mat = self.cast<amigo::CSRMat<double>&>();
              int nnz;
              double* mat_data;
              mat.get_data(nullptr, nullptr, &nnz, nullptr, nullptr, &mat_data);
 
-             py::array_t<double> data(nnz);
-             std::memcpy(data.mutable_data(), mat_data, nnz * sizeof(double));
-             return data;
+             // Return a view (no copy) of the internal data array.
+             // The `self` reference keeps the CSRMat alive.
+             return py::array_t<double>(
+                 {nnz}, {sizeof(double)}, mat_data, self);
            })
       .def("extract_submatrix",
            [](const amigo::CSRMat<double>& self, py::array_t<int> rows,
@@ -359,6 +363,25 @@ PYBIND11_MODULE(amigo, mod) {
         return std::make_shared<
             amigo::ExternalComponentGroup<double, detail::policy>>(
             vars.size(), vars.data(), cons.size(), cons.data(), extrn);
+      }));
+
+  // SlackCouplingGroup: couples slack variables to inequality constraints
+  // for the 2x2 augmented system (Wachter & Biegler 2006, eq. 13).
+  py::class_<
+      amigo::SlackCouplingGroup<double, detail::policy>,
+      amigo::ComponentGroupBase<double, detail::policy>,
+      std::shared_ptr<amigo::SlackCouplingGroup<double, detail::policy>>>(
+      mod, "SlackCouplingGroup")
+      .def(py::init([](py::array_t<int> slack_indices,
+                       py::array_t<int> ineq_indices) {
+        if (slack_indices.size() != ineq_indices.size()) {
+          throw std::invalid_argument(
+              "slack_indices and ineq_indices must have the same length");
+        }
+        return std::make_shared<
+            amigo::SlackCouplingGroup<double, detail::policy>>(
+            static_cast<int>(slack_indices.size()), slack_indices.data(),
+            ineq_indices.data());
       }));
 
   py::class_<amigo::NodeOwners, std::shared_ptr<amigo::NodeOwners>>(
@@ -528,81 +551,186 @@ PYBIND11_MODULE(amigo, mod) {
       .def("get_solution",
            py::overload_cast<>(&amigo::OptVector<double>::get_solution))
       .def("zero", &amigo::OptVector<double>::zero)
-      .def("copy", &amigo::OptVector<double>::copy);
+      .def("copy", &amigo::OptVector<double>::copy)
+      .def("get_zl",
+           [](const amigo::OptVector<double>& self) {
+             const double *zl, *zu;
+             self.get_bound_duals<detail::policy>(&zl, &zu);
+             int n = self.get_n_primal();
+             return std::vector<double>(zl, zl + n);
+           })
+      .def("get_zu",
+           [](const amigo::OptVector<double>& self) {
+             const double *zl, *zu;
+             self.get_bound_duals<detail::policy>(&zl, &zu);
+             int n = self.get_n_primal();
+             return std::vector<double>(zu, zu + n);
+           })
+      .def("get_sl",
+           [](const amigo::OptVector<double>& self) {
+             const double *sl, *su;
+             self.get_bound_slacks<detail::policy>(&sl, &su);
+             int n = self.get_n_primal();
+             return std::vector<double>(sl, sl + n);
+           })
+      .def("get_su",
+           [](const amigo::OptVector<double>& self) {
+             const double *sl, *su;
+             self.get_bound_slacks<detail::policy>(&sl, &su);
+             int n = self.get_n_primal();
+             return std::vector<double>(su, su + n);
+           })
+      .def("get_slacks",
+           [](amigo::OptVector<double>& self) { return self.get_slacks(); });
 
-  py::class_<
-      amigo::InteriorPointOptimizer<double, detail::policy>,
-      std::shared_ptr<amigo::InteriorPointOptimizer<double, detail::policy>>>(
-      mod, "InteriorPointOptimizer")
+  using IPMOpt = amigo::InteriorPointOptimizer<double, detail::policy>;
+  using OV = amigo::OptVector<double>;
+  using Vec = amigo::Vector<double>;
+  using CSR = amigo::CSRMat<double>;
+
+  py::class_<IPMOpt, std::shared_ptr<IPMOpt>>(mod, "InteriorPointOptimizer")
       .def(py::init<
            std::shared_ptr<amigo::OptimizationProblem<double, detail::policy>>,
-           std::shared_ptr<amigo::Vector<double>>,
-           std::shared_ptr<amigo::Vector<double>>>())
-      .def(
-          "create_opt_vector",
-          [](const amigo::InteriorPointOptimizer<double, detail::policy>& self,
-             py::object x = py::none()) {
-            if (!x.is_none()) {
-              return self.create_opt_vector(
-                  x.cast<std::shared_ptr<amigo::Vector<double>>>());
-            }
-            return self.create_opt_vector();
-          },
-          py::arg("x") = py::none())
-      .def(
-          "set_multipliers_value",
-          &amigo::InteriorPointOptimizer<double,
-                                         detail::policy>::set_multipliers_value)
-      .def(
-          "set_design_vars_value",
-          &amigo::InteriorPointOptimizer<double,
-                                         detail::policy>::set_design_vars_value)
-      .def("copy_multipliers",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::copy_multipliers)
-      .def("copy_design_vars",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::copy_design_vars)
-      .def("initialize_multipliers_and_slacks",
-           &amigo::InteriorPointOptimizer<
-               double, detail::policy>::initialize_multipliers_and_slacks)
-      .def("compute_residual",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::compute_residual)
-      .def("compute_update",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::compute_update)
-      .def("compute_diagonal",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::compute_diagonal)
+           std::shared_ptr<Vec>, std::shared_ptr<Vec>>())
+      .def("create_opt_vector",
+           [](const IPMOpt& self, py::object x) {
+             if (!x.is_none())
+               return self.create_opt_vector(x.cast<std::shared_ptr<Vec>>());
+             return self.create_opt_vector();
+           }, py::arg("x") = py::none())
+      .def("set_multipliers_value", &IPMOpt::set_multipliers_value)
+      .def("set_design_vars_value", &IPMOpt::set_design_vars_value)
+      .def("copy_multipliers", &IPMOpt::copy_multipliers)
+      .def("copy_design_vars", &IPMOpt::copy_design_vars)
+      .def("initialize_multipliers_and_slacks", &IPMOpt::initialize_multipliers_and_slacks)
+      .def("compute_residual", &IPMOpt::compute_residual)
+      .def("compute_update", &IPMOpt::compute_update)
+      .def("compute_diagonal", &IPMOpt::compute_diagonal)
       .def("compute_max_step",
-           [](const amigo::InteriorPointOptimizer<double, detail::policy>& self,
-              const double tau,
-              const std::shared_ptr<amigo::OptVector<double>> vars,
-              const std::shared_ptr<amigo::OptVector<double>> update) {
-             double alpha_x, alpha_z;
-             int x_index, z_index;
-             self.compute_max_step(tau, vars, update, alpha_x, x_index, alpha_z,
-                                   z_index);
-             return py::make_tuple(alpha_x, x_index, alpha_z, z_index);
+           [](const IPMOpt& self, double tau,
+              std::shared_ptr<OV> vars, std::shared_ptr<OV> upd) {
+             double ax = 1.0, az = 1.0; int xi = -1, zi = -1;
+             self.compute_max_step(tau, vars, upd, ax, xi, az, zi);
+             return py::make_tuple(ax, xi, az, zi);
            })
-      .def("apply_step_update",
-           &amigo::InteriorPointOptimizer<double,
-                                          detail::policy>::apply_step_update)
-      .def(
-          "compute_complementarity",
-          [](const amigo::InteriorPointOptimizer<double, detail::policy>& self,
-             const std::shared_ptr<amigo::OptVector<double>> vars) {
-            double complementarity;
-            double uniformity;
-            self.compute_complementarity(vars, complementarity, uniformity);
-            return py::make_tuple(complementarity, uniformity);
-          },
-          py::arg("vars"))
-      .def("compute_affine_start_point",
-           &amigo::InteriorPointOptimizer<
-               double, detail::policy>::compute_affine_start_point)
-      .def(
-          "check_update",
-          &amigo::InteriorPointOptimizer<double, detail::policy>::check_update);
+      .def("apply_step_update", &IPMOpt::apply_step_update)
+      .def("compute_complementarity",
+           [](const IPMOpt& self, std::shared_ptr<OV> vars) {
+             double avg, xi;
+             self.compute_complementarity(vars, avg, xi);
+             return py::make_tuple(avg, xi);
+           }, py::arg("vars"))
+      .def("compute_complementarity_sq",
+           [](const IPMOpt& self, std::shared_ptr<OV> vars) {
+             double sq;
+             self.compute_complementarity_sq(vars, sq);
+             return sq;
+           }, py::arg("vars"))
+      .def("compute_max_comp_deviation",
+           [](const IPMOpt& self, std::shared_ptr<OV> vars, double mu) {
+             double md;
+             self.compute_max_comp_deviation(vars, mu, md);
+             return md;
+           }, py::arg("vars"), py::arg("mu"))
+      .def("compute_barrier_log_sum", &IPMOpt::compute_barrier_log_sum,
+           py::arg("barrier_param"), py::arg("vars"))
+      .def("compute_barrier_dphi", &IPMOpt::compute_barrier_dphi,
+           py::arg("barrier_param"), py::arg("vars"), py::arg("update"),
+           py::arg("res"), py::arg("px"), py::arg("diag"))
+      .def("compute_barrier_dphi_direct", &IPMOpt::compute_barrier_dphi_direct,
+           py::arg("barrier_param"), py::arg("vars"), py::arg("grad"),
+           py::arg("px"))
+      .def("reset_bound_multipliers", &IPMOpt::reset_bound_multipliers,
+           py::arg("barrier_param"), py::arg("kappa_sigma"), py::arg("vars"))
+      .def("compute_constraint_violation_1norm",
+           &IPMOpt::compute_constraint_violation_1norm,
+           py::arg("vars"), py::arg("grad"))
+      .def("compute_kkt_error",
+           [](const IPMOpt& self, std::shared_ptr<OV> vars, std::shared_ptr<Vec> grad) {
+             double d, p, c;
+             self.compute_kkt_error(vars, grad, d, p, c);
+             return py::make_tuple(d, p, c);
+           }, py::arg("vars"), py::arg("grad"))
+      .def("compute_kkt_error_mu",
+           [](const IPMOpt& self, double mu, std::shared_ptr<OV> vars, std::shared_ptr<Vec> grad) {
+             double d, p, c;
+             self.compute_kkt_error_mu(mu, vars, grad, d, p, c);
+             return py::make_tuple(d, p, c);
+           }, py::arg("mu"), py::arg("vars"), py::arg("grad"))
+      .def("compute_residual_and_infeasibility",
+           [](const IPMOpt& self, double mu,
+              std::shared_ptr<OV> vars, std::shared_ptr<Vec> grad,
+              std::shared_ptr<Vec> res) {
+             double d, p;
+             self.compute_residual_and_infeasibility(mu, vars, grad, res, d, p);
+             return py::make_tuple(d, p);
+           }, py::arg("barrier_param"), py::arg("vars"), py::arg("grad"), py::arg("res"))
+      .def("get_kkt_element_counts",
+           [](const IPMOpt& self) {
+             int d, p, c;
+             self.get_kkt_element_counts(d, p, c);
+             return py::make_tuple(d, p, c);
+           })
+      .def("compute_affine_start_point", &IPMOpt::compute_affine_start_point)
+      .def("compute_dual_residual_vector", &IPMOpt::compute_dual_residual_vector,
+           py::arg("vars"), py::arg("grad"), py::arg("output"))
+      .def("check_update", &IPMOpt::check_update)
+      .def("get_lbx",
+           [](const IPMOpt& self) {
+             const auto& v = *self.get_lbx();
+             const double* a = v.template get_array<detail::policy>();
+             return std::vector<double>(a, a + v.get_size());
+           })
+      .def("get_ubx",
+           [](const IPMOpt& self) {
+             const auto& v = *self.get_ubx();
+             const double* a = v.template get_array<detail::policy>();
+             return std::vector<double>(a, a + v.get_size());
+           })
+      .def("get_lbx_relaxed",
+           [](const IPMOpt& self) {
+             const auto& v = *self.get_lbx_relaxed();
+             const double* a = v.template get_array<detail::policy>();
+             return std::vector<double>(a, a + v.get_size());
+           })
+      .def("get_ubx_relaxed",
+           [](const IPMOpt& self) {
+             const auto& v = *self.get_ubx_relaxed();
+             const double* a = v.template get_array<detail::policy>();
+             return std::vector<double>(a, a + v.get_size());
+           })
+      .def("get_num_inequalities", &IPMOpt::get_num_inequalities)
+      .def("get_num_design_variables", &IPMOpt::get_num_design_variables)
+      .def("relax_bounds", &IPMOpt::relax_bounds,
+           py::arg("factor") = 1e-8, py::arg("constr_viol_tol") = 1e-4)
+      .def("set_slack_mapping",
+           [](IPMOpt& self, py::array_t<int> slack_indices,
+              py::array_t<int> constr_indices) {
+             if (slack_indices.size() != constr_indices.size()) {
+               throw std::invalid_argument(
+                   "slack_indices and constr_indices must have the same length");
+             }
+             self.set_slack_mapping(
+                 static_cast<int>(slack_indices.size()),
+                 slack_indices.data(), constr_indices.data());
+           },
+           py::arg("slack_indices"), py::arg("constr_indices"))
+      .def("initialize_slacks", &IPMOpt::initialize_slacks,
+           py::arg("grad"), py::arg("vars"))
+      .def("has_slacks", &IPMOpt::has_slacks)
+      // NLP scaling
+      .def("compute_nlp_scaling", &IPMOpt::compute_nlp_scaling,
+           py::arg("x"), py::arg("grad"),
+           py::arg("max_gradient") = 100.0,
+           py::arg("min_value") = 1e-8)
+      .def("apply_gradient_scaling", &IPMOpt::apply_gradient_scaling,
+           py::arg("grad"))
+      .def("apply_hessian_scaling", &IPMOpt::apply_hessian_scaling,
+           py::arg("hess"))
+      .def("scale_multipliers", &IPMOpt::scale_multipliers,
+           py::arg("x"))
+      .def("unscale_multipliers", &IPMOpt::unscale_multipliers,
+           py::arg("x"))
+      .def("get_obj_scale", &IPMOpt::get_obj_scale)
+      .def("has_scaling", &IPMOpt::has_scaling);
 }
