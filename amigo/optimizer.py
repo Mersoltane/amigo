@@ -216,18 +216,6 @@ class DirectScipySolver(_HessianDiagMixin):
         """Solve K*x = rhs using existing factorization. Returns numpy array."""
         return self.lu.solve(rhs)
 
-    def get_inertia(self):
-        """Approximate inertia from LU diagonal (heuristic).
-
-        With diag_pivot_thresh=1.0 (strong diagonal pivoting), the signs of
-        U's diagonal approximate the eigenvalue signs of the original matrix.
-        Returns (n_positive, n_negative).
-        """
-        if self.lu is None:
-            raise RuntimeError("Must call factor() before get_inertia()")
-        u_diag = self.lu.U.diagonal()
-        return int(np.sum(u_diag > 0)), int(np.sum(u_diag < 0))
-
 
 class MumpsSolver(_HessianDiagMixin):
     """Sparse symmetric indefinite solver via MUMPS (LDL^T with inertia).
