@@ -306,8 +306,8 @@ class SparseCholesky {
   }
 
   /*
-    Solve the system of equations with the Cholesky factorization
-  */
+   * Solve the system of equations with the Cholesky factorization
+   */
   void solve(Vector<T>* x) {
     T* xt = x->get_array();
 

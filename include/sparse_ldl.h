@@ -9,7 +9,9 @@ namespace amigo {
 template <typename T>
 class SparseLDL {
  public:
-  SparseLDL(std::shared_ptr<CSRMat<T>> mat) : mat(mat) {
+  SparseLDL(std::shared_ptr<CSRMat<T>> mat, double ustab = 0.1,
+            double pivot_growth = 2.0)
+      : mat(mat), ustab(ustab), pivot_growth(pivot_growth) {
     // Get the non-zero pattern
     int nrows;
     const int *rowp, *cols;
@@ -23,8 +25,15 @@ class SparseLDL {
     delete[] var_to_snode;
     delete[] snode_to_var;
     delete[] num_children;
+    delete[] contrib_ptr;
+    delete[] contrib_rows;
   }
 
+  /**
+   * @brief Perform a LDL^{T} factorization of the matrix
+   *
+   * @return int The return flag
+   */
   int factor() {
     // Get the non-zero pattern
     int nrows, ncols, nnz;
@@ -32,57 +41,83 @@ class SparseLDL {
     const T* data;
     mat->get_data(&nrows, &ncols, &nnz, &rowp, &cols, &data);
 
-    // TODO: fix this
-    // Find the diagonal elements in the matrix - this should be fixed
-    int* diag = new int[nrows];
-    for (int i = 0; i < nrows; i++) {
-      for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
-        if (cols[jp] == i) {
-          diag[i] = jp;
-          break;
-        }
+    // Perform the numerical factorization
+    return factor_numeric(nrows, rowp, cols, data);
+  }
+
+  /**
+   * @brief Compute the solution of the system of equations
+   *
+   * L * D * L^{T} * y = x
+   *
+   * where y <- x. The solution vector overwrites the right-hand-side.
+   *
+   * @param xvec
+   */
+  void solve(Vector<T>* xvec) {
+    T* x = xvec->get_array();
+    T* temp = nullptr;
+
+    int ns = 0;
+    for (int ks = 0; ks < num_snodes; ks++) {
+      // Get the pointers to the factor data
+      int num_pivots, num_delayed;
+      const int* pivots = nullptr;
+      const int* delayed = nullptr;
+      const T *L11, *L21;
+      fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L11,
+                      &L21);
+
+      // Extract the variables from x
+      int jj = 0;
+      for (int j = 0; j < num_pivots; j++, jj++) {
+        temp[jj] = x[pivots[j]];
+      }
+
+      // Add the contributions to the stuf
+      for (int j = 0; j < num_delayed; j++, jj++) {
+        temp[jj] = x[delayed[j]];
+      }
+      for (int jp = contrib_ptr[ks]; jp < contrib_ptr[ks + 1]; jp++, jj++) {
+        temp[jj] = x[contrib_rows[jp]];
       }
     }
 
-    // Perform the numerical factorization
-    int flag = factor_numeric(nrows, diag, rowp, cols, data);
+    for (int ks = num_snodes - 1; ks >= 0; ks--) {
+      // Get the pointers to the factor data
+      int num_pivots, num_delayed;
+      const int* pivots = nullptr;
+      const int* delayed = nullptr;
+      const T *L11, *L21;
+      fact.get_factor(ks, &num_pivots, &num_delayed, &pivots, &delayed, &L11,
+                      &L21);
 
-    delete[] diag;
+      // Extract the variables from x
+      int jj = 0;
+      for (int j = 0; j < num_pivots; j++, jj++) {
+        temp[jj] = x[pivots[j]];
+      }
 
-    return flag;
+      // Add the contributions to the stuf
+      for (int j = 0; j < num_delayed; j++, jj++) {
+        temp[jj] = x[delayed[j]];
+      }
+      for (int jp = contrib_ptr[ks]; jp < contrib_ptr[ks + 1]; jp++, jj++) {
+        temp[jj] = x[contrib_rows[jp]];
+      }
+    }
   }
 
  private:
-  // The matrix
-  std::shared_ptr<CSRMat<T>> mat;
-
-  // Number of non-zeros in the Choleksy factorization
-  int cholesky_nnz;
-
-  // Number of super nodes in the matrix
-  int num_snodes;
-
-  // Size of the super nodes
-  int* snode_size;
-
-  // Go from var to super node or super node to variable
-  int* var_to_snode;
-  int* snode_to_var;
-
-  // Number of children for each super node
-  int* num_children;
-
-  // Compute the contribution blocks sizes (without delayed pivots)
-  int* contrib_ptr;
-  int* contrib_rows;
-
+  /**
+   * @brief The contribution stack object used for the factorization
+   */
   class ContributionStack {
    public:
     ContributionStack(int max_index, int max_work) {
-      stack_size = 0;
-      idx_top = 0;
+      top_idx = 0;
       idx = new int[max_index];
-      work_top = 0;
+      top_work = 0;
       work = new T[max_work];
     }
     ~ContributionStack() {
@@ -90,17 +125,129 @@ class SparseLDL {
       delete[] work;
     }
 
+    /**
+     * @brief Add the delayed pivots to the list of indices/vars
+     *
+     * @param nchildren Number of chiledren to look back at
+     * @param fully_summed Initial number of fully summed variables
+     * @param front_indices Indices in the front matrix
+     * @param front_vars Front variables
+     * @return Number of fully summed delayed pivots
+     */
+    int add_delayed_pivots(int nchildren, int fully_summed, int front_indices[],
+                           int front_vars[]) {
+      // Peak at the nchildren top entries
+      int tmp_top = top_idx;
+
+      for (int k = 0; k < nchildren; k++) {
+        int delayed_pivots = idx[tmp_top - 2];
+        int contrib_size = idx[tmp_top - 1];
+        int* vars = &idx[tmp_top - 2 - contrib_size];
+
+        for (int j = 0; j < delayed_pivots; j++) {
+          int delayed = vars[j];
+          if (front_indices[delayed] == -1) {
+            front_indices[delayed] = fully_summed;
+            front_vars[fully_summed] = delayed;
+            fully_summed++;
+          }
+        }
+
+        tmp_top -= (2 + contrib_size);
+      }
+
+      return fully_summed;
+    }
+
+    /**
+     * @brief Push a contribution block onto the stack
+     *
+     * The matrix is arranged like this:
+     *
+     * F = [ F11  F12 ]
+     *     [ F21  C   ]
+     *
+     * F11 is size num_pivots x num_pivots
+     * C is size (front_size - num_pivots)
+     *
+     * @param num_pivots Number of columns selected as pivots
+     * @param delayed_pivots Number of delayed pivots
+     * @param front_size Size of the front matrix F
+     * @param vars Variables on the front matrix
+     * @param F The front matrix values
+     */
+    void push(int num_pivots, int delayed_pivots, int front_size,
+              const int vars[], const T F[]) {
+      // Copy the indices first
+      int contrib_size = front_size - num_pivots;
+      std::copy(vars + num_pivots, vars + front_size, &idx[top_idx]);
+      top_idx += contrib_size;
+
+      // Save the delayed pivots and size of the contribution block
+      idx[top_idx] = delayed_pivots;
+      idx[top_idx + 1] = contrib_size;
+      top_idx += 2;
+
+      // Copy the values into the data array
+      for (int j = num_pivots; j < front_size; j++) {
+        for (int i = num_pivots; i < front_size; i++, top_work++) {
+          work[top_work] = F[i + front_size * j];
+        }
+      }
+    }
+
+    /**
+     * @brief Pop a contribution block from the top of the stack
+     *
+     * @param delayed_pivots Number of delayed pivots
+     * @param contrib_size Contribution block size
+     * @param vars Indices for the contribution block
+     * @param C The contribution block values
+     */
+    void pop(int* delayed_pivots, int* contrib_size, int* vars[], T* C[]) {
+      *delayed_pivots = idx[top_idx - 2];
+      int cb_size = idx[top_idx - 1];
+      *contrib_size = cb_size;
+      *vars = &idx[top_idx - 2 - cb_size];
+      top_idx -= (2 + cb_size);
+
+      *C = &work[top_work - cb_size * cb_size];
+      top_work -= cb_size * cb_size;
+    }
+
    private:
-    int stack_size;
-    int idx_top = 0;
-    int* idx;
-    int work_top = 0;
-    T* work;
+    int top_idx;   // Top of the index stack
+    int* idx;      // Index/size values
+    int top_work;  // Top of the entry stack
+    T* work;       // Entries in the matrix
+  };
+
+  class MatrixFactor {
+   public:
+    MatrixFactor() {}
+    ~MatrixFactor() {}
+
+    void allocate(int ncols, int num_snodes, int factor_nnz) {}
+
+    void reset() {}
+
+    void add_factor(int ks, int num_pivots, const int pivots[], int num_delayed,
+                    const int delayed[], int contrib_size, const T L[]) {}
+
+    void get_factor(int ks, int* num_pivots, const int* pivots[],
+                    int* num_delayed, const int* delayed[], const T* L11,
+                    const T* L21);
+
+   private:
+    // int num_snodes;
+    // int num_pivots;
+
+    // int* pivots;
+    // int* ptr;
   };
 
   /**
    * @brief Perform the multifrontal factorization
-   *
    *
    * Factor children that this front depends on
    * for children in front:
@@ -114,19 +261,20 @@ class SparseLDL {
    *
    * Compute the contribution block
    */
-  int factor_numeric(const int ncols, const int diag[], const int colp[],
-                     const int rows[], const T data[]) {
-    // Create an array that indexes into the local front
-    int* front_indices = new int[ncols];
-    std::fill(front_indices, front_indices + ncols, -1);
+  int factor_numeric(const int ncols, const int colp[], const int rows[],
+                     const T data[]) {
+    int* temp = new int[2 * ncols];
+    std::fill(temp, temp + 2 * ncols, -1);
+    int* front_indices = temp;       // Indices in the front matrix
+    int* front_vars = &temp[ncols];  // Variables in the front
 
-    // Pick very large values for now...
-    int size = 10 * cholesky_nnz;
-    ContributionStack stack(size, size);
-
-    // Another silly large guess right here...
+    // TODO: Compute proper size for the frontal matrix
     int max_frontal_size = 10 * cholesky_nnz;
     T* F = new T[max_frontal_size];
+
+    // TODO: Compute proper sizes for the stack
+    int size = 10 * cholesky_nnz;
+    ContributionStack stack(size, size);
 
     for (int ks = 0, k = 0; ks < num_snodes; k += snode_size[ks], ks++) {
       // Size of the super node
@@ -135,64 +283,174 @@ class SparseLDL {
       // Number of children for this super node
       int nchildren = num_children[ks];
 
-      // Set the ordering of the degrees of freeom in the front
-      // Number of fully summed contributions (supernode pivots + delayed
-      // pivots)
-      for (int j = 0; j < ns; j++) {
-        int var = snode_to_var[k + j];
-        front_indices[var] = j;
+      // Get the frontal variables
+      int fully_summed = 0, front_size = 0;
+      get_frontal_vars(ks, k, ns, nchildren, stack, front_indices, front_vars,
+                       &fully_summed, &front_size);
+
+      // Assemble the frontal matrix
+      assemble_front_matrix(k, ns, front_size, front_indices, colp, rows, data,
+                            nchildren, stack, F);
+
+      // Factor the frontal matrix and save the
+      factor_front_matrix(ks, fully_summed, front_size, front_vars, F, stack,
+                          fact);
+
+      // Reset the front indices back to -1
+      for (int j = 0; j < front_size; j++) {
+        int var = front_vars[j];
+        front_indices[var] = -1;
       }
-
-      // Merge the fully summed rows
-      int fully_summed = ns;
-
-      // Add the additional contributions from the delayed pivots
-      // .....
-
-      // Get the entries predicted from Cholesky
-      int start = contrib_ptr[ks];
-      int cbsize = contrib_ptr[ks + 1] - start;
-      for (int j = 0, *row = &contrib_rows[start]; j < cbsize; j++, row++) {
-        front_indices[*row] = fully_summed + j;
-      }
-
-      // Get the size of the front
-      int front_size = fully_summed + cbsize;
-
-      // Zero the frontal matrix
-      std::fill(F, F + front_size * front_size, 0.0);
-
-      // Assemble the front contributions from the matrix
-      // assemble_from_matrix(ks, front_size, front_indices, ncols, diag, colp,
-      //  rows, data, F);
-
-      // Assemble the front contributions from the stack
-      // assemble_from_stack(ks, front_size, front_indices, stack, nchildren,
-      // F);
-
-      // Factor the frontal matrix
-      // Need to return data here about the stack
-      // factor_frontal(fully_summed, front_size, F);
-
-      // Save the contribution to the factor
-      //
-
-      // Add the contribution block to the stack
-      // add_contribution(F);
     }
 
     // Clean up the data
-    delete[] front_indices;
+    delete[] temp;
 
     return 0;
   }
 
   /**
+   * @brief Get the variables for this front
+   *
+   * @param ks The super nodal index ks
+   * @param k The offset into the super node variable list
+   * @param ns The size of the super node
+   * @param nchildren the number of children for this super node
+   * @param stack The stack of contribution blocks
+   * @param front_indices The front indices
+   * @param front_vars The variables on the front
+   * @param fully_summed Number of fully summed variables
+   * @param front_size The front size
+   */
+  void get_frontal_vars(const int ks, const int k, const int ns,
+                        const int nchildren, ContributionStack& stack,
+                        int front_indices[], int front_vars[],
+                        int* fully_summed, int* front_size) {
+    // Set the ordering of the degrees of freeom in the front
+    // Number of fully summed contributions (supernode pivots + delayed
+    // pivots)
+    for (int j = 0; j < ns; j++) {
+      int var = snode_to_var[k + j];
+      front_indices[var] = j;
+      front_vars[j] = var;
+    }
+
+    // Add the additional contributions from the delayed pivots
+    int f_summed =
+        stack.add_delayed_pivots(nchildren, ns, front_indices, front_vars);
+
+    // Get the entries predicted from Cholesky
+    int start = contrib_ptr[ks];
+    int cbsize = contrib_ptr[ks + 1] - start;
+    for (int j = 0, *row = &contrib_rows[start]; j < cbsize; j++, row++) {
+      front_indices[*row] = f_summed + j;
+      front_vars[f_summed + j] = *row;
+    }
+
+    // Get the size of the front
+    *fully_summed = f_summed;
+    *front_size = f_summed + cbsize;
+  }
+
+  /**
+   * @brief Assemble the frontal matrix associated with the delayed pivots and
+   * super node entries
+   *
+   * @param k Offset into the super node list
+   * @param ns Number of variables in this super node
+   * @param front_size Front size
+   * @param front_indices Front indices
+   * @param colp Pointer into the column
+   * @param rows Row indices
+   * @param data Entries from the matrix
+   * @param nchildren Number of children in the etree for this super node
+   * @param stack Contribution stack
+   * @param F The frontal matrix
+   */
+  void assemble_front_matrix(const int k, const int ns, int front_size,
+                             const int front_indices[], const int colp[],
+                             const int rows[], const T data[],
+                             const int nchildren, ContributionStack& stack,
+                             T F[]) {
+    std::fill(F, F + front_size * front_size, 0.0);
+
+    // Assemble the contributions into F from the matrix
+    for (int j = 0; j < ns; j++) {
+      // Get the column variable associated with the snode
+      int var = snode_to_var[k + j];
+
+      for (int ip = colp[var]; ip < colp[var + 1]; ip++) {
+        // Get the
+        int i = rows[ip];
+
+        // Get the front index
+        int ifront = front_indices[i];
+
+        // Add the contribution to the frontal matrix
+        if (ifront >= 0) {
+          F[ifront + front_size * j] += data[ip];
+        }
+      }
+    }
+
+    // Add the contributions
+    for (int child = 0; child < nchildren; child++) {
+      int delayed_pivots;
+      int contrib_size;
+      int* contrib_indices;
+      T* C;
+      stack.pop(&delayed_pivots, &contrib_size, &contrib_indices, &C);
+
+      // Add the contribution blocks
+      for (int i = 0; i < contrib_size; i++) {
+        int ifront = front_indices[contrib_indices[i]];
+
+        for (int j = 0; j < contrib_size; j++) {
+          int jfront = front_indices[contrib_indices[j]];
+
+          F[ifront + front_size * jfront] += C[i + contrib_size * j];
+        }
+      }
+    }
+  }
+
+  /**
+   * @brief Factor the frontal matrix now that it is assembled.
+   *
+   * After factorization, push the contribution matrix to the stack and add the
+   * factorization pieces
+   *
+   * @param ks The index of the super node
+   * @param fully_summed The number of fully summed equations
+   * @param front_size The front size
+   * @param front_vars The front variables
+   * @param F The frontal matrix itself
+   * @param stack The stack for the contribution blocks
+   * @param factor The factor contributions
+   */
+  void factor_front_matrix(const int ks, const int fully_summed,
+                           const int front_size, const int front_vars[], T F[],
+                           ContributionStack& stack, MatrixFactor& factor) {
+    // Select the pivots
+    int num_pivots = 0;
+
+    // Perform the numerical factorization here..
+    int num_delayed = fully_summed - num_pivots;
+    stack.push(num_pivots, num_delayed, front_size, front_vars, F);
+
+    // Push the factored matrix
+    const int* pivots = front_vars;
+    const int* delayed = &front_vars[num_pivots];
+    factor.add_factor(ks, num_pivots, pivots, num_delayed, delayed,
+                      front_size - fully_summed, F);
+  }
+
+  /**
    * @brief Perform the symbolic analysis phase on the non-zero matrix pattern
    *
-   * This performs a post-order of the elimination tree, identifies super nodes
-   * based on the post-ordering and performs a count of the numbers of non-zero
-   * entries in the matrices.
+   * This performs a post-order of the elimination tree, identifies super
+   * nodes based on the post-ordering and performs a count of the numbers of
+   * non-zero entries in the matrices.
    *
    * @param ncols Number of columns (equal to number of rows) in the matrix
    * @param colp Pointer into each column of the matrix
@@ -239,7 +497,8 @@ class SparseLDL {
       snode_size[var_to_snode[i]]++;
     }
 
-    // Count the children of supernodes within the post-ordered elimination tree
+    // Count the children of supernodes within the post-ordered elimination
+    // tree
     num_children = new int[num_snodes];
     count_super_node_children(ncols, parent, num_snodes, var_to_snode,
                               num_children, work);
@@ -262,6 +521,9 @@ class SparseLDL {
     build_nonzero_pattern(ncols, colp, rows, parent, num_snodes, snode_size,
                           var_to_snode, snode_to_var, contrib_ptr, contrib_rows,
                           work);
+
+    // Allocate the arrays within the factorization
+    fact.allocate(ncols, num_snodes, cholesky_nnz);
 
     delete[] work;
     delete[] parent;
@@ -581,6 +843,38 @@ class SparseLDL {
       }
     }
   }
+
+  // The matrix
+  std::shared_ptr<CSRMat<T>> mat;
+
+  // Stability factor
+  double ustab;
+
+  // Estimated pivot growth factor
+  double pivot_growth;
+
+  // Number of non-zeros in the Choleksy factorization
+  int cholesky_nnz;
+
+  // Number of super nodes in the matrix
+  int num_snodes;
+
+  // Size of the super nodes
+  int* snode_size;
+
+  // Go from var to super node or super node to variable
+  int* var_to_snode;
+  int* snode_to_var;
+
+  // Number of children for each super node
+  int* num_children;
+
+  // Compute the contribution blocks sizes (without delayed pivots)
+  int* contrib_ptr;
+  int* contrib_rows;
+
+  // Storage for the matrix factorization
+  MatrixFactor fact;
 };
 
 }  // namespace amigo
