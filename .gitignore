@@ -98,3 +98,6 @@ docs/
 examples/raceproject/
 examples/river_crossing/
 /.claude
+/_build_debug
+*.plist
+*.yml
