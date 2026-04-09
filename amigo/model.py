@@ -817,7 +817,7 @@ class Model:
         """
 
         if self.module_name is not None and not self._built:
-            raise RuntimeError(
+            raise Warning(
                 f"Call model.build_module() before model.initialize(). "
                 f"Module '{self.module_name}' has not been compiled in this session."
             )
