@@ -520,30 +520,6 @@ class Model:
                 f"'get_constraint_jacobian_csr' method"
             )
 
-        # Check: if a constraint listed here is also declared in a registered Python
-        # component, that component must have an empty compute(). Both the Python component
-        # and the external component accumulate their contributions to the same constraint
-        # index via +=, so a non-empty compute() on the Python side will cause the constraint
-        # to be double-counted, producing incorrect KKT residuals.
-        for con_expr in constraints:
-            parts = con_expr.rsplit(".", 1)
-            if len(parts) == 2:
-                comp_name, con_name = parts
-                if comp_name in self.comp:
-                    py_comp = self.comp[comp_name].comp_obj
-                    if con_name in py_comp.get_constraint_names():
-                        if not py_comp.is_compute_empty():
-                            raise ValueError(
-                                f"add_external_component '{name}': constraint "
-                                f"'{con_expr}' is also declared in Python component "
-                                f"'{comp_name}', which has a non-empty compute(). "
-                                f"Both components accumulate contributions to the same "
-                                f"constraint index, so the constraint will be double-counted "
-                                f"and produce incorrect KKT residuals. The Python component "
-                                f"must have an empty compute() and serve only as a placeholder "
-                                f"to declare the constraint variable and its bounds."
-                            )
-
         self.external_comp[name] = ExternalComponent(
             name, comp_obj, inputs, constraints
         )
