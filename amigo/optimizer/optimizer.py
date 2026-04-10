@@ -485,7 +485,8 @@ class Optimizer:
         lower, upper : array-like, optional
             Variable bounds
         solver : Solver, optional
-            Linear solver for KKT system
+            Linear solver for KKT system.
+            Can also specify by passing string from ["scipy", "pardiso", "mumps"]
         comm : MPI communicator, optional
             For distributed optimization
         distribute : bool
@@ -557,25 +558,29 @@ class Optimizer:
             self.problem.scatter_vector(self.upper, self.mpi_problem, self.mpi_upper)
 
         # Set the solver for the KKT system
-        # AMIGO_SOLVER env var: "scipy", "mumps", "pardiso" (default: auto)
+        # solver may be: a Solver instance, a string ("scipy"|"pardiso"|"mumps"),
+        # or None (auto: try mumps -> pardiso -> scipy).
         if solver is None and self.distribute:
             self.solver = DirectPetscSolver(self.comm, self.mpi_problem)
-        elif solver is None:
-            solver_pref = os.environ.get("AMIGO_SOLVER", "").lower()
+        elif isinstance(solver, str):
+            solver_pref = solver.lower()
             if solver_pref == "scipy":
                 self.solver = DirectScipySolver(self.problem)
             elif solver_pref == "pardiso":
                 self.solver = PardisoSolver(self.problem)
-            else:
-                try:
-                    self.solver = MumpsSolver(self.problem)
-                except (ImportError, Exception):
-                    try:
-                        self.solver = PardisoSolver(self.problem)
-                    except (ImportError, Exception):
-                        self.solver = DirectScipySolver(self.problem)
-        else:
+            elif solver_pref == "mumps":
+                self.solver = MumpsSolver(self.problem)
+        elif solver is not None:
             self.solver = solver
+        else:
+            # Fallback
+            try:
+                self.solver = MumpsSolver(self.problem)
+            except (ImportError, Exception):
+                try:
+                    self.solver = PardisoSolver(self.problem)
+                except (ImportError, Exception):
+                    self.solver = DirectScipySolver(self.problem)
 
         # Create the interior point optimizer object
         if self.distribute:
