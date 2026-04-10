@@ -620,6 +620,7 @@ class Optimizer:
             self.res = self.problem.create_vector()
             self.diag = self.problem.create_vector()
             self.px = self.problem.create_vector()
+            self.ir_corr = self.problem.create_vector()
 
     def write_log(self, iteration, iter_data):
         if iteration % 20 == 0:
@@ -1031,21 +1032,18 @@ class Optimizer:
 
         # Solve the two linear systems (one factorization)
         # px0: affine-scaling direction (mu = 0)
+        # TODO: solution for solve_array dropped hasattr
         self.optimizer.compute_residual(0.0, self.vars, self.grad, self.res)
         dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(self.vars, self.grad)
-        if hasattr(self.solver, "solve_array"):
-            px0 = self.solver.solve_array(self.res.get_array().copy()).copy()
-        else:
-            self.solver.solve(self.res, self.px)
-            px0 = self.px.get_array().copy()
+
+        self.solver.solve(self.res, self.px)
+        px0 = self.px.get_array().copy()
 
         # px1: centering direction (mu = avg_comp)
         self.optimizer.compute_residual(mu_nat, self.vars, self.grad, self.res)
-        if hasattr(self.solver, "solve_array"):
-            px1 = self.solver.solve_array(self.res.get_array().copy()).copy()
-        else:
-            self.solver.solve(self.res, self.px)
-            px1 = self.px.get_array().copy()
+
+        self.solver.solve(self.res, self.px)
+        px1 = self.px.get_array().copy()
 
         dpx = px1 - px0  # centering component
 
@@ -1548,6 +1546,8 @@ class Optimizer:
         residual_ratio_old = 1e30
 
         n_ir_steps = 0
+
+        # TODO all of these need to have their GPU equivalent
         for step in range(max_steps):
             # Compute full 8-block residual
             Kpx = K.dot(px)
@@ -1605,7 +1605,11 @@ class Optimizer:
             e_cond[ci] = e_c
 
             # Solve correction with existing factorization
-            corr = self.solver.solve_array(e_cond)
+            self.res.get_array()[:] = e_cond
+            self.res.copy_host_to_device()
+            self.solver.solve(self.res, self.ir_corr)
+            self.ir_corr.copy_device_to_host()
+            corr = self.ir_corr.get_array()
 
             # Back-substitute for bound dual corrections
             dc = corr[pi]
@@ -1617,7 +1621,7 @@ class Optimizer:
             dx = px[pi]
             n_ir_steps += 1
 
-        pass
+        self.px.copy_host_to_device()
 
     def _solve_with_mu(self, mu, inertia_corrector=None, mult_ind=None):
         """Solve the augmented KKT system for the Newton direction.

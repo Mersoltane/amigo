@@ -51,7 +51,3 @@ class DirectScipySolver(LinearSolver):
         bx.copy_device_to_host()
         px.get_array()[:] = self.lu.solve(bx.get_array())
         px.copy_host_to_device()
-
-    def solve_array(self, rhs):
-        """Solve K*x = rhs using existing factorization. Returns numpy array."""
-        return self.lu.solve(rhs)

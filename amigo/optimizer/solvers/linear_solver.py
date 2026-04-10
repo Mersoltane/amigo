@@ -11,10 +11,6 @@ class LinearSolver(ABC):
     def solve(self, bx, px):
         pass
 
-    @abstractmethod
-    def solve_array(self, rhs):
-        pass  # TODO remove solve_array
-
     supports_inertia = False
 
     def get_inertia(self):

@@ -400,12 +400,6 @@ class MumpsSolver(LinearSolver):
         px.get_array()[:] = self._rhs
         px.copy_host_to_device()
 
-    def solve_array(self, rhs):
-        self._rhs[:] = rhs
-        self._mumps.job = 3
-        self._call_mumps()
-        return self._rhs.copy()
-
     def __del__(self):
         try:
             self._mumps.job = -2
