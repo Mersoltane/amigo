@@ -12,15 +12,6 @@ on:
       - 'amigo/**'
       - 'include/**'
       - '.github/workflows/docker.yml'
-  pull_request:
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'pyproject.toml'
-      - 'CMakeLists.txt'
-      - 'amigo/**'
-      - 'include/**'
-      - '.github/workflows/docker.yml'
   workflow_dispatch:
 
 # Allow only one concurrent docker build per ref; cancel older runs.

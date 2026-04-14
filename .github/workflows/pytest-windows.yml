@@ -13,10 +13,18 @@ jobs:
       - name: Checkout amigo
         uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        uses: mpi4py/setup-mpi@v1
+        with:
+          mpi: msmpi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install BLAS
+        pip install mkl mkl-devel
 
       - name: Checkout a2d
         run: git clone --depth 1 https://github.com/smdogroup/a2d.git ../a2d
