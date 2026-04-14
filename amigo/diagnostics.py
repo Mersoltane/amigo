@@ -74,6 +74,7 @@ class Diagnostics:
 
     _TOL_BOUND: float = 1e-10
     _MAX_VIOLATIONS_SHOWN: int = 5
+    _MAX_INFEASIBILITY = 1.0
 
     def __init__(self, model, x, lower=None, upper=None):
         self.model = model
@@ -429,17 +430,17 @@ class Diagnostics:
             max_r = float(np.max(np.abs(arr)))
             mean_r = float(np.mean(np.abs(arr)))
             all_max.append(max_r)
-            flag = "  [!!]" if max_r > 1.0 else "      "
+            flag = "  [!!]" if max_r > self._MAX_INFEASIBILITY else "      "
             print(f"  {flag}  {name:38s}  max={max_r:.4e}  mean={mean_r:.4e}")
 
         if all_max:
             inf_pr = max(all_max)
-            tag = "[WARN]" if inf_pr > 1.0 else "[OK]  "
+            tag = "[WARN]" if inf_pr > self._MAX_INFEASIBILITY else "[OK]  "
             print(
                 f"\n      {tag} inf_pr estimate = {inf_pr:.4e}"
                 f"  (should match optimizer iter-0 inf_pr)"
             )
-            if inf_pr > 1.0:
+            if inf_pr > self._MAX_INFEASIBILITY:
                 fail = True
 
         return fail
