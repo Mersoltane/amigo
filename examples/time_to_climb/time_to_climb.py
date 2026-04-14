@@ -370,7 +370,6 @@ upper["bspline.control_points.x"] = 25.0
 am.Diagnostics(model, x, lower, upper).run()
 
 # Optimize
-opt = am.Optimizer(model, x, lower=lower, upper=upper)
 opt = am.Optimizer(model, x, lower=lower, upper=upper, solver="mumps")
 data = opt.optimize(
     {

@@ -87,7 +87,7 @@ def opt_result(trained_krg):
     lower["src.y"] = 0.25
     upper["src.y"] = float("inf")
 
-    opt = am.Optimizer(model, xvec, lower=lower, upper=upper)
+    opt = am.Optimizer(model, xvec, lower=lower, upper=upper, solver="mumps")
     data = opt.optimize(
         {
             "max_iterations": 200,
