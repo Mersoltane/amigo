@@ -644,6 +644,9 @@ class SparseLDL {
       // Reset the front indices back to -1
       for (int j = 0; j < front_size; j++) {
         int var = front_vars[j];
+        if (var < 0) {
+          var = -var - 1;
+        }
         front_indices[var] = -1;
       }
     }
@@ -1311,7 +1314,7 @@ class SparseLDL {
         int nrhs = 1;
         int info;
         lapack_sytrs("L", ldl, nrhs, L, ldl, ipiv, temp, ldl, &info);
-      } else {
+      } else if (num_pivots > 0) {
         // Find the solution t1 = L11^{-1} * t1, overwriting temp
         // with the solution
         solve_pivot_lower(num_pivots, pivots, L, ldl, temp);
@@ -1357,7 +1360,7 @@ class SparseLDL {
       fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L,
                       &num_ipiv, &ipiv);
 
-      if (!ipiv) {
+      if (!ipiv && num_pivots > 0) {
         int num_contrib = contrib_ptr[ks + 1] - contrib_ptr[ks];
         int ldl = num_pivots + num_delayed + num_contrib;
 
