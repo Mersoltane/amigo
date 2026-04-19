@@ -103,7 +103,7 @@ model.eval_hessian(x, mat)
 
 # Solve the equations
 print("Solving...")
-chol = am.SparseCholesky(mat)
+chol = am.SparseLDL(mat, ustab=0.1, solver_type=am.SolverType.CHOLESKY)
 flag = chol.factor()
 
 # Solve the equations

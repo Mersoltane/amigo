@@ -295,6 +295,39 @@ PYBIND11_MODULE(amigo, mod) {
 
   py::class_<amigo::CSRMat<double>, std::shared_ptr<amigo::CSRMat<double>>>(
       mod, "CSRMat")
+      .def(py::init(
+               [](int nrows, int ncols,
+                  py::array_t<int, py::array::c_style | py::array::forcecast>
+                      rowp,
+                  py::array_t<int, py::array::c_style | py::array::forcecast>
+                      cols,
+                  py::array_t<double, py::array::c_style | py::array::forcecast>
+                      vals) {
+                 if (rowp.ndim() != 1 || cols.ndim() != 1 || vals.ndim() != 1) {
+                   throw std::runtime_error(
+                       "rowp, cols, and vals must be 1D arrays");
+                 }
+                 if (rowp.shape(0) != nrows + 1) {
+                   throw std::runtime_error("rowp must have length nrows + 1");
+                 }
+                 if (cols.shape(0) != vals.shape(0)) {
+                   throw std::runtime_error(
+                       "cols and vals must have the same length");
+                 }
+                 int nnz = static_cast<int>(vals.shape(0));
+                 const int* rowp_ptr = rowp.data();
+                 const int* cols_ptr = cols.data();
+                 const double* vals_ptr = vals.data();
+                 auto csr = amigo::CSRMat<double>::create_from_csr_data(
+                     nrows, ncols, nnz, rowp_ptr, cols_ptr);
+                 double* data = csr->get_data_ptr();
+                 for (int i = 0; i < nnz; i++) {
+                   data[i] = vals_ptr[i];
+                 }
+                 return csr;
+               }),
+           py::arg("nrows"), py::arg("ncols"), py::arg("rowp"), py::arg("cols"),
+           py::arg("vals"))
       .def("get_nonzero_structure",
            [](amigo::CSRMat<double>& mat) {
              int nrows, ncols, nnz;
