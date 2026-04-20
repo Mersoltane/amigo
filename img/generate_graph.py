@@ -30,13 +30,15 @@ net = Network(
 )
 
 net.from_nx(graph)
-net.set_options("""
+net.set_options(
+    """
 var options = {
     "interaction": {
         "dragNodes": false
     }
 }
-""")
+"""
+)
 
 # Save to static/img directory for documentation
 net.show("cart_pole_graph.html")
