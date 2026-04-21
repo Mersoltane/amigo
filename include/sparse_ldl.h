@@ -86,7 +86,7 @@ class SparseLDL {
     cholesky_int_nnz = 0;
     cholesky_factor_nnz = 0;
     num_snodes = 0;
-    iperm = nullptr;
+    invperm = nullptr;
     snode_size = nullptr;
     snode_to_var = nullptr;
     num_children = nullptr;
@@ -103,8 +103,8 @@ class SparseLDL {
     symbolic_analysis(order, nrows, rowp, cols);
   }
   ~SparseLDL() {
-    if (iperm) {
-      delete[] iperm;
+    if (invperm) {
+      delete[] invperm;
     }
     delete[] snode_size;
     delete[] snode_to_var;
@@ -769,13 +769,13 @@ class SparseLDL {
       for (int j = 0; j < ns; j++) {
         // Get the column variable associated with the snode
         int var = snode_to_var[k + j];
-        int pj = iperm[var];
+        int pj = invperm[var];
         T* Fj = &F[front_size * j];
 
         for (int ip = colp[var]; ip < colp[var + 1]; ip++) {
           // Get the original row index
           int i = rows[ip];
-          int pi = iperm[i];
+          int pi = invperm[i];
 
           // Get the front index
           int ifront = front_indices[i];
@@ -1682,7 +1682,7 @@ class SparseLDL {
                          const int rows[]) {
     // Compute the ordering
     int* perm = nullptr;
-    iperm = nullptr;
+    int* iperm = nullptr;
 
     // If the ordering type is natural, we don't create a permutation of the
     // original matrix
@@ -1803,6 +1803,9 @@ class SparseLDL {
     if (perm) {
       delete[] perm;
     }
+
+    // Set the inverse permutation
+    invperm = iperm;
   }
 
   /**
@@ -2314,7 +2317,7 @@ class SparseLDL {
   int cholesky_factor_nnz;
 
   // Permutation array defined - nullptr if order == NATURAL
-  int* iperm;
+  int* invperm;
 
   // Number of super nodes in the matrix
   int num_snodes;
