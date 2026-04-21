@@ -1,14 +1,13 @@
 """Per-iteration state carried through the optimization loop.
 
-Holds the scalar counters, step-size history, quality-function mode,
-and filter-reset/rejection counts that change every iteration.  Static
-configuration lives in the options dict; longer-lived algorithmic
-state (reference points for globalization, filter theta_0) stays on
-the Optimizer instance.
+IpmState holds the scalar counters, step-size history, and
+filter/rejection counts that change every iteration.  StepContext
+is a lightweight bag of per-iteration scratch data handed to the
+barrier strategy each step.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 
 @dataclass
@@ -27,12 +26,6 @@ class IpmState:
     acceptable_counter: int = 0
     precision_floor_count: int = 0
 
-    # Quality-function bounds and mode (set on first iteration)
-    qf_mu_min: float = 0.0
-    qf_mu_max: float = -1.0
-    qf_free_mode: bool = True
-    qf_monotone_mu: Optional[float] = None
-
     # Rejection tracking
     consecutive_rejections: int = 0
     zero_step_count: int = 0
@@ -47,3 +40,29 @@ class IpmState:
 
     # Barrier parameter at the start of the most recent residual eval
     res_norm_mu: float = 0.0
+
+
+@dataclass
+class StepContext:
+    """Per-iteration inputs passed to BarrierStrategy.step()."""
+
+    i: int = 0
+    comm_rank: int = 0
+    res_norm: float = 0.0
+    tol: float = 0.0
+    compl_inf_tol: float = 0.0
+
+    # Problem structure
+    mult_ind: Any = None
+    x: Any = None
+    diag_base: Any = None
+
+    # Inertia correction + zero-Hessian handling
+    inertia_corrector: Any = None
+    zero_hessian_indices: Any = None
+    zero_hessian_eps: float = 0.0
+
+    # Classical-barrier filter monotone fallback (strategy may update
+    # filter_monotone_mu in place; driver reads it back)
+    filter_monotone_mode: bool = False
+    filter_monotone_mu: Optional[float] = None

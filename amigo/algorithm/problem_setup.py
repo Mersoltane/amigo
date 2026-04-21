@@ -179,28 +179,3 @@ class ProblemSetup:
                     f"zero-Hessian vars, eps_x_zero={zero_hessian_eps:.2e}"
                 )
         return zero_hessian_indices, zero_hessian_eps
-
-    def _setup_quality_function_state(self, quality_func, options, mult_ind):
-        """Pre-allocate QF globalization state on self. Returns a small dict."""
-        qf_sd = qf_sp = qf_sc = 1.0
-        if quality_func and options["quality_function_norm_scaling"]:
-            n_d, n_p, n_c = self.optimizer.get_kkt_element_counts()
-            qf_sd = 1.0 / max(n_d, 1)
-            qf_sp = 1.0 / max(n_p, 1)
-            qf_sc = 1.0 / max(n_c, 1)
-        self._qf_sd = qf_sd
-        self._qf_sp = qf_sp
-        self._qf_sc = qf_sc
-        self._qf_mult_ind = mult_ind
-        self._qf_refs = []
-        self._qf_glob_filter = []
-        self._qf_init_dual_inf = -1.0
-        self._qf_init_primal_inf = -1.0
-        self._delta_aff = None
-
-        if quality_func:
-            d0, p0, c0 = self.optimizer.compute_kkt_error(self.vars, self.grad)
-            init_qf = d0 * qf_sd + p0 * qf_sp + c0 * qf_sc
-            self._qf_refs.append(init_qf)
-
-        return {"mu_min_default": True}

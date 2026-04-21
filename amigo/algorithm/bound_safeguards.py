@@ -77,7 +77,7 @@ class BoundSafeguards:
 
             # Keep primals consistent: x = lb + sl, x = ub - su
             sol_arr = vars_obj.get_solution().get_array()
-            pi = np.where(~self._qf_mult_ind)[0]
+            pi = np.where(~self._mult_ind)[0]
             for i in np.where(fl)[0]:
                 sol_arr[pi[i]] = lbx[i] + sl[i]
             for i in np.where(fu)[0]:

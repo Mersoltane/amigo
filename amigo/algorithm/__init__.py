@@ -9,10 +9,10 @@ Module map, grouped by concern:
   convergence_check.py           Convergence criteria
   default_options.py             Default option values
 
-  barrier_update.py              Per-iteration barrier orchestration
-  barrier_heuristic.py           LOQO-style data-driven update
-  barrier_quality_function.py    Quality-function oracle
-  barrier_adaptive_mu.py         Globalization for the QF strategy
+  barrier_strategy/              Barrier-parameter strategies
+    base.py                      BarrierStrategy ABC
+    heuristic.py                 LOQO + monotone (classical)
+    quality_function.py          Mehrotra PC / QF + adaptive-mu globalization
 
   newton_direction.py            KKT factor, solve, direction
   inertia_correction.py          Algorithm IC (Wachter & Biegler 2006)

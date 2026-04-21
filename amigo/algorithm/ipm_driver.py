@@ -16,7 +16,7 @@ from .default_options import get_default_options
 from .filter_acceptance import Filter
 from .filter_line_search import FilterLineSearch, WatchdogState
 from .merit_line_search import MeritLineSearch
-from .ipm_state import IpmState
+from .ipm_state import IpmState, StepContext
 
 from .problem_setup import ProblemSetup
 from .iterate_initialization import IterateInitialization
@@ -27,10 +27,7 @@ from .convergence_check import (
     DIVERGED,
     PRECISION_FLOOR,
 )
-from .barrier_heuristic import BarrierHeuristic
-from .barrier_quality_function import BarrierQualityFunction
-from .barrier_adaptive_mu import BarrierAdaptiveMu
-from .barrier_update import BarrierUpdate
+from .barrier_strategy import make_barrier_strategy
 from .newton_direction import NewtonDirection
 from .optimality_scaling import OptimalityScaling
 from .bound_safeguards import BoundSafeguards
@@ -45,10 +42,6 @@ class Optimizer(
     ProblemSetup,
     IterateInitialization,
     ConvergenceCheck,
-    BarrierHeuristic,
-    BarrierQualityFunction,
-    BarrierAdaptiveMu,
-    BarrierUpdate,
     NewtonDirection,
     OptimalityScaling,
     BoundSafeguards,
@@ -62,8 +55,8 @@ class Optimizer(
 ):
     """Primal-dual interior-point optimizer with filter line search.
 
-    All algorithmic components are inherited from focused mixin classes.
-    This class defines only __init__, optimize(), and get_options().
+    Composes a BarrierStrategy (self.barrier) for the mu update and
+    inherits the remaining algorithmic pieces as mixins.
     """
 
     def __init__(
@@ -139,6 +132,7 @@ class Optimizer(
         max_filter_resets = options["max_filter_resets"]
 
         self.barrier_param = options["initial_barrier_param"]
+        self.barrier = make_barrier_strategy(self, options)
 
         # Initialization
         self._initialize_iterate(options, comm_rank)
@@ -147,12 +141,13 @@ class Optimizer(
         xview = ModelVector(self.model, x=x) if not self.distribute else None
 
         # Loop state
-        state = IpmState(qf_mu_min=options["mu_min"])
+        state = IpmState()
         state.res_norm_mu = self.barrier_param
 
-        # Inertia corrector + zero-Hessian indices + QF state
+        # Inertia corrector + zero-Hessian indices
         problem_ref = self.mpi_problem if self.distribute else self.problem
         mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
+        self._mult_ind = mult_ind  # used by _ensure_positive_slacks
         inertia_corrector = self._build_inertia_corrector(
             mult_ind, tol, options, comm_rank
         )
@@ -160,9 +155,21 @@ class Optimizer(
             options, comm_rank
         )
 
-        quality_func = options["barrier_strategy"] == "quality_function"
-        qf_state = self._setup_quality_function_state(quality_func, options, mult_ind)
         soc_mult_ind = mult_ind if options["second_order_correction"] else None
+
+        # Barrier-strategy step context (shared across iterations; per-iteration
+        # fields i, res_norm, diag_base, filter_monotone_* are updated in-loop)
+        ctx = StepContext(
+            comm_rank=comm_rank,
+            tol=tol,
+            compl_inf_tol=compl_inf_tol,
+            mult_ind=mult_ind,
+            x=x,
+            inertia_corrector=inertia_corrector,
+            zero_hessian_indices=zero_hessian_indices,
+            zero_hessian_eps=zero_hessian_eps,
+        )
+        self.barrier.initialize(ctx)
 
         # Filter line search state
         filter_ls = options["filter_line_search"]
@@ -264,7 +271,7 @@ class Optimizer(
 
             # Zero-step recovery (non-inertia path only)
             if not inertia_corrector:
-                state.zero_step_count = self._handle_zero_step_recovery(
+                state.zero_step_count = self.barrier.handle_zero_step_recovery(
                     i,
                     state.alpha_x_prev,
                     state.alpha_z_prev,
@@ -279,50 +286,13 @@ class Optimizer(
 
             barrier_before = self.barrier_param
 
-            if quality_func:
-                state.qf_mu_min, state.qf_mu_max = self._initialize_qf_bounds(
-                    options,
-                    tol,
-                    compl_inf_tol,
-                    state.qf_mu_min,
-                    state.qf_mu_max,
-                    qf_state,
-                )
-                state.qf_free_mode, state.qf_monotone_mu, factorize_ok = (
-                    self._step_quality_function(
-                        options,
-                        mult_ind,
-                        inertia_corrector,
-                        diag_base,
-                        x,
-                        zero_hessian_indices,
-                        zero_hessian_eps,
-                        comm_rank,
-                        state.qf_free_mode,
-                        state.qf_monotone_mu,
-                        state.qf_mu_min,
-                        state.qf_mu_max,
-                        tol,
-                        compl_inf_tol,
-                    )
-                )
-            else:
-                state.filter_monotone_mu, factorize_ok = self._step_classical(
-                    i,
-                    options,
-                    mult_ind,
-                    inertia_corrector,
-                    diag_base,
-                    x,
-                    zero_hessian_indices,
-                    zero_hessian_eps,
-                    comm_rank,
-                    res_norm,
-                    state.filter_monotone_mode,
-                    state.filter_monotone_mu,
-                    tol,
-                    compl_inf_tol,
-                )
+            ctx.i = i
+            ctx.res_norm = res_norm
+            ctx.diag_base = diag_base
+            ctx.filter_monotone_mode = state.filter_monotone_mode
+            ctx.filter_monotone_mu = state.filter_monotone_mu
+            factorize_ok = self.barrier.step(ctx)
+            state.filter_monotone_mu = ctx.filter_monotone_mu
 
             # Reset line search state when mu changed
             if self.barrier_param != barrier_before:
@@ -348,13 +318,16 @@ class Optimizer(
                 state.line_iters = 0
                 state.alpha_x_prev = state.alpha_z_prev = 0.0
                 state.x_index_prev = state.z_index_prev = -1
-                state.consecutive_rejections = self._maybe_increase_barrier(
-                    state.consecutive_rejections,
-                    max_rejections,
-                    barrier_inc,
-                    initial_barrier,
-                    comm_rank,
+                state.consecutive_rejections = (
+                    self.barrier.increase_barrier_on_rejections(
+                        state.consecutive_rejections,
+                        max_rejections,
+                        barrier_inc,
+                        initial_barrier,
+                        comm_rank,
+                    )
                 )
+                self.barrier.on_barrier_increased()
                 continue
 
             # Optional Newton diagnostics
@@ -474,29 +447,18 @@ class Optimizer(
                 state.x_index_prev = state.z_index_prev = -1
                 self.barrier_param = barrier_before
 
-                if quality_func and state.qf_free_mode:
-                    state.qf_free_mode, state.qf_monotone_mu = (
-                        self._switch_qf_to_monotone(
-                            options,
-                            state.qf_mu_min,
-                            state.qf_mu_max,
-                            comm_rank,
-                        )
-                    )
+                self.barrier.on_step_rejected(ctx)
 
-                state.consecutive_rejections = self._maybe_increase_barrier(
-                    state.consecutive_rejections,
-                    max_rejections,
-                    barrier_inc,
-                    initial_barrier,
-                    comm_rank,
+                state.consecutive_rejections = (
+                    self.barrier.increase_barrier_on_rejections(
+                        state.consecutive_rejections,
+                        max_rejections,
+                        barrier_inc,
+                        initial_barrier,
+                        comm_rank,
+                    )
                 )
-                if (
-                    quality_func
-                    and not state.qf_free_mode
-                    and self.barrier_param > barrier_before
-                ):
-                    state.qf_monotone_mu = self.barrier_param
+                self.barrier.on_barrier_increased()
             else:
                 state.alpha_x_prev = alpha * alpha_x
                 state.alpha_z_prev = alpha_z if filter_ls else alpha * alpha_z
