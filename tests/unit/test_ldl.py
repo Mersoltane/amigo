@@ -89,7 +89,32 @@ def test_sparse_ldl():
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
 
-        ldl = am.SparseLDL(csr, solver_type=am.SolverType.LDL, ustab=0.4)
+        ldl = am.SparseLDL(
+            csr, solver_type=am.SolverType.LDL, ustab=0.4, order=am.OrderingType.NATURAL
+        )
+        ldl.factor()
+
+        ldl_inertia = ldl.get_inertia()
+        ldl.solve(xvec)
+
+        x = np.array(xvec[:], dtype=float)
+        err = np.linalg.norm(x - xvec[:])
+
+        assert ldl_inertia[0] == inertia[0]
+        assert ldl_inertia[1] == inertia[1]
+        assert err < 1e-15
+
+
+def test_sparse_ldl_amd():
+    for index in range(7):
+        csr, xsoln, rhs, inertia = get_matrix(index)
+
+        xvec = am.Vector(len(xsoln))
+        xvec[:] = rhs
+
+        ldl = am.SparseLDL(
+            csr, solver_type=am.SolverType.LDL, ustab=0.4, order=am.OrderingType.AMD
+        )
         ldl.factor()
 
         ldl_inertia = ldl.get_inertia()
