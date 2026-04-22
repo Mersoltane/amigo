@@ -1,25 +1,3 @@
-# @PACKAGE_INIT@
-# 
-# # Expose the options used when Amigo was built
-# set(AMIGO_ENABLE_CUDA   @AMIGO_ENABLE_CUDA@)
-# set(AMIGO_ENABLE_OPENMP @AMIGO_ENABLE_OPENMP@)
-# set(AMIGO_ENABLE_CUDSS  @AMIGO_ENABLE_CUDSS@)
-# set(AMIGO_ENABLE_METIS  @AMIGO_ENABLE_METIS@)
-# set(CUDSS_INCLUDE_DIR   @CUDSS_INCLUDE_DIR@)
-# set(CUDSS_LIBRARY       @CUDSS_LIBRARY@)
-# set(METIS_ROOT          @METIS_ROOT@)
-# set(METIS_INCLUDE_DIR   @METIS_INCLUDE_DIR@)
-# set(METIS_LIBRARY       @METIS_LIBRARY@)
-# 
-# # Optionally expose the CUDA architecture as a package variable
-# if(AMIGO_ENABLE_CUDA)
-#   set(CMAKE_CUDA_ARCHITECTURES @CMAKE_CUDA_ARCHITECTURES@)
-# endif()
-# 
-# get_filename_component(_AMIGO_CONFIG_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
-# include("${_AMIGO_CONFIG_DIR}/amigoTargets.cmake")
-# include("${_AMIGO_CONFIG_DIR}/amigoAddModule.cmake")
-
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
