@@ -221,3 +221,33 @@ def test_sparse_poisson_amd():
         assert ldl_inertia[0] == inertia[0]
         assert ldl_inertia[1] == inertia[1]
         assert err < 1e-15
+
+
+def test_sparse_poisson_rhs():
+    for stype in [am.SolverType.CHOLESKY, am.SolverType.LDL]:
+        for n in [10, 20, 50]:
+            np.random.seed(0)
+            csr, xsoln, rhs, inertia = get_poisson_2d(n)
+
+            nrhs = 7
+            X = np.zeros((len(xsoln), nrhs))
+            for k in range(nrhs):
+                X[:, k] = rhs
+
+            ldl = am.SparseLDL(
+                csr, solver_type=stype, ustab=0.4, order=am.OrderingType.AMD
+            )
+            ldl.factor()
+
+            if stype == am.SolverType.LDL:
+                ldl_inertia = ldl.get_inertia()
+                assert ldl_inertia[0] == inertia[0]
+                assert ldl_inertia[1] == inertia[1]
+
+            ldl.solve(X)
+
+            err = 0.0
+            for k in range(nrhs):
+                err = max(err, np.linalg.norm(X[:, k] - xsoln))
+
+            assert err < 1e-11
