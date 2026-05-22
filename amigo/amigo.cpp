@@ -758,7 +758,7 @@ PYBIND11_MODULE(amigo, mod) {
             return self.create_opt_vector();
           },
           py::arg("x") = py::none())
-      .def("get_num_primal", &IPMOpt::get_num_primal)
+      .def("get_num_primals", &IPMOpt::get_num_primals)
       .def("get_num_constraints", &IPMOpt::get_num_constraints)
       .def("initialize_duals_and_slacks", &IPMOpt::initialize_duals_and_slacks)
       .def("compute_residual", &IPMOpt::compute_residual)

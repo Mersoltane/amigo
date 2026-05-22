@@ -30,7 +30,6 @@ class NewtonDirection:
         x,
         diag_base,
         inertia_corrector,
-        mult_ind,
         options,
         zero_hessian_indices,
         zero_hessian_eps,
@@ -73,12 +72,17 @@ class NewtonDirection:
                 )
             except Exception:
                 # Factorization failed: add primal regularization and retry
-                diag_arr = self.diag.get_array()
-                if mult_ind is not None:
-                    diag_arr[~mult_ind] += 1e-4
-                else:
-                    diag_arr += 1e-4
-                self.diag.copy_host_to_device()
+                # diag_arr = self.diag.get_array()
+                # if mult_ind is not None:
+                #     diag_arr[~mult_ind] += 1e-4
+                # else:
+                #     diag_arr += 1e-4
+                # self.diag.copy_host_to_device()
+
+                eps = 1e-4
+                primal_indices = self.problem.get_primal_indices()
+                self.diag.add_scalar_at(primal_indices, eps)
+
                 self.solver.factor(
                     self._obj_scale,
                     x,
@@ -87,7 +91,7 @@ class NewtonDirection:
                 )
             return True
 
-    def _solve_with_mu(self, mu, inertia_corrector=None, mult_ind=None):
+    def _solve_with_mu(self, mu, inertia_corrector=None):
         """Solve the augmented KKT system for the Newton direction.
 
         Full-space solve flow:
@@ -100,23 +104,20 @@ class NewtonDirection:
         """
         # Step 1: Condensed RHS (8-block to 4-block)
         self.optimizer.compute_residual(mu, self.vars, self.grad, self.res)
-        self.res.copy_device_to_host()
-        rhs_copy = self.res.get_array().copy()
+        # self.res.copy_device_to_host()
+        # rhs_copy = self.res.get_array().copy()
+        rhs_copy = self.problem.create_vector()
+        rhs_copy.copy(self.res)
 
         # Step 2: Solve augmented system
         self.solver.solve(self.res, self.px)
 
         # Step 3: Iterative refinement on full 8-block system (solver owns it)
-        if (
-            inertia_corrector is not None
-            and mult_ind is not None
-            and hasattr(self.solver, "hess")
-        ):
-            self.px.copy_device_to_host()
+        if inertia_corrector is not None and hasattr(self.solver, "hess"):
+            # self.px.copy_device_to_host()
             lbx, ubx = self._get_relaxed_bounds()
             self.solver.iterative_refinement(
                 mu,
-                mult_ind,
                 rhs_copy,
                 self.vars,
                 self.grad,
@@ -139,12 +140,12 @@ class NewtonDirection:
         """
         # TODO: move to backend: bounds should stay in C++ and the solver's iterative_refinement should fetch them itself instead
         if hasattr(self.optimizer, "get_lbx_relaxed"):
-            lbx = np.array(self.optimizer.get_lbx_relaxed())
-            ubx = np.array(self.optimizer.get_ubx_relaxed())
+            lbx = self.optimizer.get_lbx_relaxed()
+            ubx = self.optimizer.get_ubx_relaxed()
             return lbx, ubx
 
-        lbx_orig = np.array(self.optimizer.get_lbx())
-        ubx_orig = np.array(self.optimizer.get_ubx())
+        lbx_orig = self.optimizer.get_lbx()
+        ubx_orig = self.optimizer.get_ubx()
         brf = 1e-8
         cvt = 1e-4
         lbx = lbx_orig.copy()
@@ -164,7 +165,6 @@ class NewtonDirection:
         x,
         diag_base,
         inertia_corrector,
-        mult_ind,
         options,
         zero_hessian_indices,
         zero_hessian_eps,
@@ -183,7 +183,6 @@ class NewtonDirection:
             x,
             diag_base,
             inertia_corrector,
-            mult_ind,
             options,
             zero_hessian_indices,
             zero_hessian_eps,
@@ -191,5 +190,5 @@ class NewtonDirection:
         )
         if not ok:
             return False
-        self._solve_with_mu(self.barrier_param, inertia_corrector, mult_ind)
+        self._solve_with_mu(self.barrier_param, inertia_corrector)
         return True

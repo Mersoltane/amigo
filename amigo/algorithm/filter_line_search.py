@@ -26,21 +26,32 @@ class FilterLineSearch:
         # backend.barrier_objective(mu, vars) call.
         problem = self.mpi_problem if self.distribute else self.problem
         x_vec = vars.get_solution()
-        x_arr = x_vec.get_array()
+        # x_arr = x_vec.get_array()
 
-        # Zero multipliers, evaluate L(x,0) = f(x), restore
-        mult_ind = np.array(
-            (
-                self.mpi_problem if self.distribute else self.problem
-            ).get_multiplier_indicator(),
-            dtype=bool,
-        )
-        lam_backup = x_arr[mult_ind].copy()
-        x_arr[mult_ind] = 0.0
-        x_vec.copy_host_to_device()
+        # mult_ind = np.array(
+        #     (
+        #         self.mpi_problem if self.distribute else self.problem
+        #     ).get_multiplier_indicator(),
+        #     dtype=bool,
+        # )
+        # lam_backup = x_arr[mult_ind].copy()
+        # x_arr[mult_ind] = 0.0
+        # x_vec.copy_host_to_device()
+        # f_obj = problem.lagrangian(self._obj_scale, x_vec)
+        # x_arr[mult_ind] = lam_backup
+        # x_vec.copy_host_to_device()
+
+        # Zero dual, evaluate L(x,0) = f(x), restore
+        con_indices = self.problem.get_constraint_indices()
+        temp_vec = self.problem.create_constraint_vector()
+
+        # Save the dual values and then zero them
+        x_vec.get_values_at(con_indices, temp_vec)
+        x_vec.fill_at(con_indices, 0.0)
         f_obj = problem.lagrangian(self._obj_scale, x_vec)
-        x_arr[mult_ind] = lam_backup
-        x_vec.copy_host_to_device()
+
+        # Restore the dual values
+        x_vec.set_values_at(con_indices, temp_vec)
 
         barrier_log = self.optimizer.compute_barrier_log_sum(self.barrier_param, vars)
         return f_obj + barrier_log
@@ -59,7 +70,6 @@ class FilterLineSearch:
         options,
         comm_rank,
         tau=0.995,
-        mult_ind=None,
         phi_current=None,
         watchdog_ref=None,
         watchdog_alpha_primal_test=None,
@@ -89,7 +99,7 @@ class FilterLineSearch:
         max_soc = options["filter_max_soc"]
         kappa_soc = options["filter_kappa_soc"]
         obj_max_inc = 5.0
-        use_soc = options["second_order_correction"] and mult_ind is not None
+        use_soc = options["second_order_correction"]
         EPS10 = 10.0 * np.finfo(float).eps
 
         # Reference values
@@ -172,10 +182,18 @@ class FilterLineSearch:
             self.optimizer.compute_residual(
                 self.barrier_param, self.vars, self.grad, self.res
             )
-            res_orig = self.res.get_array().copy()
+            # res_orig = self.res.get_array().copy()
+            # update_backup = self.optimizer.create_opt_vector()
+            # update_backup.copy(self.update)
+            # px_orig = self.px.get_array().copy()
+
+            # Back up the original values
+            res_orig = self.problem.create_vector()
+            res_orig.copy(self.res)
+            px_orig = self.problem.create_vector()
+            px_orig.copy(self.px)
             update_backup = self.optimizer.create_opt_vector()
             update_backup.copy(self.update)
-            px_orig = self.px.get_array().copy()
 
         alpha_primal = alpha_x
         n_steps = 0
@@ -218,7 +236,8 @@ class FilterLineSearch:
                         f"trigger={'YES' if trial_theta >= ref_theta else 'no'}"
                     )
             if use_soc and n_steps == 0 and trial_theta >= ref_theta:
-                c_soc = res_orig.copy()
+                # c_soc = res_orig.copy()
+                c_soc = res_orig
                 alpha_soc = alpha_primal
                 theta_soc_old = 0.0
                 soc_accepted = False
@@ -231,11 +250,18 @@ class FilterLineSearch:
                     self.optimizer.compute_residual(
                         self.barrier_param, self.temp, self.grad, self.res
                     )
-                    trial_res = self.res.get_array().copy()
-                    c_soc[mult_ind] = trial_res[mult_ind] + alpha_soc * c_soc[mult_ind]
+                    # trial_res = self.res.get_array().copy()
+                    # c_soc[mult_ind] = trial_res[mult_ind] + alpha_soc * c_soc[mult_ind]
 
-                    self.res.get_array()[:] = c_soc
-                    self.res.copy_host_to_device()
+                    # self.res.get_array()[:] = c_soc
+                    # self.res.copy_host_to_device()
+                    # self._update_gradient(self.vars.get_solution())
+
+                    con_indices = self.problem.get_constraint_indices()
+                    trial_res = self.problem.create_vector()
+                    trial_res.copy(self.res)
+
+                    trial_res.axpy_at(con_indices, alpha_soc, c_soc)
                     self._update_gradient(self.vars.get_solution())
 
                     try:
@@ -274,8 +300,9 @@ class FilterLineSearch:
                     return 1.0, n_steps + 1, True, False
 
                 self.update.copy(update_backup)
-                self.px.get_array()[:] = px_orig
-                self.px.copy_host_to_device()
+                # self.px.get_array()[:] = px_orig
+                # self.px.copy_host_to_device()
+                self.px.copy(px_orig)
 
             alpha_primal *= alpha_red
             n_steps += 1
@@ -292,7 +319,6 @@ class FilterLineSearch:
         options,
         comm_rank,
         tau,
-        soc_mult_ind,
         watchdog,
         factorize_ok,
     ):
@@ -352,7 +378,6 @@ class FilterLineSearch:
                     options,
                     comm_rank,
                     tau=tau,
-                    mult_ind=soc_mult_ind,
                     phi_current=phi_current,
                     watchdog_ref=wd_ref if not skip_first else None,
                     watchdog_alpha_primal_test=(wd_apt if not skip_first else None),

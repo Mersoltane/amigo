@@ -15,7 +15,6 @@ class HeuristicBarrier(BarrierStrategy):
         comm_rank = ctx.comm_rank
         res_norm = ctx.res_norm
         i = ctx.i
-        mult_ind = ctx.mult_ind
 
         # Filter-monotone overrides both heuristic and standard monotone
         if ctx.filter_monotone_mode:
@@ -35,7 +34,7 @@ class HeuristicBarrier(BarrierStrategy):
         elif i > 0 and opt.barrier_param > min(tol, compl_inf_tol) / (
             options["barrier_tol_factor"] + 1.0
         ):
-            self._maybe_reduce_barrier(mult_ind, res_norm, tol, compl_inf_tol)
+            self._maybe_reduce_barrier(res_norm, tol, compl_inf_tol)
 
         if ctx.inertia_corrector:
             ctx.inertia_corrector.update_barrier(opt.barrier_param)
@@ -43,14 +42,13 @@ class HeuristicBarrier(BarrierStrategy):
             ctx.x,
             ctx.diag_base,
             ctx.inertia_corrector,
-            mult_ind,
             options,
             ctx.zero_hessian_indices,
             ctx.zero_hessian_eps,
             comm_rank,
         )
 
-    def _maybe_reduce_barrier(self, mult_ind, res_norm, tol, compl_inf_tol):
+    def _maybe_reduce_barrier(self, res_norm, tol, compl_inf_tol):
         """Reduce mu via heuristic or monotone rule if subproblem solved."""
         opt = self.opt
         options = self.options
@@ -82,7 +80,7 @@ class HeuristicBarrier(BarrierStrategy):
         else:
             while True:
                 mu = opt.barrier_param
-                e_mu = opt._compute_scaled_barrier_error(mu, mult_ind)
+                e_mu = opt._compute_scaled_barrier_error(mu)
                 if e_mu > kappa_eps * mu:
                     break
                 old_mu = mu

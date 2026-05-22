@@ -53,7 +53,6 @@ class StepContext:
     compl_inf_tol: float = 0.0
 
     # Problem structure
-    mult_ind: Any = None
     x: Any = None
     diag_base: Any = None
 

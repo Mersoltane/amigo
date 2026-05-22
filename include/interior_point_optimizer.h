@@ -21,15 +21,15 @@ namespace amigo {
 template <typename T>
 class OptVector {
  public:
-  OptVector(int num_primal, int num_constraints, std::shared_ptr<Vector<T>> x)
-      : num_primal(num_primal), num_constraints(num_constraints), x(x) {
+  OptVector(int num_primals, int num_constraints, std::shared_ptr<Vector<T>> x)
+      : num_primals(num_primals), num_constraints(num_constraints), x(x) {
     // Create the slack and dual variable vectors for the upper and lower bounds
     MemoryLocation loc = x->get_memory_location();
 
-    sl = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    su = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    zl = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    zu = std::make_shared<Vector<T>>(num_primal, 0, loc);
+    sl = std::make_shared<Vector<T>>(num_primals, 0, loc);
+    su = std::make_shared<Vector<T>>(num_primals, 0, loc);
+    zl = std::make_shared<Vector<T>>(num_primals, 0, loc);
+    zu = std::make_shared<Vector<T>>(num_primals, 0, loc);
   }
 
   void zero() {
@@ -47,7 +47,7 @@ class OptVector {
     zu->copy(src->zu);
   }
 
-  int get_num_primal() const { return num_primal; }
+  int get_num_primals() const { return num_primals; }
   int get_num_constraints() const { return num_constraints; }
 
   std::shared_ptr<Vector<T>> get_solution() { return x; }
@@ -106,7 +106,7 @@ class OptVector {
   }
 
  private:
-  int num_primal, num_constraints;
+  int num_primals, num_constraints;
 
   // The primal/dual vector
   std::shared_ptr<Vector<T>> x;
@@ -136,7 +136,7 @@ class InteriorPointOptimizer {
     const Vector<T>& ub = *problem->get_upper();
 
     primal_indices = problem->get_primal_indices();
-    num_primal = primal_indices->get_local_size();
+    num_primals = primal_indices->get_local_size();
 
     constraint_indices = problem->get_constraint_indices();
     num_constraints = constraint_indices->get_local_size();
@@ -147,9 +147,9 @@ class InteriorPointOptimizer {
       loc = MemoryLocation::HOST_AND_DEVICE;
     }
 
-    lbx = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    ubx = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    for (int i = 0; i < num_primal; i++) {
+    lbx = std::make_shared<Vector<T>>(num_primals, 0, loc);
+    ubx = std::make_shared<Vector<T>>(num_primals, 0, loc);
+    for (int i = 0; i < num_primals; i++) {
       int idx = (*primal_indices)[i];
       (*lbx)[i] = lb[idx];
       (*ubx)[i] = ub[idx];
@@ -165,7 +165,7 @@ class InteriorPointOptimizer {
     lbh->copy_host_to_device();
 
     // Set the host/device pointers into the info
-    info.num_primal = num_primal;
+    info.num_primals = num_primals;
     info.num_constraints = num_constraints;
     info.primal_indices = primal_indices->template get_array<policy>();
     info.constraint_indices = constraint_indices->template get_array<policy>();
@@ -174,7 +174,7 @@ class InteriorPointOptimizer {
     info.lbh = lbh->template get_array<policy>();
 
     // Add up the total number of constraints
-    MPI_Allreduce(&num_primal, &num_global_primal, 1, MPI_INT, MPI_SUM, comm);
+    MPI_Allreduce(&num_primals, &num_global_primals, 1, MPI_INT, MPI_SUM, comm);
     MPI_Allreduce(&num_constraints, &num_global_constraints, 1, MPI_INT,
                   MPI_SUM, comm);
   }
@@ -184,7 +184,7 @@ class InteriorPointOptimizer {
    *
    * @return int
    */
-  int get_num_primal() const { return num_global_primal; }
+  int get_num_primals() const { return num_global_primals; }
 
   /**
    * @brief Get the number of duals/constraints
@@ -199,7 +199,7 @@ class InteriorPointOptimizer {
    * @return std::shared_ptr<OptVector<T>>
    */
   std::shared_ptr<OptVector<T>> create_opt_vector() const {
-    return std::make_shared<OptVector<T>>(num_primal, num_constraints,
+    return std::make_shared<OptVector<T>>(num_primals, num_constraints,
                                           problem->create_vector());
   }
 
@@ -211,7 +211,7 @@ class InteriorPointOptimizer {
    */
   std::shared_ptr<OptVector<T>> create_opt_vector(
       std::shared_ptr<Vector<T>> x) const {
-    return std::make_shared<OptVector<T>>(num_primal, num_constraints, x);
+    return std::make_shared<OptVector<T>>(num_primals, num_constraints, x);
   }
 
   /**
@@ -352,7 +352,7 @@ class InteriorPointOptimizer {
     tmp->template get_bound_duals<policy>(&zl_n, &zu_n);
     T *sl_n, *su_n;
     tmp->template get_bound_slacks<policy>(&sl_n, &su_n);
-    int n = info.num_primal + info.num_constraints;
+    int n = info.num_primals + info.num_constraints;
     detail::apply_step(ax, az, info, s, dxlam, dzl, dzu, xlam_n, n, zl_n, zu_n,
                        sl_n, su_n);
   }
@@ -518,10 +518,10 @@ class InteriorPointOptimizer {
   }
 
   void get_kkt_element_counts(int& n_d, int& n_p, int& n_c) const {
-    n_d = num_primal;       // dual stationarity has n_primal components
+    n_d = num_primals;      // dual stationarity has n_primal components
     n_p = num_constraints;  // primal feasibility has n_constraints components
     n_c = 0;                // complementarity count: sum of finite bounds
-    for (int i = 0; i < num_primal; i++) {
+    for (int i = 0; i < num_primals; i++) {
       if (!std::isinf((*lbx)[i])) n_c++;
       if (!std::isinf((*ubx)[i])) n_c++;
     }
@@ -594,7 +594,7 @@ class InteriorPointOptimizer {
 
     // Objective: df = min(1, max_gradient / ||grad_f||_inf)
     T obj_max = T(0);
-    for (int i = 0; i < num_primal; i++) {
+    for (int i = 0; i < num_primals; i++) {
       T v = std::abs(g[(*primal_indices)[i]]);
       if (v > obj_max) obj_max = v;
     }
@@ -694,12 +694,6 @@ class InteriorPointOptimizer {
   T get_obj_scale() const { return obj_scale_; }
   bool has_scaling() const { return scaling_active_; }
 
-  // // Accessors
-  // int get_num_design_variables() const { return num_primal; }
-  // int get_num_constraints() const { return num_constraints; }
-  // int get_num_equalities() const { return num_constraints; }
-  // int get_num_inequalities() const { return 0; }
-
   std::shared_ptr<Vector<T>> get_lbx() const { return lbx; }
   std::shared_ptr<Vector<T>> get_ubx() const { return ubx; }
 
@@ -717,9 +711,9 @@ class InteriorPointOptimizer {
   void relax_bounds(T factor = 1e-8, T constr_viol_tol = 1e-4) {
     if (factor <= 0) return;
     lbx_relaxed =
-        std::make_shared<Vector<T>>(num_primal, 0, lbx->get_memory_location());
+        std::make_shared<Vector<T>>(num_primals, 0, lbx->get_memory_location());
     ubx_relaxed =
-        std::make_shared<Vector<T>>(num_primal, 0, ubx->get_memory_location());
+        std::make_shared<Vector<T>>(num_primals, 0, ubx->get_memory_location());
 
     T* lb_buf = lbx_relaxed->template get_array<policy>();
     T* ub_buf = ubx_relaxed->template get_array<policy>();
@@ -733,7 +727,8 @@ class InteriorPointOptimizer {
   std::shared_ptr<OptimizationProblem<T, policy>> problem;
   MPI_Comm comm;
 
-  int num_primal, num_constraints;
+  int num_primals;
+  int num_constraints;
   std::shared_ptr<Vector<int>> primal_indices;
   std::shared_ptr<Vector<int>> constraint_indices;
   std::shared_ptr<Vector<T>> lbx, ubx;
@@ -744,7 +739,8 @@ class InteriorPointOptimizer {
   detail::OptProblemInfo<T> info;
 
   // Number of global constraints
-  int num_global_primal, num_global_constraints;
+  int num_global_primals;
+  int num_global_constraints;
 
   // Slack-to-constraint mapping (set via set_slack_mapping)
   int n_slacks_ = 0;

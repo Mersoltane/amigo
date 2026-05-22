@@ -109,7 +109,6 @@ class DirectSparseSolver(LinearSolver):
     def iterative_refinement(
         self,
         mu,
-        mult_ind,
         rhs_saved,
         vars_,
         grad,
@@ -157,18 +156,20 @@ class DirectSparseSolver(LinearSolver):
 
         # Current-point data (frozen for the entire IR)
         g = np.array(grad.get_array())
-        zl = np.array(vars_.get_zl())
-        zu = np.array(vars_.get_zu())
+        zl = np.array(vars_.get_zl().get_array())
+        zu = np.array(vars_.get_zu().get_array())
 
-        # Index sets
-        pi = np.where(~mult_ind)[0]  # primal indices (design + slacks)
-        ci = np.where(mult_ind)[0]  # constraint indices (eq + ineq)
+        # # Index sets
+        # pi = np.where(mult_ind == 0)[0]  # primal indices (design + slacks)
+        # ci = np.where(mult_ind == 1)[0]  # constraint indices (eq + ineq)
+        pi = self.problem.get_primal_indices().get_array()
+        ci = self.problem.get_constraint_indices().get_array()
 
         # Stored slacks (always positive, updated incrementally in C++)
-        sl = np.array(vars_.get_sl())
-        su = np.array(vars_.get_su())
-        fl = np.isfinite(lbx)
-        fu = np.isfinite(ubx)
+        sl = np.array(vars_.get_sl().get_array())
+        su = np.array(vars_.get_su().get_array())
+        fl = np.isfinite(lbx.get_array())
+        fu = np.isfinite(ubx.get_array())
         gl = np.where(fl, sl, 1.0)
         gu = np.where(fu, su, 1.0)
 
@@ -187,7 +188,7 @@ class DirectSparseSolver(LinearSolver):
 
         # Full 8-block RHS (constant across IR steps)
         rhs_x = -(g[pi] - zl + zu)
-        rhs_c = rhs_saved[ci]
+        rhs_c = rhs_saved.get_array()[ci]
         rhs_zl = np.where(fl, mu - gl * zl, 0.0)
         rhs_zu = np.where(fu, mu - gu * zu, 0.0)
 

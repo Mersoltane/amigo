@@ -61,7 +61,7 @@ class IterationLogger:
         d_inf_log, p_inf_log, c_inf_log = self.optimizer.compute_kkt_error_mu(
             0.0, self.vars, self.grad
         )
-        s_d_log, s_c_log = self._compute_optimality_scaling(mult_ind)
+        s_d_log, s_c_log = self._compute_optimality_scaling()
         iter_data["inf_pr"] = p_inf_log
         iter_data["inf_du"] = d_inf_log
         iter_data["compl"] = c_inf_log

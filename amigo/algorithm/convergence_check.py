@@ -26,7 +26,6 @@ class ConvergenceCheck:
         self,
         i,
         options,
-        mult_ind,
         res_norm,
         prev_res_norm,
         acceptable_counter,
@@ -53,7 +52,7 @@ class ConvergenceCheck:
         d_inf_nlp, p_inf_nlp, c_inf_nlp = self.optimizer.compute_kkt_error_mu(
             0.0, self.vars, self.grad
         )
-        s_d_conv, s_c_conv = self._compute_optimality_scaling(mult_ind)
+        s_d_conv, s_c_conv = self._compute_optimality_scaling()
         overall_error = max(d_inf_nlp / s_d_conv, p_inf_nlp, c_inf_nlp / s_c_conv)
 
         # Primary convergence: ALL 4 conditions must hold
@@ -80,7 +79,7 @@ class ConvergenceCheck:
 
         # Divergence check
         # x_max = np.max(np.abs(self.vars.get_solution().get_array()))
-        x_max, _ = self.problem.maxabs(self.vars.get_solution())
+        x_max = self.problem.maxabs(self.vars.get_solution())
         if x_max > diverging_iterates_tol:
             if comm_rank == 0:
                 print(f"  Diverging iterates: max |x| = {x_max:.2e}")

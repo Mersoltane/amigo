@@ -57,7 +57,7 @@ namespace detail {
  */
 template <typename T>
 struct OptProblemInfo {
-  int num_primal = 0;
+  int num_primals = 0;
   int num_constraints = 0;
   const int* primal_indices = nullptr;
   const int* constraint_indices = nullptr;
@@ -90,7 +90,7 @@ struct OptState {
 template <typename T>
 void initialize_slacks(const OptProblemInfo<T>& p, const T* xlam, T* sl,
                        T* su) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     T x = xlam[p.primal_indices[i]];
     sl[i] = std::isinf(p.lbx[i]) ? T(1) : (x - p.lbx[i]);
     su[i] = std::isinf(p.ubx[i]) ? T(1) : (p.ubx[i] - x);
@@ -100,7 +100,7 @@ void initialize_slacks(const OptProblemInfo<T>& p, const T* xlam, T* sl,
 // Utilities
 template <typename T>
 void set_primal_values(const OptProblemInfo<T>& p, T val, T* xlam) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     xlam[p.primal_indices[i]] = val;
   }
 }
@@ -114,7 +114,7 @@ void set_dual_values(const OptProblemInfo<T>& p, T val, T* xlam) {
 
 template <typename T>
 void copy_primals(const OptProblemInfo<T>& p, const T* src, T* dst) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int k = p.primal_indices[i];
     dst[k] = src[k];
   }
@@ -135,7 +135,7 @@ void copy_duals(const OptProblemInfo<T>& p, const T* src, T* dst) {
 template <typename T>
 void relax_bounds(OptProblemInfo<T>& p, T* lbx_buf, T* ubx_buf, T factor = 1e-8,
                   T constr_viol_tol = 1e-4) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T delta = A2D::min2(constr_viol_tol,
                           factor * A2D::max2(T(1), std::abs(p.lbx[i])));
@@ -165,7 +165,7 @@ void relax_bounds(OptProblemInfo<T>& p, T* lbx_buf, T* ubx_buf, T factor = 1e-8,
 template <typename T>
 void project_primals_into_interior(const OptProblemInfo<T>& p, T* xlam,
                                    T kappa1 = 1e-2, T kappa2 = 1e-2) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T x = xlam[idx];
     T lb = p.lbx[i];
@@ -191,7 +191,7 @@ void project_primals_into_interior(const OptProblemInfo<T>& p, T* xlam,
 template <typename T>
 void initialize_bound_duals(T mu, const OptProblemInfo<T>& p, const T* xlam,
                             T* zl, T* zu) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     zl[i] = std::isinf(p.lbx[i]) ? T(0) : T(1);
     zu[i] = std::isinf(p.ubx[i]) ? T(0) : T(1);
   }
@@ -212,7 +212,7 @@ void initialize_bound_duals(T mu, const OptProblemInfo<T>& p, const T* xlam,
 template <typename T>
 void compute_residual(T mu, const OptProblemInfo<T>& p, OptState<const T>& s,
                       const T* grad, T* res) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
 
     // Stationarity residual (Blocks 1-2: rhs_x or rhs_s)
@@ -247,7 +247,7 @@ void compute_residual_and_infeasibility(T mu, const OptProblemInfo<T>& p,
   dual_sq = 0.0;
   primal_sq = 0.0;
 
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
 
     // Stationarity residual (un-condensed, for monitoring)
@@ -286,7 +286,7 @@ void compute_residual_and_infeasibility(T mu, const OptProblemInfo<T>& p,
 template <typename T>
 void compute_diagonal(const OptProblemInfo<T>& p, OptState<const T>& s,
                       T* diag) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T sigma = T(0);
     if (!std::isinf(p.lbx[i])) sigma += s.zl[i] / s.sl[i];
@@ -315,7 +315,7 @@ template <typename T>
 void compute_bound_dual_step(T mu, const OptProblemInfo<T>& p,
                              OptState<const T>& s, const T* px, T* dzl,
                              T* dzu) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T dx = px[idx];
     dzl[i] = dzu[i] = 0.0;
@@ -342,7 +342,7 @@ template <typename T>
 void compute_max_step(T tau, const OptProblemInfo<T>& p, OptState<const T>& s,
                       const T* px, const T* dzl, const T* dzu, T& ax, int& xi,
                       T& az, int& zi) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T dx = px[idx];
 
@@ -392,11 +392,11 @@ void apply_step(T ax, T az, const OptProblemInfo<T>& p, OptState<const T>& s,
   for (int i = 0; i < n_xlam; i++) {
     xlam_new[i] = s.xlam[i] + ax * dxlam[i];
   }
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) zl_new[i] = s.zl[i] + az * dzl[i];
     if (!std::isinf(p.ubx[i])) zu_new[i] = s.zu[i] + az * dzu[i];
   }
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T dx = ax * dxlam[idx];
     if (!std::isinf(p.lbx[i])) sl_new[i] = s.sl[i] + dx;
@@ -409,7 +409,7 @@ void apply_step(T ax, T az, const OptProblemInfo<T>& p, OptState<const T>& s,
 template <typename T>
 void compute_complementarity(const OptProblemInfo<T>& p, OptState<const T>& s,
                              T partial_sum[], T& local_min) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T c = s.sl[i] * s.zl[i];
       partial_sum[0] += c;
@@ -430,7 +430,7 @@ template <typename T>
 void compute_max_comp_deviation(const OptProblemInfo<T>& p,
                                 OptState<const T>& s, T mu, T& max_dev) {
   max_dev = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i]))
       max_dev = A2D::max2(max_dev, std::abs(s.sl[i] * s.zl[i] - mu));
     if (!std::isinf(p.ubx[i]))
@@ -443,7 +443,7 @@ template <typename T>
 void compute_complementarity_sq(const OptProblemInfo<T>& p,
                                 OptState<const T>& s, T mu, T& sq) {
   sq = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T r = s.sl[i] * s.zl[i] - mu;
       sq += r * r;
@@ -464,7 +464,7 @@ void compute_kkt_error(T mu, const OptProblemInfo<T>& p, OptState<const T>& s,
                        const T* grad, T& dual, T& primal, T& comp) {
   dual = primal = comp = 0.0;
 
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     dual = A2D::max2(dual, std::abs(grad[idx] - s.zl[i] + s.zu[i]));
     if (!std::isinf(p.lbx[i]))
@@ -485,7 +485,7 @@ template <typename T>
 T compute_barrier_log_sum(T mu, const OptProblemInfo<T>& p,
                           OptState<const T>& s) {
   T b = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T g = s.sl[i];
       if (g > 0) b -= mu * std::log(g);
@@ -506,7 +506,7 @@ template <typename T>
 T compute_barrier_dphi(T mu, const OptProblemInfo<T>& p, OptState<const T>& s,
                        const T* grad, const T* px) {
   T d = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T dx = px[idx];
     d += grad[idx] * dx;
@@ -522,7 +522,7 @@ T compute_barrier_dphi(T mu, const OptProblemInfo<T>& p, OptState<const T>& s,
 template <typename T>
 void reset_bound_multipliers(T mu, T kappa, const OptProblemInfo<T>& p,
                              OptState<const T>& s, T* zl_out, T* zu_out) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T g = s.sl[i];
       zl_out[i] =
@@ -541,7 +541,7 @@ template <typename T>
 void compute_affine_start_point(T beta_min, const OptProblemInfo<T>& p,
                                 OptState<const T>& s, const T* dzl,
                                 const T* dzu, T* zl_out, T* zu_out) {
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i]))
       zl_out[i] = A2D::max2(s.zl[i] + dzl[i], beta_min);
     if (!std::isinf(p.ubx[i]))
@@ -555,7 +555,7 @@ void compute_kkt_error_sq(const OptProblemInfo<T>& p, OptState<const T>& s,
                           const T* grad, T& dual_sq, T& primal_sq, T& comp_sq) {
   dual_sq = primal_sq = comp_sq = 0.0;
 
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     T rd = grad[idx] - s.zl[i] + s.zu[i];
     dual_sq += rd * rd;
@@ -595,7 +595,7 @@ void compute_dual_residual_vector(const OptProblemInfo<T>& p,
                                   OptState<const T>& s, const T* grad, T* out,
                                   int size) {
   for (int i = 0; i < size; i++) out[i] = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     out[idx] = grad[idx] - s.zl[i] + s.zu[i];
   }
@@ -614,7 +614,7 @@ T compute_barrier_dphi_from_kkt(const OptProblemInfo<T>& p,
                                 OptState<const T>& s, const T* res, const T* px,
                                 const T* diag) {
   T dphi = 0.0;
-  for (int i = 0; i < p.num_primal; i++) {
+  for (int i = 0; i < p.num_primals; i++) {
     int idx = p.primal_indices[i];
     dphi -= res[idx] * px[idx];
   }

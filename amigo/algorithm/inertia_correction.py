@@ -38,7 +38,8 @@ class InertiaCorrector:
     _TEST_DC0_DX1 = 3
     _TEST_DC1_DX1 = 4
 
-    def __init__(self, optimizer, barrier_param, options):
+    def __init__(self, problem, optimizer, barrier_param, options):
+        self.problem = problem
         self.optimizer = optimizer
         self._barrier = barrier_param
         self._verbose = options.get("verbose_barrier", False)
@@ -283,7 +284,7 @@ class InertiaCorrector:
         # n_total = n_primal + n_dual
 
         num_primal = self.optimizer.get_num_primals()
-        num_dual = self.optimizer.get_num_duals()
+        num_dual = self.optimizer.get_num_constraints()
         num_total = num_primal + num_dual
 
         itol = inertia_tolerance
@@ -296,8 +297,8 @@ class InertiaCorrector:
             )
 
         # Build baseline diagonal: Sigma + small numerical eps on primals
-        primal_indices = self.optimizer.get_primal_indices()
-        dual_indices = self.optimizer.get_dual_indices()
+        primal_indices = self.problem.get_primal_indices()
+        dual_indices = self.problem.get_constraint_indices()
 
         diag.add_scalar_at(primal_indices, self.numerical_eps)
         if zero_hessian_indices is not None:
@@ -326,7 +327,8 @@ class InertiaCorrector:
             return
 
         # reg_diag = diag.get_array().copy()
-        reg_diag = diag.duplicate()
+        reg_diag = self.problem.create_vector()
+        reg_diag.copy(diag)
 
         # Prepare new system: save last perturbation, reset current
         self._consider_new_system()
@@ -378,16 +380,16 @@ class InertiaCorrector:
 
             if comm_rank == 0 and not singular and self._verbose:
                 print(
-                    f"  Inertia: expected ({n_primal}+, {n_dual}-), "
+                    f"  Inertia: expected ({n_primal}+, {num_dual}-), "
                     f"got ({n_pos}+, {n_neg}-), "
                     f"dw={self._delta_x_curr:.1e}, pivtol={self._pivtol:.1e}"
                 )
 
             # Dispatch based on failure type
-            if singular and n_dual > 0:
+            if singular and num_dual > 0:
                 if not self._perturb_for_singularity():
                     break
-            elif not singular and n_neg < n_dual:
+            elif not singular and n_neg < num_dual:
                 # Too few negatives: IncreaseQuality first, then singular
                 assume_singular = True
                 if not augsys_improved:

@@ -149,14 +149,12 @@ class Optimizer(
         # problem_ref = self.mpi_problem if self.distribute else self.problem
         # mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
         # self._mult_ind = mult_ind  # used by _ensure_positive_slacks
-        inertia_corrector = self._build_inertia_corrector(
-            var_types, tol, options, comm_rank
-        )
+        inertia_corrector = self._build_inertia_corrector(tol, options, comm_rank)
         zero_hessian_indices, zero_hessian_eps = self._zero_hessian_indices(
             options, comm_rank
         )
 
-        soc_var_types = var_types if options["second_order_correction"] else None
+        # soc_var_types = var_types if options["second_order_correction"] else None
 
         # Barrier-strategy step context (shared across iterations; per-iteration
         # fields i, res_norm, diag_base, filter_monotone_* are updated in-loop)
@@ -164,7 +162,6 @@ class Optimizer(
             comm_rank=comm_rank,
             tol=tol,
             compl_inf_tol=compl_inf_tol,
-            mult_ind=var_types,
             x=x,
             inertia_corrector=inertia_corrector,
             zero_hessian_indices=zero_hessian_indices,
@@ -254,7 +251,6 @@ class Optimizer(
                 self._check_convergence(
                     i,
                     options,
-                    mult_ind,
                     res_norm,
                     state.prev_res_norm,
                     state.acceptable_counter,
@@ -374,7 +370,6 @@ class Optimizer(
                         options,
                         comm_rank,
                         tau,
-                        soc_mult_ind,
                         watchdog,
                         factorize_ok,
                     )

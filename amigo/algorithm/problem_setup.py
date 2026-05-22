@@ -152,13 +152,15 @@ class ProblemSetup:
             self.px = self.problem.create_vector()
             self.ir_corr = self.problem.create_vector()
 
-    def _build_inertia_corrector(self, mult_ind, tol, options, comm_rank):
+    def _build_inertia_corrector(self, tol, options, comm_rank):
         """Create an InertiaCorrector if the solver supports inertia queries."""
         inertia_corrector = None
         if getattr(self.solver, "supports_inertia", False):
-            inertia_corrector = InertiaCorrector(mult_ind, self.barrier_param, options)
+            inertia_corrector = InertiaCorrector(
+                self.problem, self.optimizer, self.barrier_param, options
+            )
             if comm_rank == 0:
-                n_primal = self.optimizer.get_num_primal()
+                n_primal = self.optimizer.get_num_primals()
                 n_dual = self.optimizer.get_num_constraints()
                 # n_primal = int(np.sum(~mult_ind))
                 # n_dual = int(np.sum(mult_ind))

@@ -272,7 +272,7 @@ class Vector {
     const int* idx = indices->template get_array<policy>();
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
-      for (int i = 0; i < local_size; i++) {
+      for (int i = 0; i < nentries; i++) {
         array[idx[i]] += alpha * x.array[idx[i]];
       }
     } else {
