@@ -6,8 +6,39 @@ is a lightweight bag of per-iteration scratch data handed to the
 barrier strategy each step.
 """
 
-from dataclasses import dataclass, field
+import amigo as am
+from dataclasses import dataclass
 from typing import Any, Optional
+from .solvers import LinearSolver
+
+
+@dataclass
+class IpmData:
+    options: dict
+    problem: am.OptimizationProblem
+    optimizer: am.InteriorPointOptimizer
+    solver: LinearSolver  # Linear solver class instance
+    vars: am.OptVector  # Variables
+    grad: am.Vector  # Gradient of the problem at the current design point
+    diag: am.Vector  # Diagonal contributions
+    hess: am.CSRMat  # CSR matrix that stores the Hessian
+    obj_scale: float = 1.0
+
+    def zero_multipliers(self, x):
+        con_indices = self.problem.get_constraint_indices()
+        x.fill_at(con_indices, 0.0)
+
+    def compute_gradient(self):
+        x = self.vars.get_solution()
+        alpha = self.obj_scale
+        self.problem.update(x)
+        self.problem.gradient(alpha, x, self.grad)
+        self.optimizer.apply_gradient_scaling(self.grad)
+
+    def compute_hessian(self):
+        x = self.vars.get_solution()
+        alpha = self.obj_scale
+        self.problem.hessian(alpha, x, self.hess)
 
 
 @dataclass

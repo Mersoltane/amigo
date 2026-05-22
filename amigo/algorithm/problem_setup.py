@@ -31,30 +31,6 @@ class ProblemSetup:
             self.mpi_lower = self.mpi_problem.create_vector()
             self.mpi_upper = self.mpi_problem.create_vector()
 
-    def _setup_initial_vectors(self, x, lower, upper):
-        if x is None:
-            x = self.model.get_initial_point()
-            self.x = x.get_vector()
-        elif isinstance(x, ModelVector):
-            self.x = x.get_vector()
-        else:
-            self.x = x
-
-        if lower is None:
-            lower = self.model.get_lower()
-            self.lower = lower.get_vector()
-        elif isinstance(lower, ModelVector):
-            self.lower = lower.get_vector()
-        else:
-            self.lower = lower
-        if upper is None:
-            upper = self.model.get_upper()
-            self.upper = upper.get_vector()
-        elif isinstance(upper, ModelVector):
-            self.upper = upper.get_vector()
-        else:
-            self.upper = upper
-
     def _fill_slack_bounds(self):
         pass
         # if hasattr(self.model, "num_slacks") and self.model.num_slacks > 0:

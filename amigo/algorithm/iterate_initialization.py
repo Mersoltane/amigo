@@ -35,7 +35,6 @@ class IterateInitialization:
         if self.optimizer.has_slacks():
             self._update_gradient(x)
             self.optimizer.initialize_slacks(self.grad, self.vars)
-            x.copy_host_to_device()
             self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
 
         # Step 4: Recompute gradient at the pushed x with lam=0

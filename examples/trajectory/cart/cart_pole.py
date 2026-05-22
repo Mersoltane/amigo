@@ -311,9 +311,7 @@ opt_options = {
 
 for opt_iter in range(4):
     # Get the design variables
-    x = model.get_initial_point()
-    lower = model.get_lower()
-    upper = model.get_upper()
+    x = model.create_vector()
 
     # Serialize the model (requires serialize method)
     if opt_iter == 0:
@@ -321,7 +319,7 @@ for opt_iter in range(4):
             json.dump(model.serialize(), fp, indent=2)
 
     # Set up the optimizer
-    opt = am.Optimizer(model, solver=args.solver)
+    opt = am.Optimizer(model, x=x, solver=args.solver)
 
     # Optimize
     opt_data = opt.optimize(opt_options)
@@ -331,7 +329,7 @@ for opt_iter in range(4):
     opt_data["num_constraints"] = model.num_constraints
 
 # Copy the solution from the device to host
-x.get_vector().copy_device_to_host()
+x.copy_device_to_host()
 
 # Print objective value
 u = x["cart.x[:]"]  # control force at each timestep

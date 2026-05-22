@@ -97,10 +97,20 @@ class ShuttleDynamics(am.Component):
         self.add_constant("mass", value=203000 / 32.174)
         self.add_constant("qU", value=70.0)  # heating rate limit
 
+        # Set the lower and upper bounds for angle of attack and bank angle
+        u_min = [
+            np.radians(-20.0) / self.scaling["alpha"],
+            np.radians(-90.0) / self.scaling["beta"],
+        ]
+        u_max = [
+            np.radians(40.0) / self.scaling["alpha"],
+            np.radians(90.0) / self.scaling["beta"],
+        ]
+
         # Add Inputs
         self.add_input("q", shape=(6), label="state")  # [h, phi, theta, v, gamma, psi]
         self.add_input("qdot", shape=(6), label="rate")  # time derivatives
-        self.add_input("u", shape=(2), label="ctrl")  # [alpha, beta]
+        self.add_input("u", shape=(2), label="ctrl", lower=u_min, upper=u_max)
 
         # Constraint residuals
         self.add_constraint("res", shape=(6), label="dynamics residuals")
@@ -316,6 +326,43 @@ model.link(f"dyn.q[{num_time_steps}, :]", "fc.q[0, :]")
 # Link objective - final latitude (theta at final time)
 model.link(f"dyn.q[{num_time_steps}, 2]", "obj.theta[0]")
 
+
+# Set initial guess for design variables (scaled)
+# initial guess for final latitude
+model.set_meta("value", "obj.theta[0]", 30.0 / scaling["latitude"])
+
+# Set initial guess for states
+h0, phi0, theta0 = 260000.0, 0.0, 0.0
+v0, gamma0, psi0 = 25600.0, math.radians(-1.0), math.radians(90.0)
+
+# Final conditions
+hf, vf, gamma_f = 80000.0, 2500.0, math.radians(-5.0)
+
+N = num_time_steps + 1
+
+t_norm = np.linspace(0, 1, N)
+
+# Scale the initial guess values
+model.set_meta("value", "dyn.q[:,0]", (h0 + (hf - h0) * t_norm) / scaling["altitude"])
+model.set_meta("value", "dyn.q[:,1]", phi0 / scaling["longitude"])  # phi (constant)
+model.set_meta(
+    "value", "dyn.q[:,2]", theta0 / scaling["latitude"]
+)  # theta (start at zero)
+model.set_meta("value", "dyn.q[:,3]", (v0 + (vf - v0) * t_norm) / scaling["velocity"])
+model.set_meta(
+    "value", "dyn.q[:,4]", (gamma0 + (gamma_f - gamma0) * t_norm) / scaling["gamma"]
+)  # gamma
+model.set_meta("value", "dyn.q[:,5]", psi0 / scaling["psi"])  # psi (constant)
+
+# Controls:
+# alpha
+alpha_profile = 20.0 * np.exp(-2 * t_norm) + 5.0
+model.set_meta("value", "dyn.u[:,0]", np.radians(alpha_profile) / scaling["alpha"])
+
+# Bank angle profile for cross-range:
+beta_profile = 30.0 * np.sin(np.pi * t_norm)
+model.set_meta("value", "dyn.u[:,1]", np.radians(beta_profile) / scaling["beta"])
+
 # Build the module if requested
 if args.build:
     model.build_module()
@@ -331,62 +378,8 @@ print(f"Num constraints:            {model.num_constraints}")
 # Create the design vector
 x = model.create_vector()
 
-# Default to zero design variable values
-x[:] = 0.0
-
-# Set initial guess for design variables (scaled)
-x["obj.theta[0]"] = 30.0 / scaling["latitude"]  # initial guess for final latitude
-
-# Set initial guess for states
-h0, phi0, theta0 = 260000.0, 0.0, 0.0
-v0, gamma0, psi0 = 25600.0, math.radians(-1.0), math.radians(90.0)
-
-# Final conditions
-hf, vf, gamma_f = 80000.0, 2500.0, math.radians(-5.0)
-
-N = num_time_steps + 1
-
-t_norm = np.linspace(0, 1, N)
-
-# Scale the initial guess values
-x["dyn.q[:,0]"] = (h0 + (hf - h0) * t_norm) / scaling["altitude"]
-x["dyn.q[:,1]"] = phi0 / scaling["longitude"]  # phi (constant)
-x["dyn.q[:,2]"] = theta0 / scaling["latitude"]  # theta (start at zero)
-x["dyn.q[:,3]"] = (v0 + (vf - v0) * t_norm) / scaling["velocity"]
-x["dyn.q[:,4]"] = (gamma0 + (gamma_f - gamma0) * t_norm) / scaling["gamma"]  # gamma
-x["dyn.q[:,5]"] = psi0 / scaling["psi"]  # psi (constant)
-
-# Controls:
-# alpha
-alpha_profile = 20.0 * np.exp(-2 * t_norm) + 5.0
-x["dyn.u[:,0]"] = np.radians(alpha_profile) / scaling["alpha"]
-
-# Bank angle profile for cross-range:
-beta_profile = 30.0 * np.sin(np.pi * t_norm)
-x["dyn.u[:,1]"] = np.radians(beta_profile) / scaling["beta"]
-
-# Set up bounds
-lower = model.create_vector()
-upper = model.create_vector()
-
-# State bounds
-lower["dyn.q"] = -float("inf")
-upper["dyn.q"] = float("inf")
-
-lower["dyn.qdot"] = -float("inf")
-upper["dyn.qdot"] = float("inf")
-
-# Control bounds
-# Angle of attack bounds
-lower["dyn.u[:, 0]"] = np.radians(-20.0) / scaling["alpha"]
-upper["dyn.u[:, 0]"] = np.radians(40.0) / scaling["alpha"]
-
-# Bank angle bounds
-lower["dyn.u[:, 1]"] = np.radians(-90.0) / scaling["beta"]
-upper["dyn.u[:, 1]"] = np.radians(90.0) / scaling["beta"]
-
 # Create optimizer and solve
-opt = am.Optimizer(model, x, lower=lower, upper=upper, solver=args.solver)
+opt = am.Optimizer(model, x, solver=args.solver)
 data = opt.optimize(
     {
         "initial_barrier_param": 1.0,

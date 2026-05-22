@@ -413,17 +413,9 @@ print(f"Variables: {model.num_variables}, Constraints: {model.num_constraints}")
 with open("race_car_lap.json", "w") as fp:
     json.dump(model.serialize(), fp, indent=2)
 
-# Bounds
-lower = model.create_vector()
-upper = model.create_vector()
-model.get_values_from_meta("lower", lower)
-model.get_values_from_meta("upper", upper)
-
-x = model.create_vector()
-model.get_values_from_meta("value", x)
-
 # Optimize
-opt = am.Optimizer(model, x, lower=lower, upper=upper, solver=args.solver)
+x = model.create_vector()
+opt = am.Optimizer(model, x=x, solver=args.solver)
 
 opt_data = opt.optimize(
     {

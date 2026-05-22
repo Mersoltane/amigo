@@ -22,7 +22,6 @@ class QualityFunctionBarrier(BarrierStrategy):
         self.sd = 1.0
         self.sp = 1.0
         self.sc = 1.0
-        self.mult_ind = None
 
         # Globalization state
         self.free_mode = True
@@ -44,7 +43,6 @@ class QualityFunctionBarrier(BarrierStrategy):
         """Scaling factors, mult_ind, initial QF reference value."""
         opt = self.opt
         options = self.options
-        self.mult_ind = ctx.mult_ind
 
         if options["quality_function_norm_scaling"]:
             n_d, n_p, n_c = opt.optimizer.get_kkt_element_counts()
@@ -86,7 +84,6 @@ class QualityFunctionBarrier(BarrierStrategy):
             ctx.x,
             ctx.diag_base,
             ctx.inertia_corrector,
-            ctx.mult_ind,
             options,
             ctx.zero_hessian_indices,
             ctx.zero_hessian_eps,
@@ -152,7 +149,7 @@ class QualityFunctionBarrier(BarrierStrategy):
         opt = self.opt
         options = self.options
         btf = options["barrier_tol_factor"]
-        barrier_err = opt._compute_scaled_barrier_error(opt.barrier_param, ctx.mult_ind)
+        barrier_err = opt._compute_scaled_barrier_error(opt.barrier_param)
         if barrier_err > btf * opt.barrier_param:
             return
 
@@ -353,7 +350,7 @@ class QualityFunctionBarrier(BarrierStrategy):
         d_inf_qf, p_inf_qf, c_inf_qf = opt.optimizer.compute_kkt_error_mu(
             0.0, opt.vars, opt.grad
         )
-        s_d_qf, s_c_qf = opt._compute_optimality_scaling(self.mult_ind)
+        s_d_qf, s_c_qf = opt._compute_optimality_scaling()
         nlp_error_qf = max(d_inf_qf / s_d_qf, p_inf_qf, c_inf_qf / s_c_qf)
         tau_qf = max(options["tau_min"], 1.0 - nlp_error_qf)
 

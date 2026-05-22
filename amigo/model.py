@@ -392,6 +392,12 @@ class ModelVector:
         else:
             raise KeyError("Key type {expr} not accepted")
 
+    def copy_host_to_device(self):
+        self._x.copy_host_to_device()
+
+    def copy_device_to_host(self):
+        self._x.copy_device_to_host()
+
     def extract_components(self, expr="all"):
         if expr == "all":
             # Get the names and set the expression based on the values

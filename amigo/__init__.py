@@ -26,7 +26,9 @@ if sys.platform == "win32":
 
 from .amigo import (
     Vector,
+    OptVector,
     OptimizationProblem,
+    InteriorPointOptimizer,
     CSRMat,
     SparseCholesky,
     SparseLDL,

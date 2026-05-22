@@ -11,15 +11,14 @@ import time
 import numpy as np
 
 from ..model import ModelVector
-from ..amigo import OptVarType
+from ..amigo import InteriorPointOptimizer, Vector
 
 from .default_options import get_default_options
 from .filter_acceptance import Filter
 from .filter_line_search import FilterLineSearch, WatchdogState
 from .merit_line_search import MeritLineSearch
-from .ipm_state import IpmState, StepContext
+from .ipm_state import IpmData, IpmState, StepContext
 
-from .problem_setup import ProblemSetup
 from .iterate_initialization import IterateInitialization
 from .convergence_check import (
     ConvergenceCheck,
@@ -38,9 +37,18 @@ from .iteration_logger import IterationLogger
 from .newton_diagnostics import NewtonDiagnostics
 from .post_optimization import PostOptimization
 
+from .solvers import (
+    AmigoSolver,
+    DirectPetscSolver,
+    DirectScipySolver,
+    MumpsSolver,
+    PardisoSolver,
+)
+
+from .inertia_correction import InertiaCorrector
+
 
 class Optimizer(
-    ProblemSetup,
     IterateInitialization,
     ConvergenceCheck,
     NewtonDirection,
@@ -62,13 +70,11 @@ class Optimizer(
 
     def __init__(
         self,
-        model,
+        model=None,
         x=None,
-        lower=None,
-        upper=None,
+        problem=None,
         solver=None,
         comm=None,
-        distribute=False,
     ):
         """Initialize the optimizer.
 
@@ -78,34 +84,134 @@ class Optimizer(
             The amigo model to optimize
         x : array-like, optional
             Initial point
-        lower, upper : array-like, optional
-            Variable bounds
         solver : Solver, optional
             Linear solver for the KKT system.
             May also be a string from ["scipy", "pardiso", "mumps"]
         comm : MPI communicator, optional
             For distributed optimization
-        distribute : bool
-            Whether to distribute the problem
         """
         self.barrier_param = 1.0
-        self.model = model
-        self.problem = self.model.get_problem()
-        self.comm = comm
-        self.distribute = distribute
-        if self.distribute and self.comm is None:
-            raise ValueError("If problem is distributed, communicator cannot be None")
 
-        self._partition_problem()
-        self._setup_initial_vectors(x, lower, upper)
-        self._fill_slack_bounds()
-        self._distribute_vectors()
+        # Set the model and problem
+        if model is not None:
+            self.model = model
+            self.problem = self.model.get_problem()
+        elif problem is not None:
+            self.model = None
+            self.problem = problem
+
+        # Set the design vector
+        if isinstance(x, ModelVector):
+            self.x = x.get_vector()
+        elif isinstance(x, Vector):
+            self.x = x
+        else:
+            self.x = self.problem.create_vector()
+
+        self.comm = comm
+        self.distribute = False
+        if self.comm is not None and self.comm.size > 1:
+            self.distribute = True
+
+        # Set up the vectors
+        self._setup_initial_vectors()
         self._select_solver(solver)
         self._create_interior_point_backend()
         self._allocate_working_vectors()
 
+    def _setup_initial_vectors(self):
+        """Initialize the vectors"""
+        x_init = self.problem.get_initial_point()
+        self.x.copy(x_init)
+        self.lower = self.problem.get_lower()
+        self.upper = self.problem.get_upper()
+
+    def _select_solver(self, solver):
+        """Resolve solver spec (instance, string, or None) to a concrete solver."""
+        if solver is None and self.distribute:
+            self.solver = DirectPetscSolver(self.comm, self.problem)
+        elif isinstance(solver, str):
+            solver_pref = solver.lower()
+            if solver_pref == "scipy":
+                self.solver = DirectScipySolver(self.problem)
+            elif solver_pref == "pardiso":
+                self.solver = PardisoSolver(self.problem)
+            elif solver_pref == "mumps":
+                try:
+                    self.solver = MumpsSolver(self.problem)
+                except:
+                    self.solver = AmigoSolver(self.problem)
+            elif solver_pref == "amigo":
+                self.solver = AmigoSolver(self.problem)
+            else:
+                raise ValueError(
+                    f"Unknown solver string '{solver}'. "
+                    "Expected one of: 'scipy', 'pardiso', 'mumps', 'amigo'."
+                )
+        elif solver is not None:
+            self.solver = solver
+        else:
+            self.solver = AmigoSolver(self.problem)
+
+    def _create_interior_point_backend(self):
+        """Create the C++ InteriorPointOptimizer backend and slack mapping."""
+        data_vec = self.problem.get_data_vector()
+        self.x.copy_host_to_device()
+        self.lower.copy_host_to_device()
+        self.upper.copy_host_to_device()
+        data_vec.copy_host_to_device()
+
+        self.optimizer = InteriorPointOptimizer(self.problem)
+        self.vars = self.optimizer.create_opt_vector(self.x)
+        self.update = self.optimizer.create_opt_vector()
+        self.temp = self.optimizer.create_opt_vector()
+
+    def _allocate_working_vectors(self):
+        """Allocate scratch vectors for gradient, residual, direction, etc."""
+        self.grad = self.problem.create_vector()
+        self.res = self.problem.create_vector()
+        self.diag = self.problem.create_vector()
+        self.px = self.problem.create_vector()
+        self.ir_corr = self.problem.create_vector()
+
+    def _build_inertia_corrector(self, tol, options, comm_rank):
+        """Create an InertiaCorrector if the solver supports inertia queries."""
+        inertia_corrector = None
+        if getattr(self.solver, "supports_inertia", False):
+            inertia_corrector = InertiaCorrector(
+                self.problem, self.optimizer, self.barrier_param, options
+            )
+            if comm_rank == 0:
+                n_primal = self.optimizer.get_num_primals()
+                n_dual = self.optimizer.get_num_constraints()
+                n_total = n_primal + n_dual
+                solver_name = type(self.solver).__name__
+                print(f"\n  Amigo IPM ({solver_name})")
+                print(
+                    f"  Variables: {n_total} ({n_primal} primal, {n_dual} constraints)"
+                )
+                print(f"  Tolerance: {tol:.0e}  mu_init: {self.barrier_param:.0e}\n")
+        return inertia_corrector
+
+    def _zero_hessian_indices(self, options, comm_rank):
+        """Resolve zero-Hessian variable names to integer indices."""
+        zero_hessian_indices = None
+        zero_hessian_eps = options["regularization_eps_x_zero_hessian"]
+        zh_vars = options["zero_hessian_variables"]
+        if zh_vars and not self.distribute:
+            zero_hessian_indices = np.sort(self.model.get_indices(zh_vars))
+            if comm_rank == 0:
+                print(
+                    f"  Variable-specific regularization: {len(zero_hessian_indices)} "
+                    f"zero-Hessian vars, eps_x_zero={zero_hessian_eps:.2e}"
+                )
+        return zero_hessian_indices, zero_hessian_eps
+
     def get_options(self, options={}):
         return get_default_options(options)
+
+    def get_optimized_point(self):
+        return ModelVector(self.model, x=self.x)
 
     def optimize(self, options={}):
         """Run the interior-point optimization algorithm.
@@ -131,8 +237,18 @@ class Optimizer(
         initial_barrier = options["initial_barrier_param"]
         filter_reset_trigger = options["filter_reset_trigger"]
         max_filter_resets = options["max_filter_resets"]
-
         self.barrier_param = options["initial_barrier_param"]
+
+        # Place everything in a data class
+        # self.data = IpmData(
+        #     options=self.options,
+        #     problem=self.problem,
+        #     optimizer=self.optimizer,
+        #     solver=self.solver,
+        #     vars=self.vars,
+        # )
+
+        # Create the barrier strategy
         self.barrier = make_barrier_strategy(self, options)
 
         # Initialization
@@ -146,15 +262,10 @@ class Optimizer(
         state.res_norm_mu = self.barrier_param
 
         # Inertia corrector + zero-Hessian indices
-        # problem_ref = self.mpi_problem if self.distribute else self.problem
-        # mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
-        # self._mult_ind = mult_ind  # used by _ensure_positive_slacks
         inertia_corrector = self._build_inertia_corrector(tol, options, comm_rank)
         zero_hessian_indices, zero_hessian_eps = self._zero_hessian_indices(
             options, comm_rank
         )
-
-        # soc_var_types = var_types if options["second_order_correction"] else None
 
         # Barrier-strategy step context (shared across iterations; per-iteration
         # fields i, res_norm, diag_base, filter_monotone_* are updated in-loop)
@@ -209,10 +320,6 @@ class Optimizer(
             self.res.get_values_at(primal_indices, primal_vec)
             theta_res = self.problem.norm(con_vec)
             eta_res = self.problem.norm(primal_vec)
-
-            # res_arr = np.array(self.res.get_array())
-            # theta_res = np.linalg.norm(res_arr[mult_ind])
-            # eta_res = np.linalg.norm(res_arr[~mult_ind])
 
             if filter_ls and self._filter_theta_0 is None:
                 self._filter_theta_0 = self._compute_filter_theta()
@@ -346,7 +453,7 @@ class Optimizer(
                 self.barrier_param, self.vars, self.grad, self.res
             )
             if options["check_update_step"] and comm_rank == 0 and i > 0:
-                self._print_newton_diagnostics(rhs_norm, state.res_norm_mu, mult_ind)
+                self._print_newton_diagnostics(rhs_norm, state.res_norm_mu)
 
             # Compute maximum step sizes from fraction-to-boundary
             tau = (
@@ -398,7 +505,6 @@ class Optimizer(
                 if not step_accepted:
                     restored = self._restoration_phase(
                         inertia_corrector,
-                        mult_ind,
                         inner_filter,
                         options,
                         comm_rank,
@@ -444,7 +550,6 @@ class Optimizer(
                     options,
                     comm_rank,
                     tau=tau,
-                    mult_ind=soc_mult_ind,
                     reject_callback=reject_cb,
                 )
 

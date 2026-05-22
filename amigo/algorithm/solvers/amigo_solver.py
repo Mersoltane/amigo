@@ -16,7 +16,7 @@ class AmigoSolver(DirectSparseSolver):
     supports_inertia = True
     solver_name = "am.SparseLDL"
 
-    def __init__(self, problem, ustab=0.01, pivot_tol=1e-14):
+    def __init__(self, problem, ustab=0.1, pivot_tol=1e-14):
         self._init_sparse_structure(problem)
         self.ldl = SparseLDL(
             self.hess,

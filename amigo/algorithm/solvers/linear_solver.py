@@ -151,115 +151,115 @@ class DirectSparseSolver(LinearSolver):
         max_steps : int
             Maximum refinement iterations.
         """
-        px_arr = px.get_array()
-        n = len(px_arr)
+        # px_arr = px.get_array()
+        # n = len(px_arr)
 
-        # Current-point data (frozen for the entire IR)
-        g = np.array(grad.get_array())
-        zl = np.array(vars_.get_zl().get_array())
-        zu = np.array(vars_.get_zu().get_array())
+        # # Current-point data (frozen for the entire IR)
+        # g = np.array(grad.get_array())
+        # zl = np.array(vars_.get_zl().get_array())
+        # zu = np.array(vars_.get_zu().get_array())
 
-        # # Index sets
-        # pi = np.where(mult_ind == 0)[0]  # primal indices (design + slacks)
-        # ci = np.where(mult_ind == 1)[0]  # constraint indices (eq + ineq)
-        pi = self.problem.get_primal_indices().get_array()
-        ci = self.problem.get_constraint_indices().get_array()
+        # # # Index sets
+        # # pi = np.where(mult_ind == 0)[0]  # primal indices (design + slacks)
+        # # ci = np.where(mult_ind == 1)[0]  # constraint indices (eq + ineq)
+        # pi = self.problem.get_primal_indices().get_array()
+        # ci = self.problem.get_constraint_indices().get_array()
 
-        # Stored slacks (always positive, updated incrementally in C++)
-        sl = np.array(vars_.get_sl().get_array())
-        su = np.array(vars_.get_su().get_array())
-        fl = np.isfinite(lbx.get_array())
-        fu = np.isfinite(ubx.get_array())
-        gl = np.where(fl, sl, 1.0)
-        gu = np.where(fu, su, 1.0)
+        # # Stored slacks (always positive, updated incrementally in C++)
+        # sl = np.array(vars_.get_sl().get_array())
+        # su = np.array(vars_.get_su().get_array())
+        # fl = np.isfinite(lbx.get_array())
+        # fu = np.isfinite(ubx.get_array())
+        # gl = np.where(fl, sl, 1.0)
+        # gu = np.where(fu, su, 1.0)
 
-        # Sigma = zl/gap_l + zu/gap_u (barrier diagonal, primal-sized)
-        sigma = np.where(fl, zl / gl, 0.0) + np.where(fu, zu / gu, 0.0)
+        # # Sigma = zl/gap_l + zu/gap_u (barrier diagonal, primal-sized)
+        # sigma = np.where(fl, zl / gl, 0.0) + np.where(fu, zu / gu, 0.0)
 
-        # Initial bound dual steps from back-substitution
-        dx = px_arr[pi]
-        dzl = np.where(fl, (mu - gl * zl - zl * dx) / gl, 0.0)
-        dzu = np.where(fu, (mu - gu * zu + zu * dx) / gu, 0.0)
+        # # Initial bound dual steps from back-substitution
+        # dx = px_arr[pi]
+        # dzl = np.where(fl, (mu - gl * zl - zl * dx) / gl, 0.0)
+        # dzu = np.where(fu, (mu - gu * zu + zu * dx) / gu, 0.0)
 
-        # Augmented matrix K for matvec (sparse, includes Sigma on diagonal)
-        self.hess.copy_data_device_to_host()
-        hdata = np.array(self.hess.get_data())
-        K = csr_matrix((hdata, self.cols, self.rowp), shape=(n, n))
+        # # Augmented matrix K for matvec (sparse, includes Sigma on diagonal)
+        # self.hess.copy_data_device_to_host()
+        # hdata = np.array(self.hess.get_data())
+        # K = csr_matrix((hdata, self.cols, self.rowp), shape=(n, n))
 
-        # Full 8-block RHS (constant across IR steps)
-        rhs_x = -(g[pi] - zl + zu)
-        rhs_c = rhs_saved.get_array()[ci]
-        rhs_zl = np.where(fl, mu - gl * zl, 0.0)
-        rhs_zu = np.where(fu, mu - gu * zu, 0.0)
+        # # Full 8-block RHS (constant across IR steps)
+        # rhs_x = -(g[pi] - zl + zu)
+        # rhs_c = rhs_saved.get_array()[ci]
+        # rhs_zl = np.where(fl, mu - gl * zl, 0.0)
+        # rhs_zu = np.where(fu, mu - gu * zu, 0.0)
 
-        # RHS norm for ratio (max over all 8 blocks)
-        nrm_rhs = max(
-            np.max(np.abs(rhs_x)) if len(rhs_x) > 0 else 0.0,
-            np.max(np.abs(rhs_c)) if len(rhs_c) > 0 else 0.0,
-            np.max(np.abs(rhs_zl)) if len(rhs_zl) > 0 else 0.0,
-            np.max(np.abs(rhs_zu)) if len(rhs_zu) > 0 else 0.0,
-        )
+        # # RHS norm for ratio (max over all 8 blocks)
+        # nrm_rhs = max(
+        #     np.max(np.abs(rhs_x)) if len(rhs_x) > 0 else 0.0,
+        #     np.max(np.abs(rhs_c)) if len(rhs_c) > 0 else 0.0,
+        #     np.max(np.abs(rhs_zl)) if len(rhs_zl) > 0 else 0.0,
+        #     np.max(np.abs(rhs_zu)) if len(rhs_zu) > 0 else 0.0,
+        # )
 
-        # Refinement parameters
-        residual_ratio_max = 1e-10
-        residual_improvement_factor = 0.999999999
-        min_refinement_steps = 1
-        max_cond = 1e6
-        residual_ratio_old = 1e30
+        # # Refinement parameters
+        # residual_ratio_max = 1e-10
+        # residual_improvement_factor = 0.999999999
+        # min_refinement_steps = 1
+        # max_cond = 1e6
+        # residual_ratio_old = 1e30
 
-        # TODO all of these need to have their GPU equivalent
-        for step in range(max_steps):
-            Kpx = K.dot(px_arr)
+        # # TODO all of these need to have their GPU equivalent
+        # for step in range(max_steps):
+        #     Kpx = K.dot(px_arr)
 
-            e_x = rhs_x - Kpx[pi] + sigma * dx + dzl - dzu
-            e_c = rhs_c - Kpx[ci]
-            e_zl = np.where(fl, rhs_zl - zl * dx - gl * dzl, 0.0)
-            e_zu = np.where(fu, rhs_zu + zu * dx - gu * dzu, 0.0)
+        #     e_x = rhs_x - Kpx[pi] + sigma * dx + dzl - dzu
+        #     e_c = rhs_c - Kpx[ci]
+        #     e_zl = np.where(fl, rhs_zl - zl * dx - gl * dzl, 0.0)
+        #     e_zu = np.where(fu, rhs_zu + zu * dx - gu * dzu, 0.0)
 
-            nrm_resid = max(
-                np.max(np.abs(e_x)) if len(e_x) > 0 else 0.0,
-                np.max(np.abs(e_c)) if len(e_c) > 0 else 0.0,
-                np.max(np.abs(e_zl)) if len(e_zl) > 0 else 0.0,
-                np.max(np.abs(e_zu)) if len(e_zu) > 0 else 0.0,
-            )
-            nrm_res = max(
-                np.max(np.abs(px_arr)) if len(px_arr) > 0 else 0.0,
-                np.max(np.abs(dzl)) if len(dzl) > 0 else 0.0,
-                np.max(np.abs(dzu)) if len(dzu) > 0 else 0.0,
-            )
+        #     nrm_resid = max(
+        #         np.max(np.abs(e_x)) if len(e_x) > 0 else 0.0,
+        #         np.max(np.abs(e_c)) if len(e_c) > 0 else 0.0,
+        #         np.max(np.abs(e_zl)) if len(e_zl) > 0 else 0.0,
+        #         np.max(np.abs(e_zu)) if len(e_zu) > 0 else 0.0,
+        #     )
+        #     nrm_res = max(
+        #         np.max(np.abs(px_arr)) if len(px_arr) > 0 else 0.0,
+        #         np.max(np.abs(dzl)) if len(dzl) > 0 else 0.0,
+        #         np.max(np.abs(dzu)) if len(dzu) > 0 else 0.0,
+        #     )
 
-            residual_ratio = nrm_resid / (min(nrm_res, max_cond * nrm_rhs) + nrm_rhs)
+        #     residual_ratio = nrm_resid / (min(nrm_res, max_cond * nrm_rhs) + nrm_rhs)
 
-            if residual_ratio < residual_ratio_max and step >= min_refinement_steps:
-                break
-            if (
-                step >= min_refinement_steps
-                and residual_ratio > residual_improvement_factor * residual_ratio_old
-            ):
-                break
-            residual_ratio_old = residual_ratio
+        #     if residual_ratio < residual_ratio_max and step >= min_refinement_steps:
+        #         break
+        #     if (
+        #         step >= min_refinement_steps
+        #         and residual_ratio > residual_improvement_factor * residual_ratio_old
+        #     ):
+        #         break
+        #     residual_ratio_old = residual_ratio
 
-            # Condense residual for correction solve
-            e_cond = np.zeros(n)
-            e_cond[pi] = (
-                e_x + np.where(fl, e_zl / gl, 0.0) - np.where(fu, e_zu / gu, 0.0)
-            )
-            e_cond[ci] = e_c
+        #     # Condense residual for correction solve
+        #     e_cond = np.zeros(n)
+        #     e_cond[pi] = (
+        #         e_x + np.where(fl, e_zl / gl, 0.0) - np.where(fu, e_zu / gu, 0.0)
+        #     )
+        #     e_cond[ci] = e_c
 
-            # Solve correction with existing factorization
-            res.get_array()[:] = e_cond
-            res.copy_host_to_device()
-            self.solve(res, corr)
-            corr.copy_device_to_host()
-            corr_arr = corr.get_array()
+        #     # Solve correction with existing factorization
+        #     res.get_array()[:] = e_cond
+        #     res.copy_host_to_device()
+        #     self.solve(res, corr)
+        #     corr.copy_device_to_host()
+        #     corr_arr = corr.get_array()
 
-            # Back-substitute for bound dual corrections
-            dc = corr_arr[pi]
-            dzl += np.where(fl, (e_zl - zl * dc) / gl, 0.0)
-            dzu += np.where(fu, (e_zu + zu * dc) / gu, 0.0)
+        #     # Back-substitute for bound dual corrections
+        #     dc = corr_arr[pi]
+        #     dzl += np.where(fl, (e_zl - zl * dc) / gl, 0.0)
+        #     dzu += np.where(fu, (e_zu + zu * dc) / gu, 0.0)
 
-            # Accumulate into solution
-            px_arr[:] += corr_arr
-            dx = px_arr[pi]
+        #     # Accumulate into solution
+        #     px_arr[:] += corr_arr
+        #     dx = px_arr[pi]
 
-        px.copy_host_to_device()
+        # px.copy_host_to_device()
