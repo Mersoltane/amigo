@@ -13,9 +13,11 @@ from .convergence_check import CONVERGED, CONVERGED_ACCEPTABLE
 
 
 class OptimizationLogger:
-    def __init__(self, options, log_objs=[]):
+    def __init__(self, log_objs, options, problem, optimizer):
         self.options = options
         self.log_objs = log_objs
+        self.problem = problem
+        self.optimizer = optimizer
 
         # Set the start time on creation of the optimization logger
         self.start_time = time.perf_counter()
@@ -37,12 +39,6 @@ class OptimizationLogger:
             "time": elapsed_time,
             "residual": state.residual_norm,
             "barrier_param": state.mu,
-            # TODO: Log this
-            # "line_iters": line_iters,
-            # "alpha_x": alpha_x_prev,
-            # "x_index": x_index_prev,
-            # "alpha_z": alpha_z_prev,
-            # "z_index": z_index_prev,
         }
 
         # Add additional iteration-dependent data
@@ -54,9 +50,9 @@ class OptimizationLogger:
         iter_data["inf_du"] = state.dual_infeas
         iter_data["compl"] = state.complementarity
         iter_data["nlp_error"] = state.kkt_error
-        # TODO: Log this too
-        # iter_data["objective"] = self._compute_barrier_objective(self.vars)
-        # iter_data["step_norm"] = float(np.max(np.abs(self.px.get_array())))
+        iter_data["objective"] = state.objective_value
+        px = state.step.get_solution()
+        iter_data["step_norm"] = self.problem.norm(px)
 
         self._write_log(status, state, iter_data)
 

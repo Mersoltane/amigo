@@ -713,7 +713,7 @@ class BacktrackLineSearch:
         )
         state.current.copy(self.tmp)
 
-        # Invalidate all of the information
+        # Invalidate all of the gradient and line search information
         state.invalidate()
 
         # Build the info object
@@ -869,8 +869,6 @@ class Optimizer:
         is responsible for updating the state object so that its internal state remains consistent.
 
         FilterLineSearch performs a filter line search
-
-
         """
 
         # Check and normalize the options dictionary for internal use
@@ -906,8 +904,8 @@ class Optimizer:
 
         # Initialize the logger. The logger takes in additional objects that may
         # provide logging info via "obj.get_log_info()"
-        log_objs = [line_search, inertia_corrector]
-        logger = OptimizationLogger(options, log_objs=log_objs)
+        objs = [line_search, inertia_corrector]
+        logger = OptimizationLogger(objs, options, self.problem, self.optimizer)
 
         # Initialize the dual and slack variable values. This utilizes the solver object
         # to find initial values of the dual variables.

@@ -420,7 +420,7 @@ opt = am.Optimizer(model, x=x, solver=args.solver)
 opt_data = opt.optimize(
     {
         "initial_barrier_param": 1.0,
-        "max_iterations": 100,
+        "max_iterations": 200,
         "max_line_search_iterations": 30,
         "convergence_tolerance": 1e-8,
         "init_least_squares_multipliers": True,

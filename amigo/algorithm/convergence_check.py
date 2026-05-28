@@ -32,6 +32,9 @@ class ConvergenceCheck:
         # Set the precision floor count
         self.precision_floor_count = 0
 
+        # Set the acceptable counter
+        self.acceptable_counter = 0
+
     def test_convergence(self, evaluator, state):
         """
         Check for convergence
@@ -80,11 +83,11 @@ class ConvergenceCheck:
             and c_inf_nlp <= acceptable_compl_inf_tol
         )
         if acceptable_iter > 0 and is_acceptable:
-            acceptable_counter += 1
-            if acceptable_counter >= acceptable_iter:
+            self.acceptable_counter += 1
+            if self.acceptable_counter >= acceptable_iter:
                 return CONVERGED_ACCEPTABLE
         else:
-            acceptable_counter = 0
+            self.acceptable_counter = 0
 
         # Precision floor: bit-identical residuals
         denom = max(state.residual_norm, 1e-30)
