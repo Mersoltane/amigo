@@ -14,7 +14,7 @@ import numpy as np
 from .filter_acceptance import Filter
 
 
-class FilterLineSearch2:
+class FilterLineSearchNew:
     """Filter-based line search, SOC, and watchdog procedure."""
 
     def __init__(self, problem=None, optimizer=None, options={}):
@@ -43,6 +43,13 @@ class FilterLineSearch2:
         watchdog.trigger = options["watchdog_shortened_iter_trigger"]
         watchdog.max_trials = options["watchdog_trial_iter_max"]
 
+        # Set values that are
+
+        return
+
+    def reset_on_new_barrier(self, state):
+        """This is called when the barrier parameter is updated"""
+        self.watchdog.reset()
         return
 
     def line_search(self, iterate, newton):
@@ -107,25 +114,30 @@ class FilterLineSearch2:
         use_soc = self.options["second_order_correction"]
         EPS10 = 10.0 * np.finfo(float).eps
 
-        # Reference values
-        if watchdog_ref is not None:
-            ref_theta, ref_barr, ref_dphi = watchdog_ref
-        else:
-            ref_theta = self._compute_filter_theta()
-            ref_barr = phi_current
-            ref_dphi = self.optimizer.compute_barrier_dphi(
-                self.barrier_param,
-                self.vars,
-                self.update,
-                self.res,
-                self.px,
-                self.diag,
-            )
+        # If the reference values are not set, evaluate them now
+        if self.ref_theta is None:
+            self.ref_theta
+            self.ref_barr
+            self.ref_dphi
 
-        # theta_min, theta_max (Eq. 21)
-        theta_0 = getattr(self, "_filter_theta_0", ref_theta)
-        theta_min = 1e-4 * max(1.0, theta_0)
-        theta_max = 1e4 * max(1.0, theta_0)
+            # theta_min, theta_max (Eq. 21)
+            self.theta_min = 1e-4 * max(1.0, self.ref_theta)
+            self.theta_max = 1e4 * max(1.0, self.ref_theta)
+
+        # # Reference values
+        # if watchdog_ref is not None:
+        #     ref_theta, ref_barr, ref_dphi = watchdog_ref
+        # else:
+        #     ref_theta = self._compute_filter_theta()
+        #     ref_barr = phi_current
+        #     ref_dphi = self.optimizer.compute_barrier_dphi(
+        #         self.barrier_param,
+        #         self.vars,
+        #         self.update,
+        #         self.res,
+        #         self.px,
+        #         self.diag,
+        #     )
 
         # Alpha_min (Eq. 23)
         if watchdog_ref is not None:
@@ -141,23 +153,23 @@ class FilterLineSearch2:
                     )
             alpha_min *= alpha_min_frac
 
-        # SOC state backup
-        if use_soc:
-            self.optimizer.compute_residual(
-                self.barrier_param, self.vars, self.grad, self.res
-            )
-            # res_orig = self.res.get_array().copy()
-            # update_backup = self.optimizer.create_opt_vector()
-            # update_backup.copy(self.update)
-            # px_orig = self.px.get_array().copy()
+        # # SOC state backup
+        # if use_soc:
+        #     self.optimizer.compute_residual(
+        #         self.barrier_param, self.vars, self.grad, self.res
+        #     )
+        #     # res_orig = self.res.get_array().copy()
+        #     # update_backup = self.optimizer.create_opt_vector()
+        #     # update_backup.copy(self.update)
+        #     # px_orig = self.px.get_array().copy()
 
-            # Back up the original values
-            res_orig = self.problem.create_vector()
-            res_orig.copy(self.res)
-            px_orig = self.problem.create_vector()
-            px_orig.copy(self.px)
-            update_backup = self.optimizer.create_opt_vector()
-            update_backup.copy(self.update)
+        #     # Back up the original values
+        #     res_orig = self.problem.create_vector()
+        #     res_orig.copy(self.res)
+        #     px_orig = self.problem.create_vector()
+        #     px_orig.copy(self.px)
+        #     update_backup = self.optimizer.create_opt_vector()
+        #     update_backup.copy(self.update)
 
         alpha_primal = alpha_x
         n_steps = 0

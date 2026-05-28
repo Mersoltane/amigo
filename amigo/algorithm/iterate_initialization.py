@@ -30,18 +30,18 @@ class SlackInitializer:
 
             # Copy the gradient and solution to the host
             x.copy_device_to_host()
-            state.gradident.copy_device_to_host()
+            state.gradient.copy_device_to_host()
             x_array = x.get_array()
-            grad_array = state.gradident.get_array()
+            grad_array = state.gradient.get_array()
 
             # Set the values
             x_array[slack_indices] += grad_array[ineq_indices]
 
             # Update the values
             x.copy_host_to_device()
-            self.grad.copy_host_to_device()
+            state.gradient.copy_host_to_device()
 
-        # The gradient is now invalid because we update the primal-dual point
+        # Everything is now invalid because we updated the primal-dual point
         state.invalidate()
 
         return

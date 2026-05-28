@@ -643,13 +643,14 @@ PYBIND11_MODULE(amigo, mod) {
            py::arg("ustab") = 0.01, py::arg("pivot_tol") = 1e-14,
            py::arg("delay_growth") = 2.0,
            py::arg("order") = amigo::OrderingType::NATURAL)
-      .def("factor", &amigo::SparseLDL<double>::factor)
+      .def("factor", &amigo::SparseLDL<double>::factor,
+           py::arg("diagonal") = nullptr)
       .def("solve",
            [](std::shared_ptr<amigo::SparseLDL<double>> self, py::object x) {
              // Case 1: amigo::Vector<double>
              if (py::isinstance<amigo::Vector<double>>(x)) {
-               auto& vec = x.cast<amigo::Vector<double>&>();
-               self->solve(&vec);
+               auto xvec = x.cast<std::shared_ptr<amigo::Vector<double>>>();
+               self->solve(xvec);
                return;
              }
 

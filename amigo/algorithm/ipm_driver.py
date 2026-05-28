@@ -17,7 +17,7 @@ from .default_options import get_default_options
 from .filter_acceptance import Filter
 from .filter_line_search import FilterLineSearch, WatchdogState
 from .merit_line_search import MeritLineSearch
-from .ipm_state import IpmData, IpmState, StepContext
+from .ipm_state import IpmState, StepContext
 
 from .iterate_initialization import IterateInitialization
 from .convergence_check import (
@@ -56,9 +56,11 @@ from .multiplier_initialization import MultiplierInitializer
 from .iterate_initialization import SlackInitializer
 from .iteration_logger import OptimizationLogger
 from .ipm_state import InteriorPointState, Evaluator
+from .inertia_correction import InertiaCorrectorNew, AmigoSolverNew
+from .filter_line_search import FilterLineSearchNew
 
 
-class Optimizer(
+class OptimizerOld(
     IterateInitialization,
     ConvergenceCheck,
     NewtonDirection,
@@ -605,7 +607,135 @@ class Optimizer(
         return opt_data
 
 
-class NewOptimizer:
+class BarrierInfo:
+    new_barrier: bool = False
+    mu_new: float = 0.0
+    mu_old: float = 0.0
+
+
+class BarrierStrategy:
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+    def update_barrier(self, state):
+        return self._monotone_barrier_update(state)
+
+    def _monotone_barrier_update(self, state):
+        info = BarrierInfo
+
+        opt_tol = self.options["convergence_tolerance"]
+        relative_tol = self.options["barrier_progress_tol"]
+        frac = self.options["monotone_barrier_fraction"]
+
+        if state.residual_norm < relative_tol * state.mu:
+            mu_new = max(state.mu * frac, opt_tol)
+
+            info.new_barrier = True
+            info.mu_old = state.mu
+            info.mu_new = mu_new
+
+            # Update the barrier parameter. Invalidate the residuals and the step
+            # (if any) because the barrier has changed
+            state.mu = mu_new
+            state.residual_current = False
+            state.step_current = False
+
+        return info
+
+
+class NewtonStep:
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+    def compute_step(self, solver, evaluator, state):
+        # Evalute the residual (may be required since the barrier may have changed)
+        evaluator.evaluate_residual(state)
+
+        # Solve the linear system to obtain the new step
+        update = state.step.get_solution()
+        solver.solve(state.residual, update)
+
+        # Compute the full step
+        self.optimizer.compute_update(state.mu, state.current, update, state.step)
+
+        # Now, compute the maximum step lengths in the primal and dual directions
+        alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
+            state.tau, state.current, state.step
+        )
+        state.max_alpha_primal = alpha_x
+        state.max_alpha_dual = alpha_z
+
+        # Indicate that the step has been updated
+        state.step_current = True
+
+
+class LineSearchInfo:
+    success: bool
+    num_search_iters: int
+    alpha_primal: float
+    alpha_dual: float
+    # Add other info...
+
+
+class BacktrackLineSearch:
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+        self.tmp = self.optimizer.create_opt_vector()
+
+        # Store the most recent info returned from the line search
+        self.current_info = None
+
+    def reset_on_new_barrier(self, state):
+        return
+
+    def line_search(self, solver, evaluator, state):
+
+        # Evaluate the objective and barrier at the current state
+        evaluator.evaluate_objective_and_barrier(state)
+        evaluator.evaluate_infeasibility(state)
+
+        phi = state.objective_value + state.log_barrier_value
+        infeas = state.con_infeasibility
+
+        self.optimizer.apply_step_update(
+            state.max_alpha_primal,
+            state.max_alpha_dual,
+            state.current,
+            state.step,
+            self.tmp,
+        )
+        state.current.copy(self.tmp)
+
+        # Invalidate all of the information
+        state.invalidate()
+
+        # Build the info object
+        info = LineSearchInfo()
+        info.success = True
+        info.num_search_iters = 1
+        info.alpha_primal = state.max_alpha_primal
+        info.alpha_dual = state.max_alpha_dual
+
+        # Store the information returned for later logging
+        self.current_info = info
+
+        return info
+
+    def add_log_info(self, info):
+        if self.current_info is not None:
+            info["line_iters"] = self.current_info.num_search_iters
+            info["alpha_x"] = self.current_info.alpha_primal
+            info["alpha_z"] = self.current_info.alpha_dual
+
+
+class Optimizer:
     """Primal-dual interior-point optimizer with filter line search.
 
     Composes a BarrierStrategy (self.barrier) for the mu update and
@@ -654,6 +784,8 @@ class NewOptimizer:
 
         x_init = self.problem.get_initial_point()
         self.x.copy(x_init)
+        self.lower = self.problem.get_lower()
+        self.upper = self.problem.get_upper()
 
         self.comm = comm
         self.distribute = False
@@ -662,34 +794,34 @@ class NewOptimizer:
 
         # Set up the vectors
         self._create_interior_point_backend()
-        self._select_solver(solver)
+        # self._select_solver(solver)
 
-    def _select_solver(self, solver):
-        """Resolve solver spec (instance, string, or None) to a concrete solver."""
-        if solver is None and self.distribute:
-            self.solver = DirectPetscSolver(self.comm, self.problem)
-        elif isinstance(solver, str):
-            solver_pref = solver.lower()
-            if solver_pref == "scipy":
-                self.solver = DirectScipySolver(self.problem)
-            elif solver_pref == "pardiso":
-                self.solver = PardisoSolver(self.problem)
-            elif solver_pref == "mumps":
-                try:
-                    self.solver = MumpsSolver(self.problem)
-                except:
-                    self.solver = AmigoSolver(self.problem)
-            elif solver_pref == "amigo":
-                self.solver = AmigoSolver(self.problem)
-            else:
-                raise ValueError(
-                    f"Unknown solver string '{solver}'. "
-                    "Expected one of: 'scipy', 'pardiso', 'mumps', 'amigo'."
-                )
-        elif solver is not None:
-            self.solver = solver
-        else:
-            self.solver = AmigoSolver(self.problem)
+    # def _select_solver(self, solver):
+    #     """Resolve solver spec (instance, string, or None) to a concrete solver."""
+    #     if solver is None and self.distribute:
+    #         self.solver = DirectPetscSolver(self.comm, self.problem)
+    #     elif isinstance(solver, str):
+    #         solver_pref = solver.lower()
+    #         if solver_pref == "scipy":
+    #             self.solver = DirectScipySolver(self.problem)
+    #         elif solver_pref == "pardiso":
+    #             self.solver = PardisoSolver(self.problem)
+    #         elif solver_pref == "mumps":
+    #             try:
+    #                 self.solver = MumpsSolver(self.problem)
+    #             except:
+    #                 self.solver = AmigoSolver(self.problem)
+    #         elif solver_pref == "amigo":
+    #             self.solver = AmigoSolver(self.problem)
+    #         else:
+    #             raise ValueError(
+    #                 f"Unknown solver string '{solver}'. "
+    #                 "Expected one of: 'scipy', 'pardiso', 'mumps', 'amigo'."
+    #             )
+    #     elif solver is not None:
+    #         self.solver = solver
+    #     else:
+    #         self.solver = AmigoSolver(self.problem)
 
     def _create_interior_point_backend(self):
         """Create the C++ InteriorPointOptimizer backend and slack mapping."""
@@ -751,28 +883,30 @@ class NewOptimizer:
         # gradient and the Hessian of the Lagrangian.
         state = InteriorPointState(self.x, options, self.problem, self.optimizer)
 
+        # TODO: make this selection dependent on the options
+        solver = AmigoSolverNew(options, state)
+
         # Initialize the line search filter algorithm
-        line_search = FilterLineSearch(options, self.problem, self.optimizer)
+        line_search = BacktrackLineSearch(options, self.problem, self.optimizer)
+
+        # Allocate the Newton step
+        newton_step = NewtonStep(options, self.problem, self.optimizer)
 
         # Initialize the feasibility restoration phase
-        # feasibility_restore = self.create_feasibility_restoration(options)
-
-        # Initialize the Newton solver and the underlying
-        newton = self.create_newton_solver(state, options)
+        # feasibility_restore =
 
         # Initialize the barrier strategy correction algorithm
         barrier_strategy = BarrierStrategy(options, self.problem, self.optimizer)
 
-        inertia_corrector = InertiaCorrector(
-            self.problem, self.optimizer, state.mu, options
-        )
+        # The inertia correction
+        inertia_corrector = InertiaCorrectorNew(options, self.problem, self.optimizer)
 
         # Initialize the convergence check
         check = ConvergenceCheck(options)
 
         # Initialize the logger. The logger takes in additional objects that may
         # provide logging info via "obj.get_log_info()"
-        log_objs = []  #  [newton, barrier_strategy, line_search]
+        log_objs = [line_search, inertia_corrector]
         logger = OptimizationLogger(options, log_objs=log_objs)
 
         # Initialize the dual and slack variable values. This utilizes the solver object
@@ -780,9 +914,9 @@ class NewOptimizer:
         slack_init = SlackInitializer(options, self.model, self.problem, self.optimizer)
         slack_init.initialize_slacks(evaluator, state)
 
-        # Object to initialize the multipliers
+        # Initialize the multipliers
         multiplier_init = MultiplierInitializer(options, self.problem, self.optimizer)
-        multiplier_init.initialize_multipliers(evaluator, self.solver, state)
+        multiplier_init.initialize_multipliers(evaluator, solver, state)
 
         # Set the initial status
         status = CONTINUE
@@ -807,16 +941,25 @@ class NewOptimizer:
                 break
 
             # Perform an update of the barrier parameter.
-            barrier_strategy.update_barrier_parameter(counter, state)
+            barrier_info = barrier_strategy.update_barrier(state)
 
-            # Compute the Newton step. This call factors the KKT matrix, tests the inertia of the
-            # factorization and adjusts the regularization terms until a descent direction is achieved.
-            # If no acceptable step is found, then the
-            step_info = newton.compute_step(self.solver, state)
+            # If the barrier parameter is new, as indicated by the barrier info class, then
+            # reset the line search algorithm accordingly
+            if barrier_info.new_barrier:
+                line_search.reset_on_new_barrier(state)
+
+            # Factor the KKT system considering the inertia.
+            # TODO: Implement a inertia info class
+            factor_ok = inertia_corrector.factor_for_inertia(solver, evaluator, state)
 
             do_feas_resto = True
-            if step_info.success:
-                line_search_info = line_search.line_search(self.solver, state)
+            if factor_ok:
+                # Compute the direction and store in state.step. This should be a descent direction
+                # because of the inertia check
+                newton_step.compute_step(solver, evaluator, state)
+
+                # Perform a line search along the step direction
+                line_search_info = line_search.line_search(solver, evaluator, state)
 
                 if line_search_info.success:
                     do_feas_resto = False
@@ -824,11 +967,15 @@ class NewOptimizer:
             # If the line search was not successful, perform feasibility restoration
             if do_feas_resto:
                 warnings.warn("Feasibility restoration not implemented")
-                break  # feasibility_restore.restoration_phase(self.solver, state)
+                # feasibility_restore.restoration_phase(solver, state)
 
         else:
             # The optimization for loop completed normally, so we did not converge
-            counter = max_iters
-            logger.log_iteration(counter, status, state)
+            # Check the convergence status
+            state.iter = max_iters
+            status = check.test_convergence(evaluator, state)
 
-        return status
+            # Log the iteration
+            logger.log_iteration(status, state)
+
+        return logger.get_data()

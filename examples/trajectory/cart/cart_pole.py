@@ -336,9 +336,9 @@ u = x["cart.x[:]"]  # control force at each timestep
 obj_value = 0.0
 dt = final_time / args.num_time_steps
 for i in range(args.num_time_steps):
-    obj_value += (u[i] ** 2 + u[i + 1] ** 2) / 2 * dt
+    obj_value += 0.5 * (u[i] ** 2 + u[i + 1] ** 2) * dt
 
-print(obj_value)
+print("Objective value: ", obj_value)
 
 with open(args.opt_filename, "w") as fp:
     json.dump(opt_data, fp, indent=2)

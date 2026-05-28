@@ -9,6 +9,8 @@ import sys
 import numpy as np
 import time
 
+from .convergence_check import CONVERGED, CONVERGED_ACCEPTABLE
+
 
 class OptimizationLogger:
     def __init__(self, options, log_objs=[]):
@@ -17,6 +19,13 @@ class OptimizationLogger:
 
         # Set the start time on creation of the optimization logger
         self.start_time = time.perf_counter()
+
+        # Store the optimization data
+        self.opt_data = {"options": self.options, "converged": False, "iterations": []}
+        return
+
+    def get_data(self):
+        return self.opt_data
 
     def log_iteration(self, status, state):
         """Assemble the dict of per-iteration diagnostics for logging/history."""
@@ -27,48 +36,38 @@ class OptimizationLogger:
             "iteration": state.iter,
             "time": elapsed_time,
             "residual": state.residual_norm,
-            "barrier_param": self.mu,
-            "line_iters": line_iters,
-            "alpha_x": alpha_x_prev,
-            "x_index": x_index_prev,
-            "alpha_z": alpha_z_prev,
-            "z_index": z_index_prev,
+            "barrier_param": state.mu,
+            # TODO: Log this
+            # "line_iters": line_iters,
+            # "alpha_x": alpha_x_prev,
+            # "x_index": x_index_prev,
+            # "alpha_z": alpha_z_prev,
+            # "z_index": z_index_prev,
         }
 
-        # if inertia_corrector:
-        #     iter_data.update(
-        #         {
-        #             "theta": theta_res,
-        #             "eta": eta_res,
-        #             "inertia_delta": inertia_corrector.last_delta_w,
-        #         }
-        #     )
-        # if filter_ls:
-        #     iter_data["filter_size"] = len(outer_filter)
-
-        # if options["barrier_strategy"] == "heuristic" and options["verbose_barrier"]:
-        #     complementarity, xi = self.optimizer.compute_complementarity(self.vars)
-        #     iter_data["xi"] = xi
-        #     iter_data["complementarity"] = complementarity
+        # Add additional iteration-dependent data
+        for obj in self.log_objs:
+            obj.add_log_info(iter_data)
 
         # NLP-level quantities (mu=0) for display
-        d_inf_log, p_inf_log, c_inf_log = self.optimizer.compute_kkt_error_mu(
-            0.0, self.vars, self.grad
-        )
-        s_d_log, s_c_log = self._compute_optimality_scaling()
-        iter_data["inf_pr"] = p_inf_log
-        iter_data["inf_du"] = d_inf_log
-        iter_data["compl"] = c_inf_log
-        iter_data["nlp_error"] = max(
-            d_inf_log / s_d_log, p_inf_log, c_inf_log / s_c_log
-        )
-        iter_data["objective"] = self._compute_barrier_objective(self.vars)
-        iter_data["step_norm"] = float(np.max(np.abs(self.px.get_array())))
+        iter_data["inf_pr"] = state.primal_infeas
+        iter_data["inf_du"] = state.dual_infeas
+        iter_data["compl"] = state.complementarity
+        iter_data["nlp_error"] = state.kkt_error
+        # TODO: Log this too
+        # iter_data["objective"] = self._compute_barrier_objective(self.vars)
+        # iter_data["step_norm"] = float(np.max(np.abs(self.px.get_array())))
 
-        return iter_data
+        self._write_log(status, state, iter_data)
 
-    def write_log(self, iteration, iter_data):
+        # Write out the values
+        self.opt_data["iterations"].append(iter_data)
+
+        return
+
+    def _write_log(self, status, state, iter_data):
         """Print the IPM iteration table row for this iteration."""
+        iteration = iter_data["iteration"]
         if iteration % 20 == 0:
             print(
                 f"{'iter':>4s}  {'nlp_error':>9s}  {'objective':>12s}  "
@@ -100,6 +99,41 @@ class OptimizationLogger:
             f"{ax:8.2e}  {az:8.2e}  "
             f"{ls:2d}  {fsize:4d}"
         )
+
+        d_inf_nlp = state.dual_infeas
+        p_inf_nlp = state.primal_infeas
+        c_inf_nlp = state.complementarity
+        overall_error = state.kkt_error
+        obj_final = state.objective_value
+
+        if status == CONVERGED:
+            if state.comm_rank == 0:
+                print(f"\n{'='*70}")
+                print(f"  Amigo converged in {iteration} iterations")
+                print(f"{'='*70}")
+                print(f"  Objective value         {obj_final:>20.10e}")
+                print(f"  NLP error               {overall_error:>20.10e}")
+                print(f"  Primal infeasibility    {p_inf_nlp:>20.10e}")
+                print(f"  Dual infeasibility      {d_inf_nlp:>20.10e}")
+                print(f"  Complementarity         {c_inf_nlp:>20.10e}")
+                print(f"  Barrier parameter       {state.mu:>20.10e}")
+                print(f"  Total iterations        {iteration:>20d}")
+                print(f"{'='*70}")
+        elif status == CONVERGED_ACCEPTABLE:
+            if state.comm_rank == 0:
+                print(f"\n{'='*70}")
+                print(
+                    f"  Amigo converged to acceptable point in {iteration} iterations"
+                )
+                print(f"{'='*70}")
+                print(f"  Objective value         {obj_final:>20.10e}")
+                print(f"  NLP error               {overall_error:>20.10e}")
+                print(f"  Primal infeasibility    {p_inf_nlp:>20.10e}")
+                print(f"  Dual infeasibility      {d_inf_nlp:>20.10e}")
+                print(f"  Complementarity         {c_inf_nlp:>20.10e}")
+                print(f"  Total iterations        {iteration:>20d}")
+                print(f"{'='*70}")
+
         sys.stdout.flush()
 
 

@@ -66,7 +66,7 @@ class MultiplierInitializer:
         state.diagonal.fill_at(primal_indices, 1.0)
 
         # Factor the Hessian matrix in its current state
-        solver.factor(state)
+        solver.factor(state.hessian, state.diagonal)
 
         # Compute the residual = grad f - zl + zu
         self.optimizer.compute_dual_residual_vector(
@@ -75,10 +75,11 @@ class MultiplierInitializer:
         state.residual.scale(-1.0)
 
         # Solve for the update
-        solver.solve(state.residual, state.step)
+        update = state.step.get_solution()
+        solver.solve(state.residual, update)
 
         # Add the updates to the indices
-        x.axpy_at(con_indices, 1.0, state.step)
+        x.axpy_at(con_indices, 1.0, update)
 
         # The gradient/Hessian values are invalid now since we just modified the primal-dual vector
         state.invalidate()

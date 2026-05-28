@@ -133,19 +133,26 @@ class SparseLDL {
    *
    * @return int The return flag
    */
-  int factor() {
+  int factor(std::shared_ptr<Vector<T>> diagonal = nullptr) {
     // Get the non-zero pattern
     int nrows, ncols, nnz;
     const int *rowp, *cols;
     const T* data;
     mat->get_data(&nrows, &ncols, &nnz, &rowp, &cols, &data);
 
+    const T* diag_entries = nullptr;
+    if (diagonal) {
+      diag_entries = diagonal->get_array();
+    }
+
     // Perform the numerical factorization
     int info = 0;
     if (solver_type == SolverType::CHOLESKY) {
-      info = factor_numeric<SolverType::CHOLESKY>(nrows, rowp, cols, data);
+      info = factor_numeric<SolverType::CHOLESKY>(nrows, rowp, cols, data,
+                                                  diag_entries);
     } else {
-      info = factor_numeric<SolverType::LDL>(nrows, rowp, cols, data);
+      info = factor_numeric<SolverType::LDL>(nrows, rowp, cols, data,
+                                             diag_entries);
     }
     return info;
   }
@@ -159,7 +166,7 @@ class SparseLDL {
    *
    * @param xvec
    */
-  void solve(Vector<T>* xvec) const {
+  void solve(std::shared_ptr<Vector<T>> xvec) const {
     int nrhs = 1;
     T* x = xvec->get_array();
     int ldx = xvec->get_size();
@@ -754,11 +761,12 @@ class SparseLDL {
    * @param colp Pointer into the column
    * @param rows Row indices for each column
    * @param data Values for the matrix entries
+   * @param diag_entries Values added to the diagonal (may be nullptr)
    * @return int Return flag (0 for success)
    */
   template <SolverType stype>
   int factor_numeric(const int ncols, const int colp[], const int rows[],
-                     const T data[]) {
+                     const T data[], const T diag_entries[]) {
     // Clear any old factorization data
     fact.reset();
 
@@ -795,8 +803,9 @@ class SparseLDL {
     shared(colp, rows, data, contrib, pool, factor) if (nroots > 1)
 #endif
           {
-            int info = factor_numeric_node_task<stype>(
-                root, ncols, colp, rows, data, contrib, pool, factor);
+            int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
+                                                       data, diag_entries,
+                                                       contrib, pool, factor);
           }
         }
       }
@@ -817,6 +826,7 @@ class SparseLDL {
   template <SolverType stype>
   int factor_numeric_node_task(int ks, const int ncols, const int colp[],
                                const int rows[], const T data[],
+                               const T diag_entries[],
                                ContributionData& contrib, ResourcePool& pool,
                                MatrixFactor& factor) {
     int num_children = node_children_ptr[ks + 1] - node_children_ptr[ks];
@@ -830,8 +840,9 @@ class SparseLDL {
     shared(colp, rows, data, contrib, pool, factor)
 #endif
         {
-          int info = factor_numeric_node_task<stype>(
-              child, ncols, colp, rows, data, contrib, pool, factor);
+          int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
+                                                     data, diag_entries,
+                                                     contrib, pool, factor);
         }
       }
 
@@ -842,7 +853,8 @@ class SparseLDL {
       for (int k = 0; k < num_children; k++) {
         int child = children[k];
         int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
-                                                   data, contrib, pool, factor);
+                                                   data, diag_entries, contrib,
+                                                   pool, factor);
       }
     }
 
@@ -882,7 +894,8 @@ class SparseLDL {
 
     // Assemble the frontal matrix
     assemble_front_matrix(ks, num_children, children, front_size, front_indices,
-                          colp, rows, data, contrib, node.F.data());
+                          colp, rows, data, diag_entries, contrib,
+                          node.F.data());
 
     // Factor the frontal matrix and save the results
     int info = 0;
@@ -998,13 +1011,15 @@ class SparseLDL {
    * @param colp Pointer into the column
    * @param rows Row indices
    * @param data Entries from the matrix
+   * @param diag_entries Values added to the diagonal (may be nullptr)
    * @param contrib The contribution blocks
    * @param F The frontal matrix
    */
   void assemble_front_matrix(const int ks, int nchildren, const int children[],
                              int front_size, const int front_indices[],
                              const int colp[], const int rows[], const T data[],
-                             ContributionData& contrib, T F[]) {
+                             const T diag_entries[], ContributionData& contrib,
+                             T F[]) {
     std::fill(F, F + front_size * front_size, 0.0);
 
     int k = node_ptr[ks];
@@ -1059,7 +1074,7 @@ class SparseLDL {
       }
     } else {
       // Assemble the contributions into F from the matrix. Since the ordering
-      // is permuted, we assemble the lower and upper part of F.
+      // is permuted, we loop over the lower and upper part of F.
       for (int j = 0; j < ns; j++) {
         // Get the column variable associated with the node
         int var = node_to_var[k + j];
@@ -1078,6 +1093,13 @@ class SparseLDL {
             Fj[ifront] += data[ip];
           }
         }
+      }
+    }
+
+    if (diag_entries) {
+      for (int j = 0; j < ns; j++) {
+        int var = node_to_var[k + j];
+        F[j * (front_size + 1)] += diag_entries[var];
       }
     }
 
