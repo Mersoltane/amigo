@@ -263,6 +263,10 @@ class Evaluator:
         """Evaluate the diagonal entries"""
         self.optimizer.compute_diagonal(state.current, state.diagonal)
 
+    def evaluate_complementarity(self, state):
+        comp, xi = self.optimizer.compute_complementarity(state.current)
+        return comp, xi
+
 
 @dataclass
 class IpmState:

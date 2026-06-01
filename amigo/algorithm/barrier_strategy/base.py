@@ -13,6 +13,123 @@ helpers on self.opt (_factorize_kkt, _find_direction, etc.).
 from abc import ABC, abstractmethod
 
 
+class BarrierInfo:
+    new_barrier: bool = False
+    mu_new: float = 0.0
+    mu_old: float = 0.0
+
+
+class BarrierStrategyNew(ABC):
+    @abstractmethod
+    def initialize(self, evaluator, state):
+        """Initialize the barrier strategy from the initial point"""
+        pass
+
+    @abstractmethod
+    def update_barrier(self, evaluator, state) -> BarrierInfo:
+        """Update the barrier parameter prior to factoring the KKT matrix"""
+        pass
+
+    @abstractmethod
+    def add_step_correction(self, solver, evalutor, state):
+        """Add the correction to the step - relevant for Mehrotra P/C steps"""
+        pass
+
+    @abstractmethod
+    def update_line_search_info(self, info):
+        """Update any internal state required after the results of a line search"""
+        pass
+
+
+class MonotoneBarrierStrategy(BarrierStrategyNew):
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+    def initialize(self, evaluator, state):
+        pass
+
+    def update_barrier(self, evaluator, state):
+        info = BarrierInfo()
+
+        opt_tol = self.options["convergence_tolerance"]
+        relative_tol = self.options["barrier_progress_tol"]
+        frac = self.options["monotone_barrier_fraction"]
+
+        if state.residual_norm < relative_tol * state.mu:
+            mu_new = max(state.mu * frac, frac * opt_tol)
+
+            info.new_barrier = True
+            info.mu_old = state.mu
+            info.mu_new = mu_new
+
+            # Update the barrier parameter. Invalidate the residuals and the step
+            # (if any) because the barrier has changed
+            state.mu = mu_new
+            state.residual_current = False
+            state.step_current = False
+
+        return info
+
+    def add_step_correction(self, solver, evalutor, state):
+        pass
+
+    def update_line_search_info(self, info):
+        pass
+
+
+def loqo_heuristic(xi, complementarity, gamma, r, mu_floor=1e-12):
+    """LOQO-style barrier parameter: mu = gamma * heuristic_factor * comp."""
+    if xi > 1e-10:
+        term = (1 - r) * (1 - xi) / xi
+        heuristic_factor = min(term, 2.0) ** 3
+    else:
+        heuristic_factor = 2.0**3
+    mu_new = gamma * heuristic_factor * complementarity
+    return max(mu_new, mu_floor), heuristic_factor
+
+
+class HeuristicBarrierStrategy(BarrierStrategyNew):
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+    def initialize(self, evaluator, state):
+        pass
+
+    def update_barrier(self, evaluator, state):
+        kappa_eps = self.options["barrier_tol_factor"]
+        gamma = self.options["heuristic_barrier_gamma"]
+        r = self.options["heuristic_barrier_r"]
+        tol = self.options["convergence_tolerance"]
+        compl_inf_tol = self.options["compl_inf_tol"]
+
+        comp, xi = evaluator.evaluate_complementarity(state)
+
+        mu_floor = min(tol, compl_inf_tol) / (kappa_eps + 1.0)
+        mu_new, _ = loqo_heuristic(xi, comp, gamma, r, mu_floor)
+
+        info = BarrierInfo()
+        info.new_barrier = True
+        info.mu_new = mu_new
+        info.mu_old = state.mu
+
+        # Update the barrier parameter
+        state.mu = mu_new
+        state.residual_current = False
+        state.step_current = False
+
+        return info
+
+    def add_step_correction(self, solver, evalutor, state):
+        pass
+
+    def update_line_search_info(self, info):
+        pass
+
+
 class BarrierStrategy(ABC):
     """Abstract base for barrier-parameter update strategies."""
 

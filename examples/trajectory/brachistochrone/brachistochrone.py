@@ -15,7 +15,7 @@ class TrapezoidRule(am.Component):
     def __init__(self):
         super().__init__()
 
-        self.add_input("tf")  # Final time (design variable)
+        self.add_input("tf", lower=1.0, upper=am.inf)
         self.add_input("q1")
         self.add_input("q2")
         self.add_input("q1dot")
@@ -44,7 +44,7 @@ class ParticleDynamics(am.Component):
         self.add_constant("g", value=9.80655, label="gravitational acceleration")
 
         # Declare control
-        self.add_input("theta", label="control")
+        self.add_input("theta", label="control", lower=0.0, upper=np.pi)
 
         # Declare inputs
         self.add_input("q", shape=(3), label="state")
@@ -64,8 +64,8 @@ class ParticleDynamics(am.Component):
 
         # Position derivatives equal velocities
         # Compute the declared variable values
-        sint = self.vars["sint"] = am.sin(theta)
-        cost = self.vars["cost"] = am.cos(theta)
+        sint = am.sin(theta)
+        cost = am.cos(theta)
         res[0] = qdot[0] - q[2] * sint
         res[1] = qdot[1] + q[2] * cost
 
@@ -211,13 +211,13 @@ if args.build:
 model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
 
 with open("brachistochrone_model.json", "w") as fp:
-    json.dump(model.get_serializable_data(), fp, indent=2)
+    json.dump(model.serialize(), fp, indent=2)
 
 print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
 
 # Create the design variable vector and provide an initial guess
-x = model.create_vector()
+x = model.get_initial_point()
 x[:] = 0.0
 
 # Linear initial guess for the path (straight line) and constant speed
@@ -237,41 +237,7 @@ x["dynamics.theta"] = np.linspace(tetai, tetaf, N)  # teta in radians
 # Initial guess for final time (seconds)
 x["obj.tf"] = 3.0
 
-# Lower and upper bounds for selected variables
-lower = model.create_vector()
-upper = model.create_vector()
-
-# Final time bounds
-lower["obj.tf"] = 1.0
-upper["obj.tf"] = float("inf")
-
-lower["dynamics.q"] = -float("inf")
-upper["dynamics.q"] = float("inf")
-
-lower["dynamics.qdot"] = -float("inf")
-upper["dynamics.qdot"] = float("inf")
-
-# # Position x and y bounds
-# # Bounds on x
-# lower["dynamics.q[:, 0]"] = -1.0
-# upper["dynamics.q[:, 0]"] = 20.0
-
-# # # Bounds on y
-# lower["dynamics.q[:, 1]"] = -1.0
-# upper["dynamics.q[:, 1]"] = 20.0
-
-# # Bounds on the velocity
-# lower["dynamics.q[:, 2]"] = -1.0
-# upper["dynamics.q[:, 2]"] = 50.0
-
-# # Bounds on the control angle:
-lower["dynamics.theta"] = 0.0
-upper["dynamics.theta"] = np.pi
-
-# lower["dynamics.theta"] = -float("inf")
-# upper["dynamics.theta"] = float("inf")
-
-opt = am.Optimizer(model, x, lower=lower, upper=upper)
+opt = am.Optimizer(model, x)
 data = opt.optimize(
     {
         "max_iterations": 500,

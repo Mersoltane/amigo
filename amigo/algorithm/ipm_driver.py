@@ -14,9 +14,7 @@ from ..model import ModelVector
 from ..amigo import InteriorPointOptimizer, Vector
 
 from .default_options import get_default_options
-from .filter_acceptance import Filter
-from .filter_line_search import FilterLineSearch, WatchdogState
-from .merit_line_search import MeritLineSearch
+from .line_search import FilterLineSearch, WatchdogState
 from .ipm_state import IpmState, StepContext
 
 from .iterate_initialization import IterateInitialization
@@ -30,6 +28,7 @@ from .convergence_check import (
 )
 
 from .barrier_strategy import make_barrier_strategy
+from .barrier_strategy import MonotoneBarrierStrategy, HeuristicBarrierStrategy
 from .newton_direction import NewtonDirection
 from .optimality_scaling import OptimalityScaling
 from .bound_safeguards import BoundSafeguards
@@ -40,24 +39,31 @@ from .newton_diagnostics import NewtonDiagnostics
 from .post_optimization import PostOptimization
 
 from .solvers import (
+    InertiaCorrector,
+    InertiaCorrectorNew,
     AmigoSolver,
     DirectPetscSolver,
     DirectScipySolver,
     MumpsSolver,
     PardisoSolver,
+    MumpsSolverNew,
+    AmigoSolverNew,
 )
 
-from .inertia_correction import InertiaCorrector
+# from .inertia_correction import InertiaCorrector
 
 
 import warnings
+
+from .line_search import Filter, FilterLineSearchNew
 
 from .multiplier_initialization import MultiplierInitializer
 from .iterate_initialization import SlackInitializer
 from .iteration_logger import OptimizationLogger
 from .ipm_state import InteriorPointState, Evaluator
-from .inertia_correction import InertiaCorrectorNew, AmigoSolverNew
-from .filter_line_search import FilterLineSearchNew, LineSearchInfo
+
+# from .inertia_correction import InertiaCorrectorNew, AmigoSolverNew, MumpsSolverNew
+# from .filter_line_search import FilterLineSearchNew, LineSearchInfo
 
 
 class OptimizerOld(
@@ -67,7 +73,7 @@ class OptimizerOld(
     OptimalityScaling,
     BoundSafeguards,
     MultiplierInitialization,
-    MeritLineSearch,
+    # MeritLineSearch,
     FilterLineSearch,
     FeasibilityRestoration,
     IterationLogger,
@@ -607,44 +613,6 @@ class OptimizerOld(
         return opt_data
 
 
-class BarrierInfo:
-    new_barrier: bool = False
-    mu_new: float = 0.0
-    mu_old: float = 0.0
-
-
-class BarrierStrategy:
-    def __init__(self, options, problem, optimizer):
-        self.options = options
-        self.problem = problem
-        self.optimizer = optimizer
-
-    def update_barrier(self, state):
-        return self._monotone_barrier_update(state)
-
-    def _monotone_barrier_update(self, state):
-        info = BarrierInfo
-
-        opt_tol = self.options["convergence_tolerance"]
-        relative_tol = self.options["barrier_progress_tol"]
-        frac = self.options["monotone_barrier_fraction"]
-
-        if state.residual_norm < relative_tol * state.mu:
-            mu_new = max(state.mu * frac, frac * opt_tol)
-
-            info.new_barrier = True
-            info.mu_old = state.mu
-            info.mu_new = mu_new
-
-            # Update the barrier parameter. Invalidate the residuals and the step
-            # (if any) because the barrier has changed
-            state.mu = mu_new
-            state.residual_current = False
-            state.step_current = False
-
-        return info
-
-
 class NewtonStep:
     def __init__(self, options, problem, optimizer):
         self.options = options
@@ -741,8 +709,8 @@ class Optimizer:
         model=None,
         x=None,
         problem=None,
-        solver=None,
         comm=None,
+        **kwargs,
     ):
         """Initialize the optimizer.
 
@@ -882,7 +850,10 @@ class Optimizer:
         state = InteriorPointState(self.x, options, self.problem, self.optimizer)
 
         # TODO: make this selection dependent on the options
-        solver = AmigoSolverNew(options, state)
+        if "solver" in options and options["solver"] == "mumps":
+            solver = MumpsSolverNew(options, state)
+        else:
+            solver = AmigoSolverNew(options, state)
 
         # Initialize the line search filter algorithm
         # line_search = BacktrackLineSearch(options, self.problem, self.optimizer)
@@ -895,7 +866,9 @@ class Optimizer:
         # feasibility_restore =
 
         # Initialize the barrier strategy correction algorithm
-        barrier_strategy = BarrierStrategy(options, self.problem, self.optimizer)
+        barrier_strategy = HeuristicBarrierStrategy(
+            options, self.problem, self.optimizer
+        )
 
         # The inertia correction
         inertia_corrector = InertiaCorrectorNew(options, self.problem, self.optimizer)
@@ -920,6 +893,9 @@ class Optimizer:
         # Set the initial status
         status = CONTINUE
 
+        # Initialize the barrier strategy prior to optimization
+        barrier_strategy.initialize(evaluator, state)
+
         max_iters = options["max_iterations"]
         for counter in range(max_iters):
             # Update the iteration counter
@@ -942,12 +918,12 @@ class Optimizer:
             if status == CONVERGED:
                 break
 
-            # Perform an update of the barrier parameter.
-            barrier_info = barrier_strategy.update_barrier(state)
-
             # Callback for the continuation control.
             if continuation_control is not None:
                 continuation_control(counter, state.residual_norm)
+
+            # Perform an update of the barrier parameter prior to any factorization or step
+            barrier_info = barrier_strategy.update_barrier(evaluator, state)
 
             # If the barrier parameter is new, as indicated by the barrier info class, then
             # reset the line search algorithm accordingly
@@ -964,8 +940,15 @@ class Optimizer:
                 # because of the inertia check
                 newton_step.compute_step(solver, evaluator, state)
 
+                # Using the same factorization and solver, assess whether a correction step is required
+                # and compute it.
+                barrier_strategy.add_step_correction(solver, evaluator, state)
+
                 # Perform a line search along the step direction
                 line_search_info = line_search.line_search(solver, evaluator, state)
+
+                # Assess what happened after the line search
+                barrier_strategy.update_line_search_info(line_search_info)
 
                 if line_search_info.success:
                     do_feas_resto = False

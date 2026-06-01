@@ -76,11 +76,20 @@ class Diagnostics:
     _MAX_VIOLATIONS_SHOWN: int = 5
     _MAX_INFEASIBILITY = 1.0
 
-    def __init__(self, model, x, lower=None, upper=None):
+    def __init__(self, model, x=None, lower=None, upper=None):
         self.model = model
-        self.x = x
-        self.lower = lower
-        self.upper = upper
+        if x is None:
+            self.x = model.get_initial_point()
+        else:
+            self.x = x
+        if lower is None:
+            self.lower = model.get_lower()
+        else:
+            self.lower = lower
+        if upper is None:
+            self.upper = model.get_upper()
+        else:
+            self.upper = model.get_upper()
         self._idx_to_name: dict[int, str] = self._build_idx_map()
 
     # ── public API ────────────────────────────────────────────────────────────

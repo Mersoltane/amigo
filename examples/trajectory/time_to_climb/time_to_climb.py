@@ -25,7 +25,8 @@ class TrapezoidRule(am.Component):
     def __init__(self):
         super().__init__()
 
-        self.add_input("tf")  # Final time (back as design variable)
+        # Final time (back as design variable)
+        self.add_input("tf", lower=1.0, upper=am.inf)
         self.add_input("q1")
         self.add_input("q2")
         self.add_input("q1dot")
@@ -303,18 +304,30 @@ model.link("obj.tf[0]", f"trap.tf[:]")
 model.link("ac.q[0, :]", "ic.q[0, :]")
 model.link(f"ac.q[{num_time_steps}, :]", "fc.q[0, :]")
 
+# State bounds for the flight path angle
+model.set_meta("lower", "ac.q[:, 1]", -90.0)
+model.set_meta("upper", "ac.q[:, 1]", 90.0)
+
+# State bounds for the altitude
+model.set_meta("lower", "ac.q[:, 2]", 0.0)
+model.set_meta("upper", "ac.q[:, 2]", 25.0)
+
+# Set the anlge of attack between an lower and an upper bound
+model.set_meta("lower", "bspline.control_points.x", -25.0)
+model.set_meta("upper", "bspline.control_points.x", 25.0)
+
 # Build the module if requested
 if args.build:
     model.build_module()
 
 # Initialize the model
-model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
+model.initialize()
 
 print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
 
 # Create the design vector
-x = model.create_vector()
+x = model.get_initial_point()
 
 # Default to zero design variable values
 x[:] = 0.0
@@ -336,41 +349,10 @@ x["ac.q[:, 4]"] = 19.03 - 0.2 * t_guess / tf_guess  # mass decrease
 # Set initial guess for control (constant small angle)
 x["ac.alpha"] = 1.0
 
-# Set up bounds
-lower = model.create_vector()
-upper = model.create_vector()
-
-# Final time bounds
-lower["obj.tf"] = 1.0
-upper["obj.tf"] = float("inf")
-
-# Control bounds (matching original -5 to 5 degrees)
-lower["ac.alpha"] = -float("inf")
-upper["ac.alpha"] = float("inf")
-
-# Unconstrain the state bounds by default
-lower["ac.q"] = -float("inf")
-upper["ac.q"] = float("inf")
-
-lower["ac.qdot"] = -float("inf")
-upper["ac.qdot"] = float("inf")
-
-# State bounds for the flight path angle
-lower["ac.q[:, 1]"] = -90.0
-upper["ac.q[:, 1]"] = 90.0
-
-# State bounds for the altitude
-lower["ac.q[:, 2]"] = 0.0
-upper["ac.q[:, 2]"] = 25.0
-
-# Set the anlge of attack between an lower and an upper bound
-lower["bspline.control_points.x"] = -25.0
-upper["bspline.control_points.x"] = 25.0
-
-am.Diagnostics(model, x, lower, upper).run()
+am.Diagnostics(model).run()
 
 # Optimize
-opt = am.Optimizer(model, x, lower=lower, upper=upper, solver="mumps")
+opt = am.Optimizer(model, x, solver="mumps")
 data = opt.optimize(
     {
         "initial_barrier_param": 1.0,

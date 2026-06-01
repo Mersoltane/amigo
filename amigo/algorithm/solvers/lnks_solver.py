@@ -130,7 +130,6 @@ class LNKSInexactSolver(LinearSolver):
         self.design_indices = np.sort(np.setdiff1d(np.arange(upper), all_states))
 
     def factor(self, alpha, x, diag):
-
         # Compute the Hessian
         self.problem.hessian(alpha, x, self.hess)
         self.problem.add_diagonal(diag, self.hess)

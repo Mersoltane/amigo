@@ -34,8 +34,6 @@ Module map, grouped by concern:
 """
 
 from .ipm_driver import Optimizer, OptimizerOld
-from .inertia_correction import InertiaCorrector
-from .filter_acceptance import Filter
 from .default_options import get_default_options
 
 from .solvers import (

@@ -171,6 +171,18 @@ def create_cannon_model(module_name="cannon"):
 
     model.link("cannon.q[0,:]", "obj.q[0,:]")  # pass (vx0, vy0)
 
+    # Position bounds
+    model.set_meta("lower", "cannon.q[:,0]", -10)  # x position
+    model.set_meta("upper", "cannon.q[:,0]", 50)
+    model.set_meta("lower", "cannon.q[:,1]", -50)  # y position
+    model.set_meta("upper", "cannon.q[:,1]", 50)
+
+    # Velocity bounds
+    model.set_meta("lower", "cannon.q[:,2]", -50)  # vx bounds
+    model.set_meta("upper", "cannon.q[:,2]", 50)
+    model.set_meta("lower", "cannon.q[:,3]", -50)  # vy bounds
+    model.set_meta("upper", "cannon.q[:,3]", 50)
+
     return model
 
 
@@ -350,7 +362,7 @@ print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
 
 # Get the design variables
-x = model.create_vector()
+x = model.get_initial_point()
 x[:] = 0.0
 
 # Set the initial conditions based on the variables
@@ -378,42 +390,16 @@ x["cannon.q[:,1]"] = y0
 x["cannon.q[:,2]"] = vx0
 x["cannon.q[:,3]"] = vy0
 
-# Set Bounds
-lower = model.create_vector()
-upper = model.create_vector()
-
-# Position bounds
-lower["cannon.q[:,0]"] = -10  # x position
-upper["cannon.q[:,0]"] = 50
-lower["cannon.q[:,1]"] = -50  # y position
-upper["cannon.q[:,1]"] = 50
-
-# Velocity bounds
-lower["cannon.q[:,2]"] = -50  # vx bounds
-upper["cannon.q[:,2]"] = 50
-lower["cannon.q[:,3]"] = -50  # vy bounds
-upper["cannon.q[:,3]"] = 50
-
-# Set the qdot values
-lower["cannon.qdot"] = -float("inf")
-upper["cannon.qdot"] = float("inf")
-
 # Optimization with trajectory recording
-# opt = am.Optimizer(model, x, lower=lower, upper=upper)
-# try:
-#     # Record intermediate trajectories
-#     opt_options = {"max_iterations": 100, "record_components": ["cannon.q"]}
-#     data = opt.optimize(opt_options)
-#     print("Optimization completed successfully!")
-# except Exception as e:
-#     print(f"Optimization failed with error: {e}")
-#     if np.any(np.isnan(x[:])):
-#         print("NaN values detected in solution vector!")
-#     raise
+opt = am.Optimizer(model)
 
-# # Save optimization data
-# with open("cannon_opt_data.json", "w") as fp:
-#     json.dump(data, fp, indent=2)
+# Record intermediate trajectories
+opt_options = {"max_iterations": 100, "record_components": ["cannon.q"]}
+data = opt.optimize(opt_options)
+
+# Save optimization data
+with open("cannon_opt_data.json", "w") as fp:
+    json.dump(data, fp, indent=2)
 
 # # Extract trajectory history from optimization data
 # trajectory_history = []
