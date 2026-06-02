@@ -415,25 +415,25 @@ with open("race_car_lap.json", "w") as fp:
 
 # Optimize
 x = model.create_vector()
-opt = am.Optimizer(model, x=x, solver=args.solver)
-# opt = am.OptimizerOld(model, x=x, solver=args.solver)
 
-opt_data = opt.optimize(
-    {
-        "initial_barrier_param": 1.0,
-        "max_iterations": 200,
-        "max_line_search_iterations": 30,
-        "convergence_tolerance": 1e-8,
-        "init_least_squares_multipliers": True,
-        "barrier_strategy": "monotone",
-        "quality_function_predictor_corrector": False,
-        "quality_function_balancing_term": "cubic",
-        "adaptive_mu_safeguard_factor": 1e-1,
-        "filter_line_search": True,
-        "second_order_correction": False,
-        "verbose_barrier": False,
-    }
-)
+options = {
+    "solver": "amigo",
+    "initial_barrier_param": 1.0,
+    "max_iterations": 200,
+    "max_line_search_iterations": 30,
+    "convergence_tolerance": 1e-8,
+    "init_least_squares_multipliers": True,
+    "barrier_strategy": "heuristic",
+    "quality_function_predictor_corrector": True,
+    "quality_function_balancing_term": "cubic",
+    "adaptive_mu_safeguard_factor": 1e-1,
+    "filter_line_search": True,
+    "second_order_correction": False,
+    "verbose_barrier": False,
+}
+
+opt = am.Optimizer(model, x=x)
+opt_data = opt.optimize(options)
 
 # Results
 print(f"\nConverged: {opt_data['converged']}")

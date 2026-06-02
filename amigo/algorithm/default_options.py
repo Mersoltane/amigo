@@ -37,6 +37,8 @@ def get_default_options(options={}):
         "equal_primal_dual_step": False,
         "init_least_squares_multipliers": True,
         "init_affine_step_multipliers": False,
+        # Solver options
+        "solver": "amigo",
         # Heuristic barrier parameter options
         "heuristic_barrier_gamma": 0.1,
         "heuristic_barrier_r": 0.95,
@@ -55,6 +57,7 @@ def get_default_options(options={}):
         # Filter line search: bi-objective (theta, psi) acceptance.
         # Accepts steps improving feasibility OR merit, with feasibility
         # restoration when both fail.
+        "line_search": "filter",
         "filter_line_search": True,
         "filter_gamma_theta": 1e-5,
         "filter_gamma_phi": 1e-8,

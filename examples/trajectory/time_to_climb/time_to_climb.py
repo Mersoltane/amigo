@@ -352,7 +352,8 @@ x["ac.alpha"] = 1.0
 am.Diagnostics(model).run()
 
 # Optimize
-opt = am.Optimizer(model, x, solver="mumps")
+x = model.create_vector()
+opt = am.Optimizer(model, x)
 data = opt.optimize(
     {
         "initial_barrier_param": 1.0,

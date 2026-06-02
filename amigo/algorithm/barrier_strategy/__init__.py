@@ -6,24 +6,20 @@ Two implementations:
                               with adaptive-mu globalization
 """
 
-from .base import BarrierStrategy
-from .heuristic import HeuristicBarrier
-from .quality_function import QualityFunctionBarrier
-from .base import MonotoneBarrierStrategy, HeuristicBarrierStrategy
+from .base import BarrierStrategy, MonotoneBarrierStrategy
+from .heuristic import HeuristicBarrierStrategy
+from .quality_function import QualityFunctionBarrierStrategy
 
 
-def make_barrier_strategy(opt, options):
+def make_barrier_strategy(options, problem, optimizer):
     """Factory: pick the barrier strategy based on options."""
-    if options["barrier_strategy"] == "quality_function":
-        return QualityFunctionBarrier(opt, options)
-    return HeuristicBarrier(opt, options)
-
-
-__all__ = [
-    "BarrierStrategy",
-    "HeuristicBarrier",
-    "QualityFunctionBarrier",
-    "HeuristicBarrierStrategy",
-    "MonotoneBarrierStrategy",
-    "make_barrier_strategy",
-]
+    if isinstance(options["barrier_strategy"], BarrierStrategy):
+        return options["barrier_strategy"]
+    elif options["barrier_strategy"] == "monotone":
+        return MonotoneBarrierStrategy(options, problem, optimizer)
+    elif options["barrier_strategy"] == "heuristic":
+        return HeuristicBarrierStrategy(options, problem, optimizer)
+    elif options["barrier_strategy"] == "quality_function":
+        return QualityFunctionBarrierStrategy(options, problem, optimizer)
+    else:
+        raise ValueError(f"Unrecognized barrier_strategy {options["barrier_strategy"]}")

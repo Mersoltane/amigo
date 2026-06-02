@@ -33,15 +33,15 @@ Module map, grouped by concern:
   solvers/                       Linear solver implementations
 """
 
-from .ipm_driver import Optimizer, OptimizerOld
+from .ipm_driver import Optimizer
 from .default_options import get_default_options
 
 from .solvers import (
     AmigoSolver,
-    DirectCudaSolver,
-    LNKSInexactSolver,
+    # DirectCudaSolver,
+    # LNKSInexactSolver,
     MumpsSolver,
-    PardisoSolver,
-    DirectPetscSolver,
-    DirectScipySolver,
+    # PardisoSolver,
+    # DirectPetscSolver,
+    # DirectScipySolver,
 )

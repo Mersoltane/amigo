@@ -173,3 +173,57 @@ class MeritLineSearch:
                 return alpha, j + 1, True
 
         return alpha, max_iters, False
+
+
+class BacktrackLineSearch:
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+        self.tmp = self.optimizer.create_opt_vector()
+
+        # Store the most recent info returned from the line search
+        self.current_info = None
+
+    def reset_on_new_barrier(self, state):
+        return
+
+    def line_search(self, solver, evaluator, state):
+
+        # Evaluate the objective and barrier at the current state
+        evaluator.evaluate_objective_and_barrier(state)
+        evaluator.evaluate_infeasibility(state)
+
+        phi = state.objective_value + state.log_barrier_value
+        infeas = state.con_infeasibility
+
+        self.optimizer.apply_step_update(
+            state.max_alpha_primal,
+            state.max_alpha_dual,
+            state.current,
+            state.step,
+            self.tmp,
+        )
+        state.current.copy(self.tmp)
+
+        # Invalidate all of the gradient and line search information
+        state.invalidate()
+
+        # Build the info object
+        info = LineSearchInfo()
+        info.success = True
+        info.num_search_iters = 1
+        info.alpha_primal = state.max_alpha_primal
+        info.alpha_dual = state.max_alpha_dual
+
+        # Store the information returned for later logging
+        self.current_info = info
+
+        return info
+
+    def add_log_info(self, info):
+        if self.current_info is not None:
+            info["line_iters"] = self.current_info.num_search_iters
+            info["alpha_x"] = self.current_info.alpha_primal
+            info["alpha_z"] = self.current_info.alpha_dual
