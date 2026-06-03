@@ -22,4 +22,5 @@ def make_barrier_strategy(options, problem, optimizer):
     elif options["barrier_strategy"] == "quality_function":
         return QualityFunctionBarrierStrategy(options, problem, optimizer)
     else:
-        raise ValueError(f"Unrecognized barrier_strategy {options["barrier_strategy"]}")
+        strategy = options["barrier_strategy"]
+        raise ValueError(f"Unrecognized barrier_strategy {strategy}")

@@ -8,4 +8,5 @@ def make_line_search(options, problem, optimizer):
     elif options["line_search"] == "filter":
         return FilterLineSearch(options, problem, optimizer)
     else:
-        raise ValueError(f"Unrecognized line_search {options["line_search"]}")
+        search = options["line_search"]
+        raise ValueError(f"Unrecognized line_search {search}")

@@ -20,7 +20,8 @@ def make_solver(options, state):
     elif options["solver"] == "mumps":
         return MumpsSolver(options, state)
     else:
-        raise ValueError(f"Unrecognized solver {options["solver"]}")
+        solver = options["solver"]
+        raise ValueError(f"Unrecognized solver {solver}")
 
         # if solver is None and self.distribute:
         #     self.solver = DirectPetscSolver(self.comm, self.problem)
