@@ -440,16 +440,20 @@ class ModelVector:
             self[d["comp"]] = d["data"]
         return
 
+    def copy(self, src: Self):
+        self._x.copy(src._x)
+
 
 class MetaView:
     """This class enables meta to be set like a vector"""
 
-    def __init__(self, model, meta_name):
+    def __init__(self, model, meta_name, vtype="vars"):
         self.model = model
         self.meta_name = meta_name
+        self.vtype = vtype
 
     def __setitem__(self, key, value):
-        self.model.set_meta(self.meta_name, key, value)
+        self.model.set_meta(self.meta_name, key, value, vtype=self.vtype)
 
 
 class Model:
@@ -475,7 +479,6 @@ class Model:
         self.links = []
 
         # Staged values that are applied to the model at initialization
-        self._staged_data = []
         self._staged_fixed_vars = []
         self._staged_meta_data = []
 
@@ -640,17 +643,13 @@ class Model:
         ) in model.links:
             self.link(name + "." + src_expr, name + "." + tgt_expr, src_idx, tgt_idx)
 
-        # Add staged data
-        for data_name, data in model._staged_data:
-            self._staged_data.append((name + "." + data_name, data))
-
         # Add fixed variables
         for expr, indices in model._staged_fixed_vars:
             self._staged_fixed_vars.append((name + "." + expr, indices))
 
         # Add staged meta data
-        for meta, expr, data in model._staged_meta_data:
-            self._staged_fixed_vars.append((meta, name + "." + expr, data))
+        for vtype, meta, expr, data in model._staged_meta_data:
+            self._staged_meta_data.append((vtype, meta, name + "." + expr, data))
 
         return
 
@@ -815,7 +814,7 @@ class Model:
             d = self.problem.get_data_vector()
             d.get_array()[self.get_indices(name)] = data
         else:
-            self._staged_data.append((name, data))
+            self.set_meta("value", name, data, vtype="data")
         return
 
     def add_fixed(self, expr: str, indices: None | list | np.ndarray = None):
@@ -830,13 +829,17 @@ class Model:
         self._staged_fixed_vars.append((expr, indices))
         return
 
-    def get_meta_view(self, meta_name: str):
+    def get_meta_view(self, meta_name: str, vtype: str = "vars"):
         """
         Get a MetaView object to set the meta data like vector components
         """
-        return MetaView(self, meta_name)
+        if not vtype in ["vars", "output", "data"]:
+            raise ValueError("vtype must be in vars, output or data")
+        return MetaView(self, meta_name, vtype=vtype)
 
-    def set_meta(self, meta_name: str, name: str, data: List | np.ndarray):
+    def set_meta(
+        self, meta_name: str, name: str, data: List | np.ndarray, vtype: str = "vars"
+    ):
         """
         Set meta data into the model.
 
@@ -846,12 +849,15 @@ class Model:
             meta_name (str): Name of the meta data argument
             expr (str): Name of the data
             data (float, list, np.ndarray): Data values
+            vtype (str): Variable type, one of "vars", "output", "data"
         """
 
         if self._initialized:
             raise RuntimeError("Cannot set meta data values after initialization")
+        if not vtype in ["vars", "output", "data"]:
+            raise ValueError("vtype must be in vars, output or data")
 
-        self._staged_meta_data.append((meta_name, name, data))
+        self._staged_meta_data.append((vtype, meta_name, name, data))
 
         return
 
@@ -919,9 +925,7 @@ class Model:
         self._get_values_from_meta("value", self.get_initial_point())
         self._get_values_from_meta("lower", self.get_lower())
         self._get_values_from_meta("upper", self.get_upper())
-
-        # Now apply any staged data
-        self._apply_staged_data()
+        self._get_values_from_meta("value", self.get_data_vector(), vtype="data")
 
         return
 
@@ -1365,19 +1369,14 @@ amigo_add_python_module(
         model_data["links"] = link_data
 
         # Serialize the staged data
-        staged_data = []
-        for name, data in self._staged_data:
-            staged_data.append((name, _to_list(data)))
-        model_data["staged_data"] = staged_data
-
         fixed_vars = []
         for name, indices in self._staged_fixed_vars:
             fixed_vars.append((name, _to_list(indices)))
         model_data["fixed_vars"] = fixed_vars
 
         staged_meta = []
-        for meta_name, name, data in self._staged_meta_data:
-            staged_meta.append((meta_name, name, _to_list(data)))
+        for vtype, meta_name, name, data in self._staged_meta_data:
+            staged_meta.append((vtype, meta_name, name, _to_list(data)))
         model_data["staged_meta"] = staged_meta
 
         return model_data
@@ -1404,17 +1403,13 @@ amigo_add_python_module(
             obj.link(src[0], tgt[0], src_indices=src[1], tgt_indices=tgt[1])
 
         # Deserialize the staged information
-        staged_data = model_data["staged_data"]
-        for name, data in staged_data:
-            obj.set_data(name, data)
-
         fixed_vars = model_data["fixed_vars"]
         for name, indices in fixed_vars:
             obj.add_fixed(name, indices)
 
         staged_meta = model_data["staged_meta"]
-        for meta_name, name, data in staged_meta:
-            obj.set_meta(meta_name, name, data)
+        for vtype, meta_name, name, data in staged_meta:
+            obj.set_meta(meta_name, name, data, vtype=vtype)
 
         return obj
 
@@ -1668,29 +1663,17 @@ amigo_add_python_module(
 
         return np.nonzero(temp)[0]
 
-    def _apply_staged_data(self):
-        """Set the data that was staged"""
-        d_array = self.problem.get_data_vector().get_array()
-
-        for name, data in self._staged_data:
-            indices = self.get_indices(name)
-            d_array[indices] = data
-
-        return
-
     def _create_opt_problem(self, comm=COMM_WORLD):
         """
         Create the optimization problem object that is used to evaluate the gradient and
         Hessian of the Lagrangian.
 
-        After slack allocation, ``self.num_variables`` includes both the
-        original variables (design vars + constraint multipliers) and the
-        newly appended slack variables.  Slacks are marked as primal
-        (``is_multiplier = 0``) so that the C++ InteriorPointOptimizer
-        treats them as bounded design variables.  The original inequality
-        constraint rows remain marked as multipliers but their bounds will
-        be converted to equalities (``lb = ub = 0``) in the Optimizer,
-        reflecting the reformulation ``c(x) - s = 0``.
+        After slack allocation, ``self.num_variables`` includes both the original variables
+        (design vars + constraint multipliers) and the newly appended slack variables.
+        Slacks are marked as primal so that the C++ InteriorPointOptimizer treats them as
+        bounded design variables. The original inequality constraint rows remain marked as
+        multipliers but their bounds will be converted to equalities (``lb = ub = 0``) in
+        the Optimizer, reflecting the reformulation ``c(x) - s = 0``.
         """
 
         if not self._initialized:
@@ -1801,11 +1784,12 @@ amigo_add_python_module(
                     upper[comp.vars[var_name]] = meta["upper"]
 
         # Get any staged meta data
-        for meta_name, name, data in self._staged_meta_data:
-            if "lower" == meta_name:
-                lower[self.get_indices(name)] = data
-            if "upper" == meta_name:
-                upper[self.get_indices(name)] = data
+        for vtype, meta_name, name, data in self._staged_meta_data:
+            if vtype == "vars":
+                if "lower" == meta_name:
+                    lower[self.get_indices(name)] = data
+                if "upper" == meta_name:
+                    upper[self.get_indices(name)] = data
 
         # Find those constraints corresponding to inequalities
         mask = lower[con_indices] < upper[con_indices]
@@ -1892,7 +1876,10 @@ amigo_add_python_module(
             )
 
     def _get_values_from_meta(
-        self, meta_name: str, x: ModelVector | np.ndarray | None = None
+        self,
+        meta_name: str,
+        x: ModelVector | np.ndarray | None = None,
+        vtype: str = "vars",
     ):
         """
         Return a vector with meta data values for all variables including slacks.
@@ -1914,31 +1901,49 @@ amigo_add_python_module(
             raise RuntimeError("Must call initialize before get_values_from_meta")
 
         if x is None:
-            x = self.create_vector()
+            if vtype == "vars":
+                x = self.create_vector()
+            elif vtype == "data":
+                x = self.create_data_vector()
+            elif vtype == "output":
+                x = self.create_output_vector()
 
         # Set the entire vector to the default meta value
         x[:] = Meta.get_default_value(meta_name)
 
         # Modify the default values for all constraints so that they
         # default to equalitie constraints
-        if meta_name in ("lower", "upper"):
+        if vtype == "vars" and meta_name in ("lower", "upper"):
             x[self.constraint_indices] = 0.0
 
         # Get the meta data from values set in the components
         for comp_name, comp in self.comp.items():
-            for var_name in comp.vars:
-                name = comp_name + "." + var_name
-                meta = self.get_meta(name)
-                if meta.is_value_set(meta_name):
-                    x[comp.vars[var_name]] = meta[meta_name]
+            if vtype == "vars":
+                for var_name in comp.vars:
+                    name = comp_name + "." + var_name
+                    meta = self.get_meta(name)
+                    if meta.is_value_set(meta_name):
+                        x[comp.vars[var_name]] = meta[meta_name]
+            elif vtype == "data":
+                for var_name in comp.data:
+                    name = comp_name + "." + var_name
+                    meta = self.get_meta(name)
+                    if meta.is_value_set(meta_name):
+                        x[comp.data[var_name]] = meta[meta_name]
+            elif vtype == "output":
+                for var_name in comp.outputs:
+                    name = comp_name + "." + var_name
+                    meta = self.get_meta(name)
+                    if meta.is_value_set(meta_name):
+                        x[comp.outputs[var_name]] = meta[meta_name]
 
         # Get any staged meta data
-        for meta_name_, name, data in self._staged_meta_data:
-            if meta_name == meta_name_:
+        for vtype_, meta_name_, name, data in self._staged_meta_data:
+            if vtype == vtype_ and meta_name == meta_name_:
                 x[self.get_indices(name)] = data
 
         # Deal with the slack variables
-        if meta_name in ("lower", "upper"):
+        if vtype == "vars" and meta_name in ("lower", "upper"):
             # Set bounds for the inequality constraints
             x[self.ineq_constraint_indices] = 0.0
 
