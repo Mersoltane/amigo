@@ -25,10 +25,10 @@ class Quadratic(am.Component):
     def __init__(self):
         super().__init__()
 
-        self.add_input("x1")
-        self.add_input("x2")
-        self.add_data("a", value=1.0, lower=-float("inf"), upper=float("inf"))
-        self.add_data("b", value=1.0, lower=-float("inf"), upper=float("inf"))
+        self.add_input("x1", lower=-10.0, upper=10.0)
+        self.add_input("x2", lower=-10.0, upper=10.0)
+        self.add_data("a", value=1.0, lower=-am.inf, upper=am.inf)
+        self.add_data("b", value=1.0, lower=-am.inf, upper=am.inf)
         self.add_objective("obj")
         self.add_output("f")
 
@@ -55,10 +55,6 @@ model.build_module()
 model.initialize()
 
 x = model.create_vector()
-lower = model.create_vector()
-upper = model.create_vector()
-lower[:] = -10.0
-upper[:] = 10.0
 
 prob = om.Problem()
 
@@ -75,8 +71,6 @@ prob.model.add_subsystem(
         output_mapping={"quad.f": "f"},
         model=model,
         x=x,
-        lower=lower,
-        upper=upper,
     ),
 )
 

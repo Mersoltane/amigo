@@ -1,18 +1,9 @@
 import argparse
 import json
-from pathlib import Path
 import amigo as am
 import numpy as np
 import cart_plots
 import matplotlib.pylab as plt
-
-try:
-    from mpi4py import MPI
-
-    COMM_WORLD = MPI.COMM_WORLD
-except:
-    COMM_WORLD = None
-
 
 final_time = 2.0
 
@@ -212,16 +203,13 @@ def create_cart_model(module_name="cart_pole", final_time=2.0, num_time_steps=10
     # Link the outputs
     model.link("kin.ke[1:]", "kin.ke[0]")
 
-    # Set the initial point data
-    model.set_meta("value", "cart.q[:, 0]", np.linspace(0, 2.0, num_time_steps + 1))
-    model.set_meta("value", "cart.q[:, 1]", np.linspace(0, np.pi, num_time_steps + 1))
-    model.set_meta("value", "cart.q[:, 2]", 1.0)
-    model.set_meta("value", "cart.q[:, 3]", 1.0)
-
-    # Set the data
-    model.set_data("cart.L", 0.5)
-    model.set_data("cart.m1", 1.0)
-    model.set_data("cart.m2", 0.3)
+    # Set the initial point by using a view of the initial values. This view acts
+    # like a vector, but sets the values into the staged model
+    x = model.get_meta_view("value")
+    x["cart.q[:, 0]"] = np.linspace(0, 2.0, num_time_steps + 1)
+    x["cart.q[:, 1]"] = np.linspace(0, np.pi, num_time_steps + 1)
+    x["cart.q[:, 2]"] = 1.0
+    x["cart.q[:, 3]"] = 1.0
 
     return model
 
@@ -236,27 +224,6 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Show the sparsity pattern",
-)
-parser.add_argument(
-    "--show-graph",
-    dest="show_graph",
-    action="store_true",
-    default=False,
-    help="Show the graph",
-)
-parser.add_argument(
-    "--graph-timestep",
-    dest="graph_timestep",
-    type=str,
-    default=None,
-    help="Show graph for timesteps. Can be a single int (e.g., 0) or a list (e.g., '[0,5,6]')",
-)
-parser.add_argument(
-    "--distribute",
-    dest="distribute",
-    action="store_true",
-    default=False,
-    help="Distribute the problem",
 )
 parser.add_argument(
     "--num-time-steps",
@@ -287,21 +254,13 @@ model = create_cart_model(num_time_steps=args.num_time_steps)
 if args.build:
     model.build_module()
 
-comm = COMM_WORLD
-model.initialize(comm=comm)
+model.initialize()
 
-comm_rank = 0
-distribute = False
-if comm is not None:
-    comm_rank = comm.rank
-    if comm.size > 1:
-        distribute = True
-
-if comm_rank == 0:
-    print(f"Num variables:              {model.num_variables}")
-    print(f"Num constraints:            {model.num_constraints}")
+print(f"Num variables:              {model.num_variables}")
+print(f"Num constraints:            {model.num_constraints}")
 
 opt_options = {
+    "solver": args.solver,
     "initial_barrier_param": 0.1,
     "convergence_tolerance": 5e-7,
     "max_line_search_iterations": 30,
@@ -309,26 +268,25 @@ opt_options = {
     "filter_line_search": True,
 }
 
-for opt_iter in range(4):
-    # Get the design variables
-    x = model.create_vector()
+# Get the design variables
+x = model.create_vector()
 
-    # Serialize the model (requires serialize method)
-    if opt_iter == 0:
-        with open("cart_pole_model.json", "w") as fp:
-            json.dump(model.serialize(), fp, indent=2)
+# Serialize the entire model
+with open("cart_pole_model.json", "w") as fp:
+    json.dump(model.serialize(), fp, indent=2)
 
-    # Set up the optimizer
-    opt = am.Optimizer(model, x=x, solver=args.solver)
+# Set up the optimizer
+opt = am.Optimizer(model, x=x)
 
-    # Optimize
-    opt_data = opt.optimize(opt_options)
+# Optimize
+opt_data = opt.optimize(opt_options)
 
-    opt_data["num_time_steps"] = args.num_time_steps
-    opt_data["num_variables"] = model.num_variables
-    opt_data["num_constraints"] = model.num_constraints
+opt_data["num_time_steps"] = args.num_time_steps
+opt_data["num_variables"] = model.num_variables
+opt_data["num_constraints"] = model.num_constraints
 
-# Copy the solution from the device to host
+# Copy the solution from the device to host if we've been
+# running the model on the GPU
 x.copy_device_to_host()
 
 # Print objective value
@@ -343,74 +301,24 @@ print("Objective value: ", obj_value)
 with open(args.opt_filename, "w") as fp:
     json.dump(opt_data, fp, indent=2)
 
+d = x["cart.q[:, 0]"]
+theta = x["cart.q[:, 1]"]
+xctrl = x["cart.x"]
 
-if comm_rank == 0:
-    d = x["cart.q[:, 0]"]
-    theta = x["cart.q[:, 1]"]
-    xctrl = x["cart.x"]
+norms = []
+for iter_data in opt_data["iterations"]:
+    norms.append(iter_data["residual"])
 
-    norms = []
-    for iter_data in opt_data["iterations"]:
-        norms.append(iter_data["residual"])
+cart_plots.plot_solution(d, theta, xctrl, num_time_steps=args.num_time_steps)
+cart_plots.plot_convergence(norms)
+cart_plots.visualize(d, theta)
 
-    cart_plots.plot_solution(d, theta, xctrl, num_time_steps=args.num_time_steps)
-    cart_plots.plot_convergence(norms)
-    cart_plots.visualize(d, theta)
+# Generate documentation-style plots
+cart_plots.plot_for_documentation(x, final_time, args.num_time_steps)
 
-    # Generate documentation-style plots
-    cart_plots.plot_for_documentation(x, final_time, args.num_time_steps)
-
-    if args.show_sparsity:
-        H = am.tocsr(opt.solver.hess)
-        plt.figure(figsize=(6, 6))
-        plt.spy(H, markersize=0.2)
-        plt.title("Sparsity pattern of matrix A")
-        plt.show()
-
-    if args.show_graph:
-        from pyvis.network import Network
-
-        # Parse timestep argument - can be None, single int, or list
-        t = args.graph_timestep
-        if t is not None:
-            if t.startswith("[") and t.endswith("]"):
-                # Parse list format like "[0,5,6]"
-                import ast
-
-                try:
-                    t = ast.literal_eval(t)
-                except (ValueError, SyntaxError):
-                    print(
-                        f"Warning: Could not parse timestep list '{t}', using all timesteps"
-                    )
-                    t = None
-            else:
-                # Try to parse as single integer
-                try:
-                    t = int(t)
-                except ValueError:
-                    print(
-                        f"Warning: Could not parse timestep '{t}', using all timesteps"
-                    )
-                    t = None
-
-        graph = model.create_graph(timestep=t)
-        net = Network(
-            notebook=True,
-            height="1000px",
-            width="100%",
-            bgcolor="#ffffff",
-            font_color="black",
-        )
-
-        net.from_nx(graph)
-        # net.show_buttons(filter_=["physics"])
-        # net.set_options("""
-        #     var options = {
-        #     "interaction": {
-        #         "dragNodes": false
-        #     }
-        #     }
-        #     """)
-
-        net.show("cart_pole_graph.html")
+if args.show_sparsity:
+    H = am.tocsr(opt.solver.hess)
+    plt.figure(figsize=(6, 6))
+    plt.spy(H, markersize=0.2)
+    plt.title("Sparsity pattern of matrix A")
+    plt.show()

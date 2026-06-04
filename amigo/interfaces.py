@@ -143,8 +143,6 @@ def ExplicitOpenMDAOPostOptComponent(**kwargs):
             self.options.declare("output_mapping", types=dict)
             self.options.declare("model", types=Model)
             self.options.declare("x", types=ModelVector)
-            self.options.declare("lower", types=ModelVector)
-            self.options.declare("upper", types=ModelVector)
             self.options.declare("opt_options", default={}, types=dict)
 
         def setup(self):
@@ -154,18 +152,19 @@ def ExplicitOpenMDAOPostOptComponent(**kwargs):
             self.output_mapping = self.options["output_mapping"]
             self.model = self.options["model"]
             self.x = self.options["x"]
-            self.lower = self.options["lower"]
-            self.upper = self.options["upper"]
             self.opt_options = self.options["opt_options"]
 
-            self.opt = Optimizer(self.model, self.x, lower=self.lower, upper=self.upper)
+            self.opt = Optimizer(self.model, self.x)
 
             for name in self.data:
                 indices = self.model.get_indices(name)
-                meta = self.model.get_meta(name)
                 om_name = self.data_mapping[name]
+                meta = self.model.get_meta(name)
                 # Use Amigo metadata default value
-                default_val = np.full(indices.shape, meta["value"])
+                value = 0.0
+                if meta.is_value_set("value"):
+                    value = meta["value"]
+                default_val = np.full(indices.shape, value)
                 self.add_input(om_name, shape=indices.shape, val=default_val)
 
             for name in self.output:

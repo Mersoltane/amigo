@@ -3,16 +3,11 @@ import numpy as np
 import argparse
 from scipy.sparse.linalg import spsolve
 import matplotlib.pylab as plt
-import matplotlib.tri as tri
-import json
 import openmdao.api as om
 
 
 def original_om_problem():
     from openmdao.test_suite.test_examples.beam_optimization.beam_group import BeamGroup
-
-    # import openmdao.api as om
-    # import matplotlib.pyplot as plt
 
     E = 1.0
     L = 1.0
@@ -34,16 +29,12 @@ def original_om_problem():
     prob.run_model()
     totals_obj = prob.check_totals(of="compliance_comp.compliance", wrt="h")
     totals_con = prob.check_totals(of="volume_comp.volume", wrt="h")
-    # exit()
     prob.run_driver()
 
     print(prob["h"])
     h_target = prob["h"]
     displacements = prob["compliance_comp.displacements"]
-    # plt.plot(prob['h'])
-    # print(np.allclose(h_results, h_omexample))
-    # # plt.gca().invert_xaxis()  # if needed to match OpenMDAO’s plotting convention
-    # plt.show()
+
     return h_target, displacements, totals_obj, totals_con
 
 
@@ -208,7 +199,8 @@ x_coords = np.linspace(0, length, nelems + 1)
 nodes = np.arange(nelems + 1, dtype=int)
 conn = np.array([[i, i + 1] for i in range(nelems)], dtype=int)
 
-# before buliding Amigo model, run ORIGINAL OpenMDAO example and extract optimal h to compare to amigo fem
+# before buliding Amigo model, run ORIGINAL OpenMDAO example and
+# extract optimal h to compare to amigo fem
 om_h, om_v, om_totals_obj, om_totals_con = original_om_problem()
 om_c_wrt_h = om_totals_obj["compliance_comp.compliance", "h"]["J_rev"]
 om_con_wrt_h = om_totals_con["volume_comp.volume", "h"]["J_rev"]
@@ -255,20 +247,8 @@ if args.build:
 
 model.initialize()
 
-# Create displacement vector and provide initial guess
+# Create displacement vector
 x = model.create_vector()
-lower = model.create_vector()
-upper = model.create_vector()
-
-# Initial guess (start from zero displacements)
-x[:] = 0.0
-
-# Set bounds on displacements
-lower["src.v"] = -float("inf")
-upper["src.v"] = float("inf")
-
-lower["src.t"] = -float("inf")
-upper["src.t"] = float("inf")
 
 # OpenMDAO optimization
 prob = om.Problem()
@@ -282,12 +262,11 @@ indeps = prob.model.add_subsystem("indeps", om.IndepVarComp())
 # set as uniform value
 indeps.add_output("h", shape=nelems, val=0.1)
 
-
 # (Amigo) potential energy optimization parameters
 opt_options = {
     "max_iterations": 500,
-    "convergence_tolerance": 1e-8,
-    "max_line_search_iterations": 1,
+    "barrier_strategy": "heuristic",
+    "convergence_tolerance": 1e-5,
     "initial_barrier_param": 0.1,
 }
 
@@ -301,8 +280,6 @@ prob.model.add_subsystem(
         output_mapping={"comp.c": "c", "vol_con.con[0]": "con"},
         model=model,
         x=x,
-        lower=lower,
-        upper=upper,
         opt_options=opt_options,
     ),
 )

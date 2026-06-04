@@ -6,7 +6,8 @@ Two implementations:
                               with adaptive-mu globalization
 """
 
-from .base import BarrierStrategy, MonotoneBarrierStrategy
+from .base import BarrierStrategy
+from .monotone import MonotoneBarrierStrategy
 from .heuristic import HeuristicBarrierStrategy
 from .quality_function import QualityFunctionBarrierStrategy
 

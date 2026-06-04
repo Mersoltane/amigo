@@ -243,7 +243,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--build", action="store_true", default=False)
 args = parser.parse_args()
 
-mesh = Mesh("cylinder_coarse.inp")
+mesh = Mesh("cylinder.inp")
 domains = mesh.get_domains()
 
 lateral_surfaces = ["SURFACE1"]
@@ -317,6 +317,12 @@ from scipy.sparse import diags
 K = K + diags(np.where(np.abs(diag) < 1e-10, 1.0, 0.0))
 
 x.get_vector().get_array()[:] = spsolve(K, g.get_vector().get_array())
+
+# ldl = am.SparseLDL(mat, am.SolverType.LDL, ustab=0.05)
+# flag = ldl.factor()
+
+# x.copy(g)
+# ldl.solve(x.get_vector())
 
 u = x["soln.u"]
 v = x["soln.v"]
