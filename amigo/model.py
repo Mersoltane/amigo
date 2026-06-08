@@ -2,6 +2,7 @@ import numpy as np
 import os
 import ast
 import sys
+import sysconfig
 import importlib
 import subprocess
 from pathlib import Path
@@ -1279,6 +1280,9 @@ amigo_add_python_module(
         # Locate the installed Amigo CMake package inside the Python package
         amigo_cmake_dir = get_cmake_dir()
 
+        # Python include directory
+        python_include_dir = sysconfig.get_path('include')
+
         # Cmake command
         cmake_cmd = [
             "cmake",
@@ -1288,6 +1292,7 @@ amigo_add_python_module(
             str(build_dir),
             f"-DCMAKE_PREFIX_PATH={amigo_cmake_dir}",
             f"-DPython3_EXECUTABLE={sys.executable}",
+            f"-DPython3_INCLUDE_DIR={python_include_dir}",
             f"-Dpybind11_DIR={cmake_pybind11_dir}",
             f"-DCMAKE_BUILD_TYPE={build_type}",
         ]

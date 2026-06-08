@@ -76,7 +76,7 @@ class Optimizer:
         else:
             self.x = self.problem.create_vector()
 
-        self.x.copy(self.problem.get_initial_point())
+        self.x_init = self.problem.get_initial_point()
         self.lower = self.problem.get_lower()
         self.upper = self.problem.get_upper()
 
@@ -97,6 +97,7 @@ class Optimizer:
         """Create the C++ InteriorPointOptimizer backend and slack mapping."""
         data_vec = self.problem.get_data_vector()
         self.x.copy_host_to_device()
+        self.x_init.copy_host_to_device()
         self.lower.copy_host_to_device()
         self.upper.copy_host_to_device()
         data_vec.copy_host_to_device()
@@ -168,7 +169,7 @@ class Optimizer:
         logger = OptimizationLogger(objs, options, self.problem, self.optimizer)
 
         # Set the initial point
-        self.x.copy(self.problem.get_initial_point())
+        self.x.copy(self.x_init)
 
         # Initialize the dual and slack variable values. This utilizes the solver object
         # to find initial values of the dual variables.
