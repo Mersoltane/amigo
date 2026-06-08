@@ -18,6 +18,7 @@ typedef SSIZE_T ssize_t;
 #include "slack_coupling.h"
 #include "sparse_cholesky.h"
 #include "sparse_ldl.h"
+#include "vector.h"
 
 #ifdef AMIGO_USE_CUDA
 #include "cuda/csr_factor_cuda.h"

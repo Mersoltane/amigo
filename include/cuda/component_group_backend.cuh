@@ -124,9 +124,9 @@ AMIGO_KERNEL void hessian_kernel_atomic(int num_elements, T alpha,
   }
 }
 
-}  // namespace detail
-
 #endif  // __CUDACC__
+
+}  // namespace detail
 
 template <typename T, int ncomp, class Input, int ndata, class Data,
           class... Components>
@@ -302,7 +302,6 @@ class CudaGroupBackend {
 
  private:
   int* d_hess_pos;
-  // int *d_jac_pos;
 };
 
 }  // namespace amigo
