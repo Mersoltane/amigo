@@ -283,13 +283,14 @@ class Vector {
                const std::shared_ptr<Vector<T>> x) {
     int nentries = indices->get_local_size();
     const int* idx = indices->template get_array<policy>();
+    const T* x_array = x->template get_array<policy>();
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
       for (int i = 0; i < nentries; i++) {
-        array[idx[i]] += alpha * x.array[idx[i]];
+        array[idx[i]] += alpha * x_array[idx[i]];
       }
     } else {
-      backend.axpy_at(nentries, idx, alpha, x->get_device_array());
+      backend.axpy_at(nentries, idx, alpha, x_array);
     }
   }
 
