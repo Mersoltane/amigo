@@ -208,6 +208,12 @@ class FilterLineSearch(LineSearch):
         alpha_primal = state.max_alpha_primal
         alpha_dual = state.max_alpha_dual
 
+        # Bound the difference in the step lengths
+        if alpha_primal < 0.1 * alpha_dual:
+            alpha_dual = alpha_primal
+        elif alpha_dual < 0.1 * alpha_primal:
+            alpha_primal = alpha_dual
+
         # Max line search iterations
         max_line_iters = self.options["max_line_search_iterations"]
 
@@ -289,16 +295,16 @@ class FilterLineSearch(LineSearch):
 
             # TODO: Make this an option. This keeps the primal
             # and dual steps linked.
-            # alpha_new = backtrack_factor * alpha_primal
-            # if alpha_new > alpha_min:
-            #     alpha_primal = alpha_new
-            #     alpha_dual = backtrack_factor * alpha_dual
-            # else:
-            #     tau = alpha_primal / alpha_min
-            #     alpha_primal = alpha_min
-            #     alpha_dual = tau * alpha_dual
+            alpha_new = backtrack_factor * alpha_primal
+            if alpha_new > alpha_min:
+                alpha_primal = alpha_new
+                alpha_dual = backtrack_factor * alpha_dual
+            else:
+                tau = alpha_primal / alpha_min
+                alpha_primal = alpha_min
+                alpha_dual = tau * alpha_dual
 
-            alpha_primal = max(backtrack_factor * alpha_primal, alpha_min)
+            # alpha_primal = max(backtrack_factor * alpha_primal, alpha_min)
 
         return info
 

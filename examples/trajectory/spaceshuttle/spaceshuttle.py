@@ -117,7 +117,7 @@ class ShuttleDynamics(am.Component):
 
         # Heating constraint: q_heat <= qU
         self.add_constraint(
-            "heat_cons", lower=float("-inf"), upper=0.0, label="heating constraint"
+            "heat_cons", lower=-am.inf, upper=0.0, label="heating constraint"
         )
 
     def compute(self):
@@ -207,7 +207,7 @@ class ShuttleDynamics(am.Component):
         self.constraints["res"] = res
 
         # Heating constraint: q_heat <= qU (q_heat - qU <= 0)
-        self.constraints["heat_cons"] = q_heat - qU
+        self.constraints["heat_cons"] = 0.1 * (q_heat - qU)
 
         return
 
@@ -271,7 +271,7 @@ parser.add_argument(
     "--build", dest="build", action="store_true", default=False, help="Enable building"
 )
 parser.add_argument(
-    "--solver", dest="solver", choices=["amigo", "mumps"], default="mumps"
+    "--solver", dest="solver", choices=["amigo", "mumps"], default="amigo"
 )
 args = parser.parse_args()
 
@@ -378,17 +378,14 @@ print(f"Num constraints:            {model.num_constraints}")
 x = model.create_vector()
 
 # Create optimizer and solve
-opt = am.Optimizer(model, x, solver=args.solver)
+opt = am.Optimizer(model, x)
 data = opt.optimize(
     {
-        "initial_barrier_param": 1.0,
+        "solver": args.solver,
+        "initial_barrier_param": 0.1,
         "max_iterations": 500,
         "fraction_to_boundary": 0.995,
-        "max_line_search_iterations": 30,
         "init_least_squares_multipliers": True,
-        "acceptable_tol": 1e-7,
-        "acceptable_iter": 15,
-        "filter_line_search": True,
     }
 )
 

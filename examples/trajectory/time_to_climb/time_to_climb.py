@@ -356,6 +356,7 @@ x = model.create_vector()
 opt = am.Optimizer(model, x)
 data = opt.optimize(
     {
+        "solver": "mumps",
         "initial_barrier_param": 1.0,
         "monotone_barrier_fraction": 0.25,
         "barrier_strategy": "monotone",
