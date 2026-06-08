@@ -129,7 +129,7 @@ class Optimizer:
         options = self.get_options(options=options)
 
         # TODO: Where should this go? It should only be called one time.
-        self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
+        # self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
 
         # Continuation control object, if any
         continuation_control = options["continuation_control"]
