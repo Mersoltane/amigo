@@ -49,8 +49,7 @@ class SlackInitializer:
             # Copy the values back to the host
             x.copy_host_to_device()
 
-            # Re-initialize the sl, su and zl and zu values. These have changed because
-            # we just set the primal slack variables in x.
+            # Project the slack variables back into the feasible region
             self.optimizer.initialize_duals(state.mu, state.current)
 
             # Everything is now invalid because we updated the primal-dual point

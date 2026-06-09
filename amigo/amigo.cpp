@@ -18,6 +18,7 @@ typedef SSIZE_T ssize_t;
 #include "slack_coupling.h"
 #include "sparse_cholesky.h"
 #include "sparse_ldl.h"
+#include "vector.h"
 
 #ifdef AMIGO_USE_CUDA
 #include "cuda/csr_factor_cuda.h"
@@ -381,6 +382,10 @@ PYBIND11_MODULE(amigo, mod) {
              std::memcpy(cols.mutable_data(), mat_cols, nnz * sizeof(int));
              return py::make_tuple(nrows, ncols, nnz, rowp, cols);
            })
+      .def("duplicate", &amigo::CSRMat<double>::duplicate)
+      .def("copy", &amigo::CSRMat<double>::copy)
+      .def("add_diagonal",
+           &amigo::CSRMat<double>::template add_diagonal<detail::policy>)
       .def("get_data",
            [](py::object self) -> py::array_t<double> {
              auto& mat = self.cast<amigo::CSRMat<double>&>();
@@ -561,13 +566,15 @@ PYBIND11_MODULE(amigo, mod) {
            py::arg("alpha"), py::arg("x"))
       .def("gradient",
            &amigo::OptimizationProblem<double, detail::policy>::gradient,
-           py::arg("alpha"), py::arg("x"), py::arg("grad"))
+           py::arg("alpha"), py::arg("x"), py::arg("grad"),
+           py::arg("zero_fixed_rows") = true)
       .def("create_matrix",
            &amigo::OptimizationProblem<double, detail::policy>::create_matrix,
            py::arg("loc") = amigo::MemoryLocation::HOST_AND_DEVICE)
       .def("hessian",
            &amigo::OptimizationProblem<double, detail::policy>::hessian,
-           py::arg("alpha"), py::arg("x"), py::arg("hess"))
+           py::arg("alpha"), py::arg("x"), py::arg("hess"),
+           py::arg("zero_fixed_rows_and_columns") = true)
       .def("scatter_vector",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::scatter_vector<double>,
@@ -720,7 +727,12 @@ PYBIND11_MODULE(amigo, mod) {
       .def(py::init<std::shared_ptr<amigo::CSRMat<double>>, double>(),
            py::arg("mat"), py::arg("pivot_tol") = 1e-12)
       .def("factor", &amigo::CSRMatFactorCuda::factor)
-      .def("solve", &amigo::CSRMatFactorCuda::solve);
+      .def("solve", &amigo::CSRMatFactorCuda::solve)
+      .def("get_inertia", [](amigo::CSRMatFactorCuda& self) {
+        int npos = 0, nneg = 0;
+        self.get_inertia(&npos, &nneg);
+        return py::make_tuple(npos, nneg);
+      });
 #endif
 
   py::class_<amigo::OptVector<double>,

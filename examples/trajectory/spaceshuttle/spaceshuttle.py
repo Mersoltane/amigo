@@ -174,7 +174,9 @@ class ShuttleDynamics(am.Component):
         g = mu / r**2
 
         # Heating rate calculation
-        q_alpha = c0 + c1 * conv * alpha + c2 * conv * alpha**2 + c3 * conv * alpha**3
+        # q_alpha = c0 + c1 * conv * alpha + c2 * conv * alpha**2 + c3 * conv * alpha**3
+        alpha_deg = conv * alpha
+        q_alpha = c0 + alpha_deg * (c1 + alpha_deg * (c2 + alpha_deg * c3))
         q_r = 17700 * am.sqrt(rho) * (0.0001 * v) ** 3.07
         q_heat = q_r * q_alpha
 
