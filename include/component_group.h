@@ -111,17 +111,17 @@ class SerialGroupBackend {
                                   Vector<T>& res) const {
     if constexpr (ncomp > 0) {
       int num_elems = layout.get_num_elements();
-      for (int i = 0; i < num_elems; i++) {
+      for (int elem = 0; elem < num_elems; elem++) {
         Data data;
         Input input, gradient, direction, result;
-        data_layout.get_values(i, data_vec, data);
-        layout.get_values(i, vec, input);
-        layout.get_values(i, dir, direction);
+        data_layout.get_values(elem, data_vec, data);
+        layout.get_values(elem, vec, input);
+        layout.get_values(elem, dir, direction);
         gradient.zero();
         result.zero();
         compute_hessian<T, Data, Input, Components...>(
             alpha, data, input, direction, gradient, result);
-        layout.add_values(i, result, res);
+        layout.add_values(elem, result, res);
       }
     }
   }
@@ -138,13 +138,13 @@ class SerialGroupBackend {
       int num_elems = layout.get_num_elements();
       Data data;
       Input input, gradient, direction, result;
-      for (int i = 0; i < num_elems; i++) {
+      for (int elem = 0; elem < num_elems; elem++) {
         int index[ncomp], index_global[ncomp];
-        layout.get_indices(i, index);
+        layout.get_indices(elem, index);
         owners.local_to_global(ncomp, index, index_global);
 
-        data_layout.get_values(i, data_vec, data);
-        layout.get_values(i, vec, input);
+        data_layout.get_values(elem, data_vec, data);
+        layout.get_values(elem, vec, input);
 
         for (int j = 0; j < ncomp; j++) {
           direction.zero();

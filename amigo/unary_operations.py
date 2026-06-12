@@ -73,10 +73,6 @@ def log(expr):
     return Expr(UnaryNode("log", expr))
 
 
-def log10(expr):
-    return Expr(UnaryNode("log10", expr))
-
-
 def atan2(a, b):
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         raise ValueError("Neither argument is active")
