@@ -1189,10 +1189,10 @@ class Model:
 
         mod_ident = "mod"
         py11 += f"PYBIND11_MODULE({self.module_name}, {mod_ident}) " + "{\n"
-        py11 += "#ifdef AMIGO_USE_OPENMP\n"
-        py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::OPENMP;\n"
-        py11 += "#elif defined(AMIGO_USE_CUDA)\n"
+        py11 += "#ifdef AMIGO_USE_CUDA\n"
         py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::CUDA;\n"
+        py11 += "#elif defined(AMIGO_USE_OPENMP)\n"
+        py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::OPENMP;\n"
         py11 += "#else\n"
         py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::SERIAL;\n"
         py11 += "#endif\n"

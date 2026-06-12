@@ -530,6 +530,9 @@ parser.add_argument(
     default=None,
     help="Position dependent friction fitted from the track friction map",
 )
+parser.add_argument(
+    "--solver", dest="solver", choices=["amigo", "mumps", "cuda"], default="amigo"
+)
 args = parser.parse_args()
 
 if args.bsafe is not None:
@@ -626,6 +629,7 @@ opt = am.Optimizer(model, x=x)
 print("\nOptimizing...")
 opt_data = opt.optimize(
     {
+        "solver": args.solver,
         "max_iterations": 1000,
         "convergence_tolerance": 1e-7,
         "init_least_squares_multipliers": False,
