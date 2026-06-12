@@ -26,8 +26,7 @@ class FrictionMap:
         return self._mue[idxs]
 
 
-def fit_linear_friction(track, ni, map_path, veh_width, wb_front, wb_rear,
-                        dn=0.25):
+def fit_linear_friction(track, ni, map_path, veh_width, wb_front, wb_rear, dn=0.25):
     """Per node linear fits mue = w[0] * n + w[1] for each wheel.
 
     Returns four (ni + 1, 2) arrays for fl, fr, rl, rr; row k corresponds
@@ -52,8 +51,7 @@ def fit_linear_friction(track, ni, map_path, veh_width, wb_front, wb_rear,
     for i in range(ni + 1):
         num_right = math.floor((w_right[i] - 0.5 * veh_width - 0.5) / dn)
         num_left = math.floor((w_left[i] - 0.5 * veh_width - 0.5) / dn)
-        n_pos = np.linspace(-dn * num_right, dn * num_left,
-                            num_right + num_left + 1)
+        n_pos = np.linspace(-dn * num_right, dn * num_left, num_right + num_left + 1)
 
         front = refline[i] + wb_front * tangvec[i]
         rear = refline[i] - wb_rear * tangvec[i]

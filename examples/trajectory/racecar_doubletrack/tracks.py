@@ -30,6 +30,7 @@ D_REVIEW_CURV = 2.0
 D_PREVIEW_HEAD = 1.0
 D_REVIEW_HEAD = 1.0
 
+
 @dataclass
 class Track:
     name: str
@@ -92,9 +93,7 @@ def _head_curv(path, el_lengths):
 
     s_cl = np.insert(np.cumsum(el_lengths), 0, 0.0)
     s_rev = np.flipud(-np.cumsum(np.flipud(el_lengths)))
-    s_tmp = np.concatenate(
-        (s_rev[-rev_curv:], s_cl[:-1], s_cl[-1] + s_cl[:prev_curv])
-    )
+    s_tmp = np.concatenate((s_rev[-rev_curv:], s_cl[:-1], s_cl[-1] + s_cl[:prev_curv]))
     return delta_psi / (s_tmp[steps_curv:] - s_tmp[:-steps_curv])
 
 
@@ -110,9 +109,9 @@ def _smooth_track(reftrack):
     track_prep = _interp_closed(reftrack, STEPSIZE_PREP)
     prep_cl = np.vstack((track_prep, track_prep[:1]))
 
-    tck = interpolate.splprep(
-        [prep_cl[:, 0], prep_cl[:, 1]], k=K_REG, s=S_REG, per=1
-    )[0]
+    tck = interpolate.splprep([prep_cl[:, 0], prep_cl[:, 1]], k=K_REG, s=S_REG, per=1)[
+        0
+    ]
 
     # dense sampling for the spline arc length
     raw_len = _closed_length(reftrack[:, :2])
@@ -121,7 +120,8 @@ def _smooth_track(reftrack):
     xy_dense = np.array(interpolate.splev(t_dense, tck)).T
     s_dense = np.insert(
         np.cumsum(np.hypot(np.diff(xy_dense[:, 0]), np.diff(xy_dense[:, 1]))),
-        0, 0.0,
+        0,
+        0.0,
     )
 
     # sample the smoothed line at the reference stepsize

@@ -498,28 +498,36 @@ def fit_friction_map(trk, ni):
             f"a map is shipped for berlin_2018 only"
         )
     return fit_linear_friction(
-        trk, ni, str(map_path),
-        veh_width=B_VEH + 2.0 * B_SAFE, wb_front=LF, wb_rear=LR,
+        trk,
+        ni,
+        str(map_path),
+        veh_width=B_VEH + 2.0 * B_SAFE,
+        wb_front=LF,
+        wb_rear=LR,
     )
 
 
 # Main
 parser = argparse.ArgumentParser()
 parser.add_argument("--build", action="store_true", help="Build C++ module")
-parser.add_argument(
-    "--track", default="berlin_2018", help="Track CSV name in tracks/"
-)
+parser.add_argument("--track", default="berlin_2018", help="Track CSV name in tracks/")
 parser.add_argument("--intervals", type=int, default=300, help="Mesh intervals")
 parser.add_argument(
-    "--stepsize", type=float, default=None,
+    "--stepsize",
+    type=float,
+    default=None,
     help="Mesh stepsize [m]; sets intervals = ceil(length/stepsize), overrides --intervals",
 )
 parser.add_argument(
-    "--bsafe", type=float, default=None,
+    "--bsafe",
+    type=float,
+    default=None,
     help="Track boundary safety margin [m]",
 )
 parser.add_argument(
-    "--var-friction", choices=["linear"], default=None,
+    "--var-friction",
+    choices=["linear"],
+    default=None,
     help="Position dependent friction fitted from the track friction map",
 )
 args = parser.parse_args()
