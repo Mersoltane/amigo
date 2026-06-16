@@ -117,26 +117,3 @@ def passive(expr: Expr):
     if not isinstance(expr.node, VarNode):
         raise TypeError("Passive type must be a variable")
     return Expr(PassiveNode(expr))
-
-
-# binary = ["MatMatMult", "MatSum"]
-
-# VecScale
-# VecSum
-# VecCross
-# VecSymOuterProduct
-
-# VecNorm
-# VecOuter
-
-
-# unary = [""]
-# MatScale()
-# MatInv
-# MatDet
-# MatGreenStrain
-# SymMatMultTrace
-# unary = ["SymMatSum", ]
-
-
-# def norm(v : Expr):

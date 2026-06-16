@@ -636,7 +636,7 @@ opt_data = opt.optimize(
         "filter_line_search": True,
         "second_order_correction": True,
         "barrier_strategy": "quality_function",
-        "verbose_barrier": True,
+        "verbose_barrier": False,
     }
 )
 x.copy_device_to_host()
