@@ -65,7 +65,7 @@ class Problem:
         # Create the element objects
         for integrand_name in self.integrand_map:
             targets = self.integrand_map[integrand_name]["target"]
-            integrand = self.integrand_map[integrand_name]["integrand"]
+            integrand = self.integrand_map[integrand_name].get("integrand", None)
             integration_rule = self.integrand_map[integrand_name].get("rule", None)
 
             # Figure out the cell types that we need

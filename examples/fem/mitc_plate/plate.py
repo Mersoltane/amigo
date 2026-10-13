@@ -1,96 +1,17 @@
 import argparse
 import amigo as am
-from amigo.fem import (
-    MITCTyingStrain,
-    MITCElement,
-    MITCStrainComponent,
-    SolutionSpace,
-    Mesh,
-    Problem,
-    CellType,
-    make_basis,
-    make_quadrature,
-    build_grid,
-)
+from amigo.fem.elements import MITCPlate
+from amigo.fem import Mesh, Problem, CellType, build_grid
 from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
 import time
 
 
-class MITC4PlateTying(MITCTyingStrain):
-    def __init__(self):
-        # Two tying points each for g23 and g13, respectively
-        self.tying_points = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-
-    def get_tying_points(self):
-        return self.tying_points
-
-    def eval_tying_strain(self, idx, geo, soln):
-        tx = soln["tx"].value
-        ty = soln["ty"].value
-
-        # Get the derivatives in the computational coordinates
-        w_1, w_2 = soln["w"].grad
-
-        # Derivatives wrt computational coordinates
-        x_1, x_2 = geo["x"].grad
-        y_1, y_2 = geo["y"].grad
-
-        if idx < 2:
-            g23 = w_2 + tx * x_2 + ty * y_2
-            return g23
-        elif idx < 4:
-            g13 = w_1 + tx * x_1 + ty * y_1
-            return g13
-
-        raise ValueError("Tying point index out of range")
-
-    def interp_and_transform(self, pt, detJ, J, Jinv, e):
-        # Interpolate the tensorial components of the tying strains
-        g23 = 0.5 * ((1.0 - pt[0]) * e[0] + (1.0 + pt[0]) * e[1])
-        g13 = 0.5 * ((1.0 - pt[1]) * e[2] + (1.0 + pt[1]) * e[3])
-
-        gxz = Jinv[0][0] * g13 + Jinv[1][0] * g23
-        gyz = Jinv[0][1] * g13 + Jinv[1][1] * g23
-
-        # Convert from tensorial to real strain
-        out = {}
-        out["gxz"] = MITCStrainComponent(value=gxz)
-        out["gyz"] = MITCStrainComponent(value=gyz)
-
-        return out
-
-
-def integrand(soln, data=None, geo=None):
+def traction(soln, data=None, geo=None):
     """Strain energy density (integrand of TPE equation)"""
-
-    E = 1.0  # Young's modulus
-    nu = 0.3  # Poisson's ratio
-    t = 0.01  # Plate thickness
-    G = 0.5 * E / (1.0 + nu)  # Shear stiffness
-    ks = 5.0 / 6.0  # Shear correction factor
-    D = (E * t**3) / (12 * (1 - nu**2))  # Bending stiffness
-
-    tx_grad = soln["tx"].grad
-    ty_grad = soln["ty"].grad
-    w_val = soln["w"].value
-    gxz = soln["gxz"].value
-    gyz = soln["gyz"].value
-
-    # components of kappa vector
-    kxx = tx_grad[0]
-    kyy = ty_grad[1]
-    kxy = tx_grad[1] + ty_grad[0]
-
-    # bending strain energy
-    Ub = 0.5 * D * (kxx**2 + kyy**2 + 2 * nu * kxx * kyy + 0.5 * kxy**2 * (1 - nu))
-
-    # shear strain energy
-    Us = 0.5 * ks * G * t * (gyz**2 + gxz**2)
-
-    W = -1 * w_val
-
-    return Ub + Us - W
+    w = soln["w"].value
+    fz = 1e3
+    return -fz * w
 
 
 parser = argparse.ArgumentParser()
@@ -105,20 +26,13 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Create the solution spaces
-soln_space = SolutionSpace({"soln": {("w", "tx", "ty"): "H1"}})
-geo_space = SolutionSpace({"geo": {("x", "y"): "H1"}})
+surfaces = ["SURFACE1"]
+integrand_map = {"plate": {"target": surfaces}, "traction": {"target": surfaces}}
 
-integrand_map = {
-    "plate": {
-        "target": ["SURFACE1"],
-        "integrand": integrand,
-    },
-}
 bc_map = {
     "clamped": {
         "type": "dirichlet",
-        "input": ["w", "tx", "ty"],
+        "input": ["w", "rx", "ry"],
         "target": ["LINE1", "LINE2", "LINE3", "LINE4"],
     },
 }
@@ -126,21 +40,17 @@ bc_map = {
 # Load the plate
 mesh = Mesh("plate.inp")
 
-# Get the basis and quadrature objects needed for the element
 ctype = CellType.QUADRILATERAL
-soln_basis = make_basis(soln_space, ctype, kind="input")
-geo_basis = make_basis(geo_space, ctype, kind="data")
-data_basis = None
-quadrature = make_quadrature(soln_space, ctype)
-mitc = MITC4PlateTying()
-
-# Create the MITC4 element
-quad_elem = MITCElement(
-    "MITC4", soln_basis, data_basis, geo_basis, quadrature, mitc, integrand
-)
+mitc_plate = MITCPlate()
+soln_space, geo_space, data_space, output_space = mitc_plate.get_default_spaces()
 
 # Set the element objects
-element_objs = {("plate", ctype): quad_elem}
+element_objs = {
+    ("plate", ctype): mitc_plate.create_element(name="Plate", ctype=ctype),
+    ("traction", ctype): mitc_plate.create_element(
+        name="Traction", ctype=ctype, integrand=traction
+    ),
+}
 
 # Create the finite element problem
 problem = Problem(
