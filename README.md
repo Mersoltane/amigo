@@ -17,7 +17,6 @@ pixi install
 pixi run install-amigo
 ```
 
-
 [pixi](https://pixi.sh) creates a reproducible, project-local conda environment
 from `pixi.toml` and `pixi.lock`. It handles the dependencies that are otherwise
 awkward to install by hand — MPI, BLAS/LAPACK, METIS and MUMPS — on Linux,
@@ -264,7 +263,7 @@ pip install -e . -v \
 
 Amigo's interior-point optimizer can use [MUMPS](https://mumps-solver.org/) to obtain symmetric indefinite factorization of the KKT system. MUMPS is loaded at runtime, so it is not needed at build time. We use [coin-or/ThirdParty-Mumps](https://github.com/coin-or-tools/ThirdParty-Mumps) to build from source on all platforms, installing to `$HOME/mumps-coinor` so the Amigo loader finds the library automatically without any extra environment variables.
 
-If you use pixi, `mumps-seq` is already part of the environment and the steps below are unnecessary on Linux and macOS -- see [README_pixi.md](README_pixi.md).
+If you use pixi, `mumps-seq` is already part of the environment and the steps below are unnecessary on Linux and macOS.
 
 ### Linux
 
