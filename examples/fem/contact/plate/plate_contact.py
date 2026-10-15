@@ -1,70 +1,32 @@
 # Author: Jack Turbush
 # Description: Plate contact problem using reduced-integration shell elements.
 
-from amigo.fem import Mesh, Problem, SolutionSpace, FiniteElement, QuadQuadrature
 import amigo as am
-from scipy.sparse.linalg import spsolve
-import matplotlib.pyplot as plt
+from amigo.fem.elements import MITCPlate
+from amigo.fem import Mesh, Problem, CellType, build_grid
 import numpy as np
 import argparse
-from utils import plot_3d
-
-E = 1.0  # Young's modulus
-nu = 0.3  # Poisson's ratio
-t = 0.005  # Plate thickness
-k_s = 5.0 / 6.0  # Shear correction factor
-D = E * t**3 / (12.0 * (1.0 - nu**2))  # Bending stiffness
-G = E / (2.0 * (1.0 + nu))  # Shear stiffness  (= k_s * G * t)
-A44 = k_s * G * t
-A55 = A44
-q0 = 1  # N/m^2, load intensity
 
 
 class GapConstraint(am.Component):
-    """Floor contact: gap = y_coord + v - y_floor >= 0"""
+    """Floor contact: gap = w_coord <= z_contact"""
 
     def __init__(self):
         super().__init__()
         self.add_input("w")
-        self.add_constraint("gap", lower=0.0, upper=float("inf"))
+        self.add_data("z_contact", value=0.2)
+        self.add_constraint("gap", lower=-am.inf, upper=0.0)
 
     def compute(self):
-        z = 0.0
         w = self.inputs["w"]
-        z_contact = 75.0e3  # ceiling
-        self.constraints["gap"] = -(w - z_contact)
+        z_contact = self.data["z_contact"]
+        self.constraints["gap"] = w - z_contact
 
 
-def potential_bending(soln, data=None, geo=None):
-    """Strain energy density (integrand of TPE equation)"""
-    tx_grad = soln["tx"]["grad"]
-    ty_grad = soln["ty"]["grad"]
-
-    w_val = soln["w"]["value"]
-
-    # components of kappa vector
-    k1 = tx_grad[0]
-    k2 = ty_grad[1]
-    k3 = tx_grad[1] + ty_grad[0]
-
-    # bending strain energy
-    U_b = (
-        0.5 * D * (k2 * (k1 * nu + k2) + k1 * (k1 + k2 * nu) + 1 / 2 * k3**2 * (1 - nu))
-    )
-    Work_ext = q0 * w_val
-
-    return U_b - Work_ext
-
-
-def potential_shear(soln, data=None, geo=None):
-    w_grad = soln["w"]["grad"]
-    tx_val = soln["tx"]["value"]
-    ty_val = soln["ty"]["value"]
-
-    # shear strain energy
-    U_s = 0.5 * (A44 * (w_grad[0] + tx_val) ** 2 + A55 * (w_grad[1] + ty_val) ** 2)
-
-    return U_s
+def traction(soln, data=None, geo=None):
+    q0 = 1  # N/m^2, load intensity
+    w = soln["w"].value
+    return -q0 * w
 
 
 parser = argparse.ArgumentParser()
@@ -73,96 +35,67 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Create the solution spaces
-soln_space = SolutionSpace({"w": "H1", "tx": "H1", "ty": "H1"})
-geo_space = SolutionSpace({"x": "H1", "y": "H1"})
-data_space = SolutionSpace({})
+surfaces = ["SURFACE1"]
+integrand_map = {"plate": {"target": surfaces}, "traction": {"target": surfaces}}
 
-integrand_map = {
-    "bending_potential": {
-        "target": ["SURFACE1"],
-        "integrand": potential_bending,
-    },
-    "shear_potential": {
-        "target": ["SURFACE1"],
-        "integrand": potential_shear,
-        "rule": ["reduced"],  # reduced quadrature
-    },
-}
+clamped_domains = ["LINE1", "LINE2", "LINE3", "LINE4"]
 bc_map = {
-    "clamp_w": {
+    "clamped": {
         "type": "dirichlet",
-        "input": ["w", "tx", "ty"],
-        "target": ["LINE1", "LINE2", "LINE3", "LINE4"],
+        "input": ["w", "rx", "ry"],
+        "target": clamped_domains,
     },
 }
-model = am.Model("model")
+
 # Load the plate
 mesh = Mesh("plate.inp")
 
-element_objs = {}
-for etype in ["CPS4"]:
-    # Get the basis and quadrature objects needed for the element
-    soln_basis = mesh.get_basis(soln_space, etype, kind="input")
-    geo_basis = mesh.get_basis(geo_space, etype, kind="data")
-    data_basis = mesh.get_basis(data_space, etype, kind="data")
-    quadrature = QuadQuadrature(1)
+ctype = CellType.QUADRILATERAL
 
-    # Create the shear element
-    elem_name = f"PlateShear{etype}"
-    elem = FiniteElement(
-        elem_name, soln_basis, data_basis, geo_basis, quadrature, potential_shear
-    )
+# Assign fixed material properties
+E = 70e3  # Young's modulus
+nu = 0.3  # Poisson's ratio
+t = 0.01  # Plate thickness
+mitc_plate = MITCPlate(E=E, nu=nu, t=t)
+soln_space, geo_space, data_space, output_space = mitc_plate.get_default_spaces()
 
-    # Set the element objects
-    element_objs[("plate", etype)] = elem
+# Set the element objects
+element_objs = {
+    ("plate", ctype): mitc_plate.create_element(name="Plate", ctype=ctype),
+    ("traction", ctype): mitc_plate.create_element(
+        name="Traction", ctype=ctype, integrand=traction
+    ),
+}
 
+# Create the finite element problem
 problem = Problem(
     mesh,
     soln_space,
-    data_space,
     geo_space,
     integrand_map=integrand_map,
     bc_map=bc_map,
     element_objs=element_objs,
 )
-submodel = problem.create_model("plate")
-model.add_model("fem", submodel)
-# Link nodes of constraint model to fem submodel
 
-# Floor contact constraint (only on non-BC nodes to avoid rank-deficient Jacobian)
-# non_bc_nodes = [i for i in range(n) if i not in bc_nodes]
-nodes = mesh.get_nodes_in_domain("SURFACE1")
-nodes_edge1 = mesh.get_nodes_in_domain("LINE1")
-nodes_edge2 = mesh.get_nodes_in_domain("LINE2")
-nodes_edge3 = mesh.get_nodes_in_domain("LINE3")
-nodes_edge4 = mesh.get_nodes_in_domain("LINE4")
-non_bc_nodes = []
+model = problem.create_model("plate")
 
-for i in nodes:
-    if i not in nodes_edge1:
-        non_bc_nodes.append(i)
-    if i not in nodes_edge2:
-        non_bc_nodes.append(i)
-    if i not in nodes_edge3:
-        non_bc_nodes.append(i)
-    if i not in nodes_edge4:
-        non_bc_nodes.append(i)
+# Find the nodes that are strictly in the interior of the mesh
+handler = problem.soln_dof.get_dof_handler()
+ndofs = handler.get_num_dof("w")
+clamped_dofs = handler.get_dof_in_domain("w", clamped_domains)
+dofs = np.setdiff1d(np.arange(ndofs), clamped_dofs)
 
-model.add_component("contact", len(non_bc_nodes), GapConstraint())
-# model.link("fem.geo.y", "contact.y_coord", src_indices=non_bc_nodes)
-model.link("fem.soln.w", "contact.w", src_indices=non_bc_nodes)
+# Add the contact constraint
+model.add_component("contact", len(dofs), GapConstraint())
+model.link("soln.w", "contact.w", src_indices=dofs)
 
 if args.build:
     model.build_module()
+model.initialize()
 
-model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
-p = model.get_problem()
-
-xm = model.create_vector()
-
-# Solve
-x = xm.get_vector()
+# Set the z-contact
+data = model.get_data_vector()
+data["contact.z_contact"] = 0.125
 
 opt_options = {
     "max_iterations": 200,
@@ -171,30 +104,16 @@ opt_options = {
     "initial_barrier_param": 0.1,
 }
 
-# indiv. Amigo problem:
-opt = am.Optimizer(
-    model,
-    x,
-)
+x = model.create_vector()
+
+# Optimize for the plate
+opt = am.Optimizer(model, x)
 opt.optimize(opt_options)
 
+alpha = 1.0
+dof_to_node = handler.get_dof_to_node_map("w")
+mesh.X[dof_to_node, 2] = alpha * x["soln.w"]
+
 print("Plotting...")
-
-w = xm["fem.soln.w"]
-tx = xm["fem.soln.tx"]
-ty = xm["fem.soln.ty"]
-
-w_normalized = 1000 * D * w / (q0 * 1.0)
-print("max normalized plate deflection", np.max(np.abs(w_normalized)))
-print("max plate deflection", np.max(w), np.min(w))
-
-w_nocontact = np.load("w_025.npy")
-plot_3d(mesh, w, view="side")
-plot_3d(mesh, -w_nocontact, view="side")
-
-plt.show()
-
-fig, ax = plt.subplots(1, 3, figsize=(8, 3))
-for index, soln in enumerate([w, tx, ty]):
-    mesh.plot(soln, ax=ax[index])
-plt.show()
+grid = build_grid(problem, "w", x)
+grid.plot(scalars="w", cmap="coolwarm", show_edges=True)
