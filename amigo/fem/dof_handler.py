@@ -52,11 +52,17 @@ class DofHandler:
     def get_solution_space(self):
         return self.solution_space
 
-    def get_num_dof(self, func_space: FunctionSpace) -> int:
+    def get_num_dof(self, input: FunctionSpace | str) -> int:
         """
         Return the total number of DOFs for a FunctionSpace.
         """
-        return self._num_dof[func_space]
+        if isinstance(input, str):
+            func_space = self.solution_space.get_space(input)
+            return self._num_dof[func_space]
+        elif isinstance(input, FunctionSpace):
+            return self._num_dof[input]
+        else:
+            raise TypeError("Input must be FunctionSpace or str")
 
     def get_dof_conn(self, space: FunctionSpace, block_id: int) -> np.ndarray:
         """

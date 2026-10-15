@@ -198,7 +198,7 @@ def main():
 
     # Contact forces from barrier multipliers: zl = mu / (v - lb)
     x_v = x["src.v"]
-    mu = opt.barrier_param
+    mu = opt.state.mu
     zl = mu / (x_v - lower["src.v"])
     print("zl:", zl)
 

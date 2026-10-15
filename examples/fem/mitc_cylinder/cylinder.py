@@ -59,7 +59,6 @@ surfaces = ["SURFACE1"]
 bottom_line = "LINE3"
 lateral_line = "LINE2"
 top_line = "LINE1"
-print(f"Lateral: {surfaces}, bottom: {bottom_line}, top: {top_line}")
 
 # Create the shell element
 ctype = CellType.QUADRILATERAL
@@ -112,10 +111,10 @@ if args.build:
 
 model.initialize()
 
-print("Number of variables... ", model.num_variables)
-
 # Set the shell normals
 MITCShell.set_shell_normals(model)
+
+print("Number of variables... ", model.num_variables)
 
 # Create the vectors and matrices for the model
 x = model.create_vector()
@@ -202,12 +201,9 @@ else:
 
 print(f"Factor time... {tfactor:.6f} seconds")
 
-u = x["soln.u"]
-v = x["soln.v"]
-w = x["soln.w"]
-
 u_ex, v_ex, w_ex = get_exact_solution(data["geo.x"], data["geo.y"], data["geo.z"])
 
+w = x["soln.w"]
 w_diff = w - w_ex
 print("Error = ", np.max(np.absolute(w_diff)) / np.max(w))
 
