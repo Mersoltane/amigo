@@ -1,6 +1,7 @@
 import amigo as am
 import numpy as np
 from .dof_handler import DofHandler
+from .fem_space import IntegrandFormulation
 
 
 class ScaledBC(am.Component):
@@ -98,7 +99,7 @@ class BoundaryConditions:
         self,
         bc_descript: dict,
         dof_handler: DofHandler,
-        integrand_formulation: str = "potential",
+        integrand_formulation: IntegrandFormulation = IntegrandFormulation.POTENTIAL,
     ):
         # Check if the name of the boundary conditions is recognized
         for bc_name, bc in bc_descript.items():
@@ -159,7 +160,7 @@ class BoundaryConditions:
                     # Fix the DOF
                     comp_name = solution_space.get_component_name(name)
                     model.add_fixed(f"{comp_name}.{name}", dof)
-                    if self.integrand_formulation == "weak":
+                    if self.integrand_formulation == IntegrandFormulation.WEAK:
                         model.add_fixed(f"{comp_name}.res_{name}", dof)
             else:
                 input_names = bc["input"]

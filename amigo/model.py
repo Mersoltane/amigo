@@ -846,7 +846,11 @@ class Model:
         return MetaView(self, meta_name, vtype=vtype)
 
     def set_meta(
-        self, meta_name: str, name: str, data: List | np.ndarray, vtype: str = "vars"
+        self,
+        meta_name: str,
+        name: str,
+        data: float | List | np.ndarray,
+        vtype: str = "vars",
     ):
         """
         Set meta data into the model.

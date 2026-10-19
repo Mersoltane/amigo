@@ -1,6 +1,12 @@
 from ..element import MITCTyingStrain, MITCElement, MITCStrainComponent
 from ..cell_types import CellType
-from ..fem_space import Space, FunctionSpace, SolutionSpace, Conformity
+from ..fem_space import (
+    Space,
+    FunctionSpace,
+    SolutionSpace,
+    Conformity,
+    IntegrandFormulation,
+)
 from ..basis import make_basis, H1Value
 from ..quadrature import make_quadrature
 
@@ -33,7 +39,9 @@ class MITC4PlateTying(MITCTyingStrain):
 
         raise ValueError("Tying point index out of range")
 
-    def interp_and_transform(self, pt, detJ, J, Jinv, e):
+    def interp_and_transform(self, pt, Jdict, e):
+        Jinv = Jdict["Jinv"]
+
         # Interpolate the tensorial components of the tying strains
         g23 = 0.5 * ((1.0 - pt[0]) * e[0] + (1.0 + pt[0]) * e[1])
         g13 = 0.5 * ((1.0 - pt[1]) * e[2] + (1.0 + pt[1]) * e[3])
@@ -69,21 +77,6 @@ class MITCPlate:
 
         return
 
-    def constitutive_default(self, soln, data=None, geo=None):
-
-        G = 0.5 * self.E / (1.0 + self.nu)
-        D = self.E / (1.0 - self.nu**2)
-
-        D11 = D * self.t**3 / 12.0
-        D12 = self.nu * D11
-        D22 = D11
-        D66 = 0.5 * D11 * (1 - self.nu)
-
-        As44 = self.ks * G * self.t
-        As55 = As44
-
-        return (D11, D12, D22, D66), (As44, As55)
-
     @staticmethod
     def get_default_spaces():
         # Set the function spaces
@@ -104,6 +97,21 @@ class MITCPlate:
 
         return soln_space, geo_space, data_space, output_space
 
+    def constitutive_default(self, soln, data=None, geo=None):
+
+        G = 0.5 * self.E / (1.0 + self.nu)
+        D = self.E / (1.0 - self.nu**2)
+
+        D11 = D * self.t**3 / 12.0
+        D12 = self.nu * D11
+        D22 = D11
+        D66 = 0.5 * D11 * (1 - self.nu)
+
+        As44 = self.ks * G * self.t
+        As55 = As44
+
+        return (D11, D12, D22, D66), (As44, As55)
+
     def create_element(
         self,
         name: str = "Plate",
@@ -111,6 +119,7 @@ class MITCPlate:
         soln_space: SolutionSpace | None = None,
         geo_space: SolutionSpace | None = None,
         data_space: SolutionSpace | None = None,
+        formulation: IntegrandFormulation = IntegrandFormulation.POTENTIAL,
         integrand=None,
     ):
 
@@ -130,12 +139,26 @@ class MITCPlate:
         quadrature = make_quadrature(soln_space, ctype)
         mitc = MITC4PlateTying()
 
+        test_basis = None
+        if formulation == IntegrandFormulation.WEAK:
+            test_basis = make_basis(soln_space, ctype, kind="multiplier")
+
         if integrand is None:
-            integrand = self.potential
+            if formulation == IntegrandFormulation.POTENTIAL:
+                integrand = self.potential
+            else:
+                integrand = self.weak
 
         # Create the MITC4 element
         plate_obj = MITCElement(
-            name, soln_basis, data_basis, geo_basis, quadrature, mitc, integrand
+            name,
+            soln_basis,
+            data_basis,
+            geo_basis,
+            quadrature,
+            mitc,
+            integrand,
+            test_basis=test_basis,
         )
 
         return plate_obj
@@ -161,5 +184,36 @@ class MITCPlate:
 
         # shear strain energy
         Us = 0.5 * (As44 * gyz**2 + As55 * gxz**2)
+
+        return Ub + Us
+
+    def weak(self, test, soln, data=None, geo=None):
+        rx_x, rx_y = soln["rx"].grad
+        ry_x, ry_y = soln["ry"].grad
+        trx_x, trx_y = test["rx"].grad
+        try_x, try_y = test["ry"].grad
+
+        gxz = soln["gxz"].value
+        gyz = soln["gyz"].value
+        tgxz = test["gxz"].value
+        tgyz = test["gyz"].value
+
+        # components of kappa vector
+        kx = rx_x
+        ky = ry_y
+        kxy = rx_y + ry_x
+
+        tkx = trx_x
+        tky = try_y
+        tkxy = trx_y + try_x
+
+        (D11, D12, D22, D66), (As44, As55) = self.constitutive(soln, data=data, geo=geo)
+
+        # bending strain energy
+        Ub = D11 * kx * tkx + D22 * ky * tky + 2 * D12 * (kx * tky + tkx * ky)
+        Ub += D66 * kxy * tkxy
+
+        # shear strain energy
+        Us = As44 * gyz * tgyz + As55 * gxz * tgxz
 
         return Ub + Us

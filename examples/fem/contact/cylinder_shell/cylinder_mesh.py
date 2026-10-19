@@ -34,10 +34,10 @@ gmsh.model.add("cylinder")
 # Parameters
 R = 1.0
 H = 2.0
-n_circ = 512  # number of quads around circumference
-n_axial = 256  # number of quads along height
-# n_circ = 256  # number of quads around circumference
-# n_axial = 128  # number of quads along height
+# n_circ = 512  # number of quads around circumference
+# n_axial = 256  # number of quads along height
+n_circ = 256  # number of quads around circumference
+n_axial = 128  # number of quads along height
 
 # Use the built-in geo kernel
 geo = gmsh.model.geo

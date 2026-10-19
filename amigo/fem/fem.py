@@ -1,7 +1,8 @@
 import amigo as am
 import numpy as np
+from .mesh import Mesh
 from .element import FiniteElement, FiniteElementOutput, FiniteElementFieldOutput
-from .fem_space import Space, SolutionSpace
+from .fem_space import Space, SolutionSpace, IntegrandFormulation
 from .basis import make_basis
 from .dof_handler import DofSource, DegreesOfFreedom
 from .boundary_conditions import BoundaryConditions
@@ -11,12 +12,12 @@ from .quadrature import make_quadrature, ReducedQuadQuadrature
 class Problem:
     def __init__(
         self,
-        mesh,
+        mesh: Mesh,
         soln_space: SolutionSpace,
         geo_space: SolutionSpace,
         data_space: SolutionSpace | None = None,
         integrand_map=None,
-        integrand_formulation="potential",
+        integrand_formulation: IntegrandFormulation = IntegrandFormulation.POTENTIAL,
         bc_map=None,
         element_objs=None,
     ):
@@ -40,7 +41,7 @@ class Problem:
 
         # Set up constraints to be linked
         kind = ["input"]
-        if self.integrand_formulation == "weak":
+        if self.integrand_formulation == IntegrandFormulation.WEAK:
             kind.append("multiplier")
 
         # Initialize Dofs
@@ -81,7 +82,7 @@ class Problem:
 
                 # Get the basis objects for the element type
                 test_basis = None
-                if self.integrand_formulation == "weak":
+                if self.integrand_formulation == IntegrandFormulation.WEAK:
                     test_basis = make_basis(self.soln_space, ctype, kind="multiplier")
 
                 soln_basis = make_basis(self.soln_space, ctype, kind="input")
@@ -181,7 +182,6 @@ class Problem:
         for out_name in output_map:
             targets = output_map[out_name]["target"]
             output_names = output_map[out_name]["names"]
-            output_func = output_map[out_name]["function"]
 
             # Figure out the cell types that we need
             ctypes = self.mesh.get_cell_types(targets)
@@ -204,6 +204,7 @@ class Problem:
                 quadrature = make_quadrature(self.soln_space, ctype)
 
                 # Create the output object
+                output_func = output_map[out_name]["function"]
                 obj = FiniteElementOutput(
                     elem_name,
                     soln_basis,
@@ -276,7 +277,6 @@ class Problem:
         # Create the output objects
         for out_name in output_map:
             targets = output_map[out_name]["target"]
-            output_func = output_map[out_name]["function"]
 
             # Figure out the cell types that we need
             ctypes = self.mesh.get_cell_types(targets)
@@ -298,6 +298,7 @@ class Problem:
                 output_basis = make_basis(output_space, ctype, kind="output")
 
                 # Create the output object
+                output_func = output_map[out_name]["function"]
                 obj = FiniteElementFieldOutput(
                     elem_name,
                     soln_basis,

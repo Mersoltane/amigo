@@ -15,6 +15,11 @@ class Conformity(Enum):
     COMPONENT = auto()
 
 
+class IntegrandFormulation(Enum):
+    POTENTIAL = auto()
+    WEAK = auto()
+
+
 @dataclass(frozen=True)
 class FunctionSpace:
     func_space: Space

@@ -94,7 +94,7 @@ class ConstantBasis(Basis):
         layout = DofLayout(ref_cell=CellType.POINT, space=space, pts=([0.0]))
         super().__init__(names, layout=layout, kind=kind)
 
-    def transform(self, detJ, J, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for name in self.names:
             value = orig[name].value
@@ -125,12 +125,12 @@ class LagrangeBasis1D(Basis):
 
         self.vand = Vandermonde1D(space.degree, layout.pts)
 
-    def transform(self, detJ, J, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for name in self.names:
             value = orig[name].value
             grad = orig[name].grad
-            soln[name] = H1Value(value=value, grad=[Jinv * grad[0]])
+            soln[name] = H1Value(value=value, grad=[Jdict["Jinv"] * grad[0]])
 
         return soln
 
@@ -144,7 +144,8 @@ class LagrangeBasis1D(Basis):
         detJ = am.sqrt(x_xi**2 + y_xi**2)
         Jinv = 1.0 / detJ
         J = detJ
-        return detJ, J, Jinv
+
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
 
     def eval(self, comp, pt):
         xi = pt[0]
@@ -209,13 +210,13 @@ class LagrangeBasis2D(Basis):
 
         return soln
 
-    def transform(self, detJ, J, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for name in self.names:
             value = orig[name].value
             grad = orig[name].grad
             soln[name] = H1Value(
-                value=value, grad=mat_vec_transpose(Jinv, grad, n=2, m=2)
+                value=value, grad=mat_vec_transpose(Jdict["Jinv"], grad, n=2, m=2)
             )
 
         return soln
@@ -232,7 +233,7 @@ class LagrangeBasis2D(Basis):
         inv = 1.0 / detJ
         Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
 
-        return detJ, J, Jinv
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
 
 
 class TriangleLagrangeBasis(LagrangeBasis2D):
@@ -334,11 +335,13 @@ class RTBasis2D(Basis):
 
         return soln
 
-    def transform(self, detJ, J, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for name in self.names:
             vec = orig[name].vec
             div = orig[name].div
+            detJ = Jdict["detJ"]
+            J = Jdict["J"]
             vx = (J[0][0] * vec[0] + J[0][1] * vec[1]) / detJ
             vy = (J[1][0] * vec[0] + J[1][1] * vec[1]) / detJ
             soln[name] = HdivValue(vec=[vx, vy], div=div / detJ)
@@ -357,7 +360,7 @@ class RTBasis2D(Basis):
         inv = 1.0 / detJ
         Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
 
-        return detJ, J, Jinv
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
 
 
 class QuadRTBasis(RTBasis2D):
@@ -428,10 +431,10 @@ class BasisCollection:
             soln.update(basis.eval(comp, pt))
         return soln
 
-    def transform(self, detJ, J, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for basis in self.basis:
-            soln.update(basis.transform(detJ, J, Jinv, orig))
+            soln.update(basis.transform(Jdict, orig))
         return soln
 
     def compute_transform(self, geo):
