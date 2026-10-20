@@ -108,10 +108,11 @@ void bind_vector(py::module_& m, const std::string& name) {
       .def("add_scalar", &amigo::Vector<T>::template add_scalar<policy>)
       .def("scale", &amigo::Vector<T>::template scale<policy>)
       .def("axpy", &amigo::Vector<T>::template axpy<policy>)
-      .def("dot", [](std::shared_ptr<amigo::Vector<T>> self,
-                     std::shared_ptr<amigo::Vector<T>> x) {
-        return self->template dot<policy>(x);
-      })
+      .def("dot",
+           [](std::shared_ptr<amigo::Vector<T>> self,
+              std::shared_ptr<amigo::Vector<T>> x) {
+             return self->template dot<policy>(x);
+           })
       .def("copy_at", &amigo::Vector<T>::template copy_at<policy>)
       .def("fill_at", &amigo::Vector<T>::template fill_at<policy>)
       .def("add_scalar_at", &amigo::Vector<T>::template add_scalar_at<policy>)
@@ -585,6 +586,9 @@ PYBIND11_MODULE(amigo, mod) {
            &amigo::OptimizationProblem<double, detail::policy>::update)
       .def("add_diagonal",
            &amigo::OptimizationProblem<double, detail::policy>::add_diagonal)
+      .def("zero_fixed_entries",
+           &amigo::OptimizationProblem<double,
+                                       detail::policy>::zero_fixed_entries)
       .def("lagrangian",
            &amigo::OptimizationProblem<double, detail::policy>::lagrangian,
            py::arg("alpha"), py::arg("x"))
@@ -752,12 +756,14 @@ PYBIND11_MODULE(amigo, mod) {
            py::arg("mat"), py::arg("pivot_tol") = 1e-12)
       .def("factor", &amigo::CSRMatFactorCuda::factor)
       .def("solve", &amigo::CSRMatFactorCuda::solve)
-      .def("get_inertia", [](amigo::CSRMatFactorCuda& self) {
-        int npos = 0, nneg = 0;
-        self.get_inertia(&npos, &nneg);
-        return py::make_tuple(npos, nneg);
-      })
-      .def("num_perturbed_pivots", &amigo::CSRMatFactorCuda::num_perturbed_pivots)
+      .def("get_inertia",
+           [](amigo::CSRMatFactorCuda& self) {
+             int npos = 0, nneg = 0;
+             self.get_inertia(&npos, &nneg);
+             return py::make_tuple(npos, nneg);
+           })
+      .def("num_perturbed_pivots",
+           &amigo::CSRMatFactorCuda::num_perturbed_pivots)
       .def("set_pivot_epsilon", &amigo::CSRMatFactorCuda::set_pivot_epsilon)
       .def("set_ir_steps", &amigo::CSRMatFactorCuda::set_ir_steps)
       .def("residual", &amigo::CSRMatFactorCuda::residual);

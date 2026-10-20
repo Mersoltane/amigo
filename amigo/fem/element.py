@@ -53,24 +53,26 @@ class FiniteElement(am.Component):
         geo = self.geo_basis.eval(self, quad_point)
 
         # Perform the mapping from computational to physical coordinates (u)
-        detJ, J, Jinv = self.geo_basis.compute_transform(geo)
-        soln_phys = self.soln_basis.transform(detJ, J, Jinv, soln_xi)
+        Jdict = self.geo_basis.compute_transform(geo)
+        soln_phys = self.soln_basis.transform(Jdict, soln_xi)
         data_phys = None
         if self.data_basis is not None:
-            data_phys = self.data_basis.transform(detJ, J, Jinv, data_xi)
+            data_phys = self.data_basis.transform(Jdict, data_xi)
 
         if self.test_basis is not None:
             # Transform the test space derivatives into the physical space
-            test_phys = self.test_basis.transform(detJ, J, Jinv, test_xi)
+            test_phys = self.test_basis.transform(Jdict, test_xi)
 
             # Don't add the alpha coefficient - this will all be proportaional to the
             # multipliers through the test function
+            detJ = Jdict["detJ"]
             weight = quad_weight * detJ
             return weight * self.integrand(
                 test_phys, soln_phys, data=data_phys, geo=geo
             )
         else:
             # Include the alpha coefficient since we're adding terms to the objective
+            detJ = Jdict["detJ"]
             weight = self.alpha * quad_weight * detJ
             return weight * self.integrand(soln_phys, data=data_phys, geo=geo)
 

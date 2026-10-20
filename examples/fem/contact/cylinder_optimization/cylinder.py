@@ -141,7 +141,7 @@ model.set_meta("lower", "data.thickness", 0.0, vtype="data")
 model.set_meta("upper", "data.thickness", am.inf, vtype="data")
 model.set_meta("value", "data.thickness", 0.01, vtype="data")
 
-output_names = ["strain_energy", "volume"]
+output_names = ["volume", "strain_energy"]
 
 
 def output_function(soln, data=None, geo=None):
@@ -173,12 +173,15 @@ MITCShell.set_shell_normals(model)
 
 print("Number of variables... ", model.num_variables)
 
+data = model.get_data_vector()
+data["data.thickness"] = 0.01
 x = model.create_vector()
 
 # Optimization for the nonlinear solve
 opt_options = {
-    "max_iterations": 200,
-    "convergence_tolerance": 1e-8,
+    "nlp_scaling": False,
+    "max_iterations": 25,
+    "convergence_tolerance": 1e-15,
     "max_line_search_iterations": 1,
     "initial_barrier_param": 0.1,
 }
@@ -186,12 +189,38 @@ opt_options = {
 opt = am.Optimizer(model, x)
 opt.optimize(opt_options)
 
+out1 = model.create_output_vector()
+model.compute_output(x, out1)
+
+dh = 1e-7
+dt = np.ones(shape=data["data.thickness"].shape)
+
 dfdx, of_map, wrt_map = opt.compute_post_opt_derivatives(
     of=["outputs.volume", "outputs.strain_energy"], wrt=["data.thickness"]
 )
 
-print(dfdx[of_map["outputs.volume"], wrt_map["data.thickness"]])
-print(dfdx[of_map["outputs.strain_energy"], wrt_map["data.thickness"]])
+dVdt = dfdx[of_map["outputs.volume"], wrt_map["data.thickness"]]
+dUdt = dfdx[of_map["outputs.strain_energy"], wrt_map["data.thickness"]]
+
+Vans = np.dot(dVdt, dt)
+Uans = np.dot(dUdt, dt)
+
+# Reset the data
+data["data.thickness"] += dh * dt
+
+# Re-optimize
+# opt = am.Optimizer(model, x)
+opt.optimize(opt_options)
+
+# Now re-compute the output
+out2 = model.create_output_vector()
+model.compute_output(x, out2)
+
+Vfd = ((out2["outputs.volume"] - out1["outputs.volume"]) / dh)[0]
+Ufd = ((out2["outputs.strain_energy"] - out1["outputs.strain_energy"]) / dh)[0]
+
+print(f"FD: {Vfd:15.8e} Ans: {Vans:15.8e}  Err: {(Vans - Vfd) / Vfd:15.8e}")
+print(f"FD: {Ufd:15.8e} Ans: {Uans:15.8e}  Err: {(Uans - Ufd) / Ufd:15.8e}")
 
 print("Plotting...")
 
