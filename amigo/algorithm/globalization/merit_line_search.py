@@ -1,14 +1,16 @@
 """Augmented barrier-Lagrangian merit line search.
 
-Backtracks on the barrier-Lagrangian plus a smooth squared penalty on the
-constraint violation, where the penalty coefficient is the inverse of the
-dual regularization. Requires dual_regularization.
+Backtracks on the barrier objective plus the constraint term of the
+Lagrangian at the base multipliers and a fixed squared penalty on the
+constraint violation.
 """
 
-from .filter_line_search import LineSearch, LineSearchInfo
+from .filter_line_search import LineSearch, LineSearchInfo, finite_vector
 
 
 class MeritLineSearch(LineSearch):
+    """Backtracking until the augmented barrier-Lagrangian decreases."""
+
     def __init__(self, options, problem, optimizer):
         self.options = options
         self.problem = problem
@@ -17,46 +19,34 @@ class MeritLineSearch(LineSearch):
         self.trial = self.optimizer.create_opt_vector()
         self.trial_grad = self.problem.create_vector()
 
-        self.eta = options["merit_armijo_constant"]
         self.backtrack = options["backtracking_factor"]
         self.max_iters = options["max_line_search_iterations"]
-        self.fallback_penalty = options["merit_penalty"]
+        self.penalty = options["merit_penalty"]
 
         self.temp_con = self.problem.create_constraint_vector()
         self.base_lam = self.problem.create_constraint_vector()
         self.current_info = None
-        self.dual_reg = None
 
-    def _penalty(self):
-        """Penalty coefficient 1/delta, tied to the dual regularization."""
-        delta = self.dual_reg.get_delta_c() if self.dual_reg else 0.0
-        if delta > 0.0:
-            return 1.0 / delta
-        return self.fallback_penalty
+    def _merit(self, fobj, grad, barrier):
+        """Merit f + barrier + lambda_k^T c + (penalty / 2) ||c||^2.
 
-    def _merit(self, fobj, grad, barrier, penalty):
-        """A = f + barrier + lambda_k^T c + (penalty/2) * ||c||^2.
-
-        The multiplier lambda_k is held at the base point (the merit descent is
-        in the primal direction), and c is the trial constraint residual.
+        The multipliers lambda_k stay at the base point and c holds the
+        constraint rows of the given gradient.
         """
         con_indices = self.problem.get_constraint_indices()
         grad.get_values_at(con_indices, self.temp_con)
         lam_c = self.problem.dot(self.base_lam, self.temp_con)
         c_sq = self.problem.dot(self.temp_con, self.temp_con)
-        return fobj + barrier + lam_c + 0.5 * penalty * c_sq
+        return fobj + barrier + lam_c + 0.5 * self.penalty * c_sq
 
     def line_search(self, solver, evaluator, state):
-        self.obj_scale = state.obj_scale
-        penalty = self._penalty()
-
         # Reference merit at the current point, freeze the base multipliers
         evaluator.evaluate_objective_and_infeasibility(state)
         evaluator.evaluate_gradient(state)
         con_indices = self.problem.get_constraint_indices()
         state.current.get_solution().get_values_at(con_indices, self.base_lam)
         merit_0 = self._merit(
-            state.objective_value, state.gradient, state.log_barrier_value, penalty
+            state.objective_value, state.gradient, state.log_barrier_value
         )
 
         alpha_primal = state.max_alpha_primal
@@ -78,9 +68,10 @@ class MeritLineSearch(LineSearch):
                     state.mu, state.obj_scale, self.trial, self.trial_grad
                 )
             )
-            merit_trial = self._merit(fobj, self.trial_grad, barrier, penalty)
+            merit_trial = self._merit(fobj, self.trial_grad, barrier)
 
-            if merit_trial < merit_0:
+            # A NaN merit fails the comparison, while a NaN derivative needs its own test
+            if merit_trial < merit_0 and finite_vector(self.problem, self.trial_grad):
                 state.invalidate()
                 state.objective_value = fobj
                 state.log_barrier_value = barrier

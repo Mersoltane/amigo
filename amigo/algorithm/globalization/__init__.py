@@ -8,6 +8,10 @@ from .funnel_line_search import FunnelLineSearch
 from .merit_line_search import MeritLineSearch
 
 
+def make_restoration(options, problem, optimizer):
+    return FeasibilityRestoration(options, problem, optimizer)
+
+
 def make_line_search(options, problem, optimizer):
     if isinstance(options["line_search"], LineSearch):
         return options["line_search"]
