@@ -5,7 +5,7 @@ HeuristicBarrierStrategy          - complementarity heuristic with fallback
 QualityFunctionBarrierStrategy    - predictor-corrector or golden section
 """
 
-from .base import BarrierStrategy
+from .base import BarrierStrategy, barrier_floor, barrier_minimum, fraction_to_boundary
 from .monotone import MonotoneBarrierStrategy
 from .heuristic import HeuristicBarrierStrategy
 from .quality_function import QualityFunctionBarrierStrategy

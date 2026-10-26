@@ -2,12 +2,14 @@
 
 Picks the next mu from a predictor-corrector estimate or a golden-section
 search on the quality function, falling back to a monotone decrease when
-the picked mu stops making progress.
+the picked mu stops making progress. The picked mu never exceeds the
+initial barrier parameter.
 """
 
 import numpy as np
 
-from .base import BarrierStrategy, BarrierInfo
+from ..newton_direction import set_step_lengths
+from .base import BarrierStrategy, BarrierInfo, fraction_to_boundary, monotone_mu
 
 
 def _golden_section(f, a, b, sigma_tol, qf_tol, max_iters):
@@ -82,6 +84,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         self.update = self.problem.create_vector()
         self.temp = self.optimizer.create_opt_vector()
 
+        # One native call evaluates a trial step where the build provides it
+        self.fused_trial = hasattr(self.optimizer, "compute_quality_function_trial")
+
     def initialize(self, evaluator, state):
         """Scaling factors, mult_ind, initial QF reference value."""
 
@@ -94,11 +99,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         evaluator.evaluate_residual(state)
 
         # Seed the kkt-error reference with the initial error
-        d0 = state.dual_infeas
-        p0 = state.primal_infeas
-        c0 = state.complementarity
-        init_qf = d0 * self.sd + p0 * self.sp + c0 * self.sc
-        self.refs.append(init_qf)
+        self.refs.append(self._kkt_quality(evaluator, state))
 
     def update_barrier(self, evaluator, state):
         """Run one QF barrier-update iteration."""
@@ -109,56 +110,53 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         info.new_barrier = False
         info.mu_old = state.mu
 
-        # Mode switching before direction
-        if not self.free_mode:
-            if self._sufficient_progress(evaluator, state):
-                if state.comm_rank == 0 and self.options.get("verbose_barrier"):
-                    print("  QF: switching back to free mode")
-                self.free_mode = True
-                self._remember_point(evaluator, state)
-            else:
-                info.new_barrier = self._monotone_reduce(state)
-                info.new_subproblem = info.new_barrier
+        # One progress test per iteration decides the mode, as in Nocedal, Waechter, and Waltz
+        glob = self.options["adaptive_mu_globalization"]
+        progress = glob == "never-monotone" or self._sufficient_progress(evaluator, state)
+        if self.free_mode and progress:
+            self._remember_point(evaluator, state)
+        elif self.free_mode:
+            self._enter_monotone_mode(evaluator, state)
+            info.new_barrier = True
+        elif progress:
+            if state.comm_rank == 0 and self.options.get("verbose_barrier"):
+                print("  QF: switching back to free mode")
+            self.free_mode = True
+            self._remember_point(evaluator, state)
+        else:
+            info.new_barrier = self._monotone_reduce(evaluator, state)
 
+        # Free mode picks a new mu for every step
         if self.free_mode:
             info.new_barrier = True
-            glob = self.options["adaptive_mu_globalization"]
-            if glob == "never-monotone" or self._sufficient_progress(evaluator, state):
-                self._remember_point(evaluator, state)
-            else:
-                info.new_barrier = self._enter_monotone_mode(evaluator, state)
-                info.new_subproblem = info.new_barrier
 
         info.mu_new = state.mu
 
         return info
 
-    def add_step_correction(self, solver, evaluator, state):
-        """The step has been computed here, correct the step according to the algorithm selected"""
+    def computes_step(self):
+        """Free mode picks mu from the quality function along with its step."""
+        return self.free_mode
 
-        if self.free_mode:
-            # If we're in free mode, then use the quality function to predict mu
-            mu_new = self._quality_function_mu(solver, evaluator, state)
-            mu_new = max(mu_new, self.mu_min, self._lower_safeguard(state))
-            mu_new = min(mu_new, self.mu_max)
+    def compute_step(self, solver, evaluator, state):
+        """Choose mu by the quality function and compute the step at that mu."""
+        mu_new = self._quality_function_mu(solver, evaluator, state)
+        self.set_mu(state, mu_new)
 
-            self.set_mu(state, mu_new)
-
-            # Invalidate everything but the gradient, hessian and step
-            state.invalidate(grad=False, hess=False, step=False)
-
-        return
+        # Invalidate everything but the gradient, hessian and step
+        state.invalidate(grad=False, hess=False, step=False)
+        set_step_lengths(self.optimizer, state)
 
     def update_after_line_search(self, info, evaluator, state):
-        """If free mode rejects, fall back to monotone (unless never-monotone)."""
+        """A failed line search in free mode falls back to monotone (unless never-monotone)."""
 
         if not self.free_mode:
             return
         if self.options["adaptive_mu_globalization"] == "never-monotone":
             return
 
-        # We had rejected steps, update accordingly
-        if info.num_search_iters > 1:
+        # Backtracking is normal, only a failed search leaves free mode
+        if not info.success:
             comp, _ = evaluator.evaluate_complementarity(state)
             mu_candidate = self.options["adaptive_mu_monotone_init_factor"] * comp
             mu_candidate = max(mu_candidate, self._lower_safeguard(state), self.mu_min)
@@ -167,9 +165,8 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             self.set_mu(state, mu_candidate)
             self.free_mode = False
 
-            self.monotone_mu = mu_candidate
             if state.comm_rank == 0:
-                print(f"  QF -> monotone (step rejected): mu_bar={mu_candidate:.3e}")
+                print(f"  QF -> monotone (line search failed): mu_bar={mu_candidate:.3e}")
 
             state.invalidate(grad=False, hess=False)
 
@@ -181,40 +178,31 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         options = self.options
         if self._mu_min_default:
             self.mu_min = min(
-                options["mu_min"], 0.5 * min(self.tol, self.compl_inf_tol)
+                options["mu_min"],
+                0.5 * min(self.tol, state.obj_scale * self.compl_inf_tol),
             )
             self._mu_min_default = False
         if self.mu_max < 0:
-            avg_comp_init, _ = evaluator.evaluate_complementarity(state)
-            self.mu_max = options["mu_max_fact"] * max(avg_comp_init, 1.0)
+            # A larger mu recenters a poor start so slowly that the solve stalls
+            self.mu_max = state.mu
         if self.init_dual_inf < 0:
             evaluator.evaluate_residual(state)
             self.init_dual_inf = max(1.0, state.dual_infeas)
             self.init_primal_inf = max(1.0, state.primal_infeas)
 
-    def _monotone_reduce(self, state):
-        """Monotone mu reduction when subproblem is solved."""
-
-        btf = self.options["barrier_tol_factor"]
-        barrier_err = state.kkt_error
-        if barrier_err > btf * state.mu:
+    def _monotone_reduce(self, evaluator, state):
+        """Monotone mu reduction while the barrier subproblem is solved."""
+        mu_new = monotone_mu(self.options, evaluator, state)
+        mu_new = min(max(mu_new, self.mu_min), self.mu_max)
+        if mu_new >= state.mu:
             return False
-
-        kmu = self.options["mu_linear_decrease_factor"]
-        tmu = self.options["mu_superlinear_decrease_power"]
-        mu_new = min(kmu * state.mu, state.mu**tmu)
-        floor = min(self.tol, self.compl_inf_tol) / (btf + 1.0)
-        mu_new = max(mu_new, floor, self.mu_min)
-        mu_new = min(mu_new, self.mu_max)
 
         if state.comm_rank == 0 and self.options.get("verbose_barrier"):
             print(f"  QF monotone: {state.mu:.3e} -> {mu_new:.3e}")
-        self.monotone_mu = mu_new
 
         # Invalidate the residual and step since mu has changed
         self.set_mu(state, mu_new)
         state.invalidate(grad=False, hess=False)
-
         return True
 
     def _enter_monotone_mode(self, evaluator, state):
@@ -227,7 +215,6 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         mu_new = min(mu_new, self.mu_max)
 
         self.set_mu(state, mu_new)
-        self.monotone_mu = mu_new
         state.invalidate(grad=False, hess=False, step=False)
 
         if state.comm_rank == 0:
@@ -252,21 +239,22 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             return any(curr <= red_fact * ref for ref in self.refs)
 
         if glob == "obj-constr-filter":
-            # Get the constraint gradient at the current point
+            # The objective compares across barrier parameters where phi_mu does not
             evaluator.evaluate_objective_and_infeasibility(state)
-            f_curr = state.barrier_objective
+            f_curr = state.objective_value
             theta_curr = state.con_infeasibility
 
             m1 = min(
-                self.options.get("filter_max_margin", 1.0),
+                self.options["filter_max_margin"],
                 max(f_curr, theta_curr, 1e-30),
             )
-            margin = self.options.get("filter_margin_fact", 1e-5) * m1
-            for f_filt, theta_filt in self.glob_filter:
-                if f_curr + margin < f_filt or theta_curr + margin < theta_filt:
-                    return True
+            margin = self.options["filter_margin_fact"] * m1
 
-            return len(self.glob_filter) == 0
+            # Progress means the point is not dominated by any remembered entry
+            return all(
+                f_curr + margin < f_filt or theta_curr + margin < theta_filt
+                for f_filt, theta_filt in self.glob_filter
+            )
 
         return True
 
@@ -282,10 +270,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             self.refs.append(curr)
         elif glob == "obj-constr-filter":
             evaluator.evaluate_objective_and_infeasibility(state)
-            f_curr = state.barrier_objective
-            theta_curr = state.con_infeasibility
-
-            self.glob_filter.append((f_curr, theta_curr))
+            self.glob_filter.append((state.objective_value, state.con_infeasibility))
 
     def _lower_safeguard(self, state):
         """Lower mu safeguard based on infeasibility progress."""
@@ -304,9 +289,12 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         return safe
 
     def _kkt_quality(self, evaluator, state):
-        """Scalar KKT quality used for kkt-error globalization."""
-        dual_sq, primal_sq, comp_sq = self.optimizer.compute_kkt_error(
-            0.0, state.current, state.gradient
+        """Scalar KKT quality from the squared residual norms, used by the kkt-error globalization."""
+        dual_sq, primal_sq = self.optimizer.compute_kkt_error_squares(
+            state.current, state.gradient
+        )
+        comp_sq = self.optimizer.compute_sum_squared_complementarity(
+            0.0, state.current
         )
         qf = dual_sq * self.sd + primal_sq * self.sp + comp_sq * self.sc
 
@@ -333,13 +321,20 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
     def _quality_function_mu(self, solver, evaluator, state):
         """Pick new mu via predictor-corrector or golden-section search.
 
-        Sets self.px and self.update at the chosen mu for the caller.
+        Sets self.px and state.step at the chosen mu for the caller.
         Returns (sigma, new_mu) or None on degenerate complementarity.
         """
 
+        # The lower bound enters the search so the step matches the chosen mu
+        mu_lo = max(self.mu_min, self._lower_safeguard(state))
+
+        # Without complementarity there is nothing to choose, so keep mu
         avg_comp, _ = evaluator.evaluate_complementarity(state)
         if avg_comp < 1e-30:
-            return 1.0, state.mu
+            evaluator.evaluate_residual(state)
+            solver.solve(state.residual, self.px)
+            self.optimizer.compute_update(state.mu, state.current, self.px, state.step)
+            return state.mu
         mu_nat = avg_comp
 
         # Affine (mu=0) and centering (mu=avg_comp) solves -> one factor
@@ -347,9 +342,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             0.0, state.current, state.gradient, state.residual
         )
 
-        # Evaluate the KKT error
-        dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(
-            0.0, state.current, state.gradient
+        # Squared residual norms of the quality function
+        dual_inf, primal_inf = self.optimizer.compute_kkt_error_squares(
+            state.current, state.gradient
         )
         # Solve for the update with mu = 0
         solver.solve(state.residual, self.px)
@@ -369,13 +364,13 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         state.invalidate(grad=False, hess=False)
 
         if self.options["quality_function_predictor_corrector"]:
-            return self._mehrotra(state, self.px, self.dpx, mu_nat, avg_comp)
+            return self._mehrotra(state, self.px, self.dpx, mu_nat, avg_comp, mu_lo)
 
         return self._golden_search(
-            evaluator, state, self.px, self.dpx, mu_nat, dual_inf, primal_inf, avg_comp
+            evaluator, state, self.px, self.dpx, mu_nat, dual_inf, primal_inf, avg_comp, mu_lo
         )
 
-    def _mehrotra(self, state, px0, dpx, mu_nat, avg_comp):
+    def _mehrotra(self, state, px0, dpx, mu_nat, avg_comp, mu_lo):
         # Compute the update based on a step to mu = 0
         self.optimizer.compute_update(0.0, state.current, px0, state.step)
         alpha_aff_x, _, alpha_aff_z, _ = self.optimizer.compute_max_step(
@@ -391,7 +386,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         sigma_max = self.options["quality_function_sigma_max"]
         sigma = min((mu_aff / mu_nat) ** 3, sigma_max)
         mu_new = sigma * mu_nat
-        mu_new = max(mu_new, self.mu_min)
+        mu_new = max(mu_new, mu_lo)
         mu_new = min(mu_new, self.mu_max)
 
         if state.comm_rank == 0 and self.options.get("verbose_barrier"):
@@ -406,21 +401,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         if mu_nat > 0:
             sigma_eff = mu_new / mu_nat
 
-        # Set the step to the new update
+        # The full step at the new mu, whose lengths the caller sets
         px0.axpy(sigma_eff, dpx)
-
-        # Compute the full step
         self.optimizer.compute_update(mu_new, state.current, px0, state.step)
-
-        # Compute the maximum step lengths in the primal and dual directions
-        alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
-            state.tau, state.current, state.step
-        )
-        state.max_alpha_primal = alpha_x
-        state.max_alpha_dual = alpha_z
-        state.step_current = True
-
-        # Return the new value for mu
         return mu_new
 
     def _golden_search(
@@ -433,6 +416,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         dual_inf,
         primal_inf,
         avg_comp,
+        mu_lo,
     ):
         # Set up tau for trial-step probes
         d_inf_qf, p_inf_qf, c_inf_qf = self.optimizer.compute_kkt_error(
@@ -444,11 +428,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         nlp_error_qf = max(d_inf_qf / s_d_qf, p_inf_qf, c_inf_qf / s_c_qf)
 
         # Set the tau_qf value
-        tau_qf = max(self.options["tau_min"], 1.0 - nlp_error_qf)
+        tau_qf = fraction_to_boundary(self.options, nlp_error_qf)
 
-        sigma_lo_opt = max(
-            self.options["quality_function_sigma_min"], self.mu_min / mu_nat
-        )
+        sigma_lo_opt = max(self.options["quality_function_sigma_min"], mu_lo / mu_nat)
         sigma_up_opt = min(
             self.options["quality_function_sigma_max"], self.mu_max / mu_nat
         )
@@ -502,7 +484,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
                 )
 
         mu_new = sigma_star * mu_nat
-        mu_new = max(mu_new, self.mu_min)
+        mu_new = max(mu_new, mu_lo)
         mu_new = min(mu_new, self.mu_max)
 
         if state.comm_rank == 0 and self.options.get("verbose_barrier"):
@@ -516,21 +498,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         if mu_nat > 0:
             sigma_eff = mu_new / mu_nat
 
-        # Set the step to the new update
+        # The full step at the new mu, whose lengths the caller sets
         px0.axpy(sigma_eff, dpx)
-
-        # Compute the full step
         self.optimizer.compute_update(mu_new, state.current, px0, state.step)
-
-        # Compute the maximum step lengths in the primal and dual directions
-        alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
-            state.tau, state.current, state.step
-        )
-        state.max_alpha_primal = alpha_x
-        state.max_alpha_dual = alpha_z
-        state.step_current = True
-
-        # Return the new value for mu
         return mu_new
 
     def _evaluate_qf(
@@ -549,21 +519,29 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
     ):
         """q_L(sigma) at the combined step px0 + sigma * dpx."""
 
-        mu_s = sigma * mu_nat
-        self.update.copy(px0)
-        self.update.axpy(sigma, dpx)
+        if self.fused_trial and centrality == "none":
+            # The complementarity term uses the plain products with no mu target
+            alpha_x, alpha_z, trial_comp_sq = (
+                self.optimizer.compute_quality_function_trial(
+                    sigma, mu_nat, tau, state.current, px0, dpx
+                )
+            )
+        else:
+            mu_s = sigma * mu_nat
+            self.update.copy(px0)
+            self.update.axpy(sigma, dpx)
 
-        self.optimizer.compute_update(mu_s, state.current, self.update, state.step)
-        alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
-            tau, state.current, state.step
-        )
-        self.optimizer.apply_step_update(
-            alpha_x, alpha_z, state.current, state.step, self.temp
-        )
-        # The complementarity term uses the plain products, no mu target
-        trial_comp_sq = self.optimizer.compute_sum_squared_complementarity(
-            0.0, self.temp
-        )
+            self.optimizer.compute_update(mu_s, state.current, self.update, state.step)
+            alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
+                tau, state.current, state.step
+            )
+            self.optimizer.apply_step_update(
+                alpha_x, alpha_z, state.current, state.step, self.temp
+            )
+            # The complementarity term uses the plain products with no mu target
+            trial_comp_sq = self.optimizer.compute_sum_squared_complementarity(
+                0.0, self.temp
+            )
 
         qf = (
             (1.0 - alpha_z) ** 2 * dual_inf * self.sd

@@ -1,6 +1,6 @@
 """Classical barrier strategy driven by a complementarity heuristic."""
 
-from .base import BarrierStrategy, BarrierInfo
+from .base import BarrierStrategy, BarrierInfo, barrier_floor
 
 
 def loqo_heuristic(xi, complementarity, gamma, r, mu_floor=1e-12):
@@ -22,22 +22,17 @@ class HeuristicBarrierStrategy(BarrierStrategy):
         self.optimizer = optimizer
 
     def update_barrier(self, evaluator, state):
-        kappa_eps = self.options["barrier_tol_factor"]
-        compl_inf_tol = self.options["compl_inf_tol"]
-        tol = self.options["convergence_tolerance"]
-
         info = BarrierInfo()
         info.new_barrier = False
         info.mu_new = state.mu
         info.mu_old = state.mu
 
-        if state.iter > 0 and state.mu > min(tol, compl_inf_tol) / (kappa_eps + 1):
+        mu_floor = barrier_floor(self.options, state)
+        if state.iter > 0 and state.mu > mu_floor:
             gamma = self.options["heuristic_barrier_gamma"]
             r = self.options["heuristic_barrier_r"]
 
             comp, xi = evaluator.evaluate_complementarity(state)
-
-            mu_floor = min(tol, compl_inf_tol) / (kappa_eps + 1.0)
             mu_new, _ = loqo_heuristic(xi, comp, gamma, r, mu_floor)
 
             info.new_barrier = True
