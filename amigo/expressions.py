@@ -1063,7 +1063,7 @@ class ExprBuilder:
             parts, lines = self._split_sum(lhs, rhs, make_active)
             decl.extend(
                 self.get_declarations(
-                    parts, reference=False, mode=mode, template_name=template_name
+                    parts, scalar_reference=False, mode=mode, template_name=template_name
                 )
             )
             active.extend(lines)

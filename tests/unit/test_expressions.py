@@ -640,7 +640,7 @@ class TestInterp:
         rhs = am.interp1d(s, table, dx=0.5) * s
         builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
         decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
-        assert "A2D::Vec<R__, 5>& tab" in decl[0]
+        assert "A2D::VecRef<R__, 5> tab" in decl[0]
         assert "A2D::interp(tab, s, 0.0, 0.5, false)" in active[-1]
 
     def test_no_operation_shares_its_name_with_a_subpackage(self):
@@ -691,7 +691,7 @@ class TestFourier:
         rhs = am.fourier(s, table, period=0.5) * s
         builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
         decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
-        assert "A2D::Vec<R__, 5>& tab" in decl[0]
+        assert "A2D::VecRef<R__, 5> tab" in decl[0]
         assert "A2D::fourier(tab, s, 0.5)" in active[-1]
 
     @pytest.mark.parametrize("n", [4, 5, 100])
