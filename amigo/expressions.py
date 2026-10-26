@@ -660,33 +660,40 @@ class ExprBuilder:
             return f"{template_name}"
         else:
             if len(shape) == 1:
-                return f"A2D::Vec<{template_name}, {shape[0]}>"
+                return f"A2D::VecRef<{template_name}, {shape[0]}>"
             elif len(shape) == 2:
-                return f"A2D::Mat<{template_name}, {shape[0]}, {shape[1]}>"
+                return f"A2D::MatRef<{template_name}, {shape[0]}, {shape[1]}>"
 
-    def _get_ad_type(self, expr, reference=True, mode="eval", template_name="T__"):
+    def _get_ad_type(
+        self, expr, scalar_reference=False, mode="eval", template_name="T__"
+    ):
         decl = self._get_expr_type(expr, template_name=template_name)
+        shape = _normalize_shape(expr.node.shape)
+
         if mode == "eval" or not expr.is_active():
-            if reference:
+            if shape is None and scalar_reference:
                 return f"{decl}&"
             return decl
         elif mode == "grad":
-            if reference:
+            if shape is None and scalar_reference:
                 return f"A2D::ADObj<{decl}&>"
             return f"A2D::ADObj<{decl}>"
         else:
-            if reference:
+            if shape is None and scalar_reference:
                 return f"A2D::A2DObj<{decl}&>"
             return f"A2D::A2DObj<{decl}>"
 
     def get_declarations(
-        self, inputs, reference=True, mode="eval", template_name="T__"
+        self, inputs, scalar_reference=True, mode="eval", template_name="T__"
     ):
         lines = []
 
         for expr in inputs:
             decl = self._get_ad_type(
-                expr, reference=reference, mode=mode, template_name=template_name
+                expr,
+                scalar_reference=scalar_reference,
+                mode=mode,
+                template_name=template_name,
             )
             lines.append(f"{decl} {expr.to_cpp()}")
 
@@ -705,7 +712,9 @@ class ExprBuilder:
         lines = []
 
         for index, expr in enumerate(inputs):
-            decl = self._get_ad_type(expr, mode=mode, template_name=template_name)
+            decl = self._get_ad_type(
+                expr, scalar_reference=True, mode=mode, template_name=template_name
+            )
 
             line = f"{decl} {expr.to_cpp()}"
             if mode == "eval" or not expr.is_active():
@@ -760,7 +769,7 @@ class ExprBuilder:
         decl.extend(
             self.get_declarations(
                 temps,
-                reference=False,
+                scalar_reference=False,
                 mode=mode,
                 template_name=template_name,
             )

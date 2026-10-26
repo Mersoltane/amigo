@@ -1085,7 +1085,7 @@ class Component:
             )
 
             decl += builder.get_declarations(
-                [lhs], reference=False, mode=mode, template_name=template_name
+                [lhs], scalar_reference=False, mode=mode, template_name=template_name
             )
 
             if mode == "eval":
