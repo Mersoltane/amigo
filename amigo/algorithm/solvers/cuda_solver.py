@@ -99,6 +99,8 @@ class DirectCudaSolver(LinearSolver):
                 # Repeated violations mean the perturbations are too large
                 if n % 3 == 0 and self.pivot_eps > 1e-14:
                     self.pivot_eps = max(self.pivot_eps / 10.0, 1e-14)
+                    self._eps_eff = self.pivot_eps
+                    self.solver.set_pivot_epsilon(self.pivot_eps)
                     print(
                         f"  {self._name}: tightening pivot epsilon to "
                         f"{self.pivot_eps:.1e}"
@@ -109,12 +111,6 @@ class DirectCudaSolver(LinearSolver):
 
     def get_inertia(self):
         return self.solver.get_inertia()
-
-    def set_pivot_tolerance(self, pivtol):
-        # MUMPS pivtol rises for quality, cuDSS epsilon falls, so map inversely
-        eps = max(1e-14, self.pivot_eps * (1e-6 / max(float(pivtol), 1e-30)))
-        self._eps_eff = eps
-        self.solver.set_pivot_epsilon(eps)
 
     def static_pivot_floor(self):
         # Keep the dual block above the perturbation threshold

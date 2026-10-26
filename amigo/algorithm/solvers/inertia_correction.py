@@ -7,6 +7,8 @@ detects structural degeneracy across iterations.
 
 import numpy as np
 
+from .linear_solver import SINGULAR_MATRIX
+
 
 class InertiaCorrector:
     """Grows primal and constraint regularization until the factorized
@@ -55,6 +57,9 @@ class InertiaCorrector:
         self.last_delta_c = 0.0
         self.last_attempts = 0
 
+        # Flag of a factorization that failed in the last call, zero otherwise
+        self.failure = 0
+
         # Perturbation schedule constants
         self._dw_init = 1e-4  # first_hessian_perturbation
         self._dw_min = 1e-20  # min_hessian_perturbation
@@ -69,11 +74,26 @@ class InertiaCorrector:
         # Cap on delta_x past which a non-singular factorization with wrong inertia is accepted
         self._dw_accept = options["max_regularization"]
 
+        # delta_c as applied to the last factorization, for the log
+        self._applied_delta_c = 0.0
+
         # Dual regularization proportional to the infeasibility on every factorization
         self._dc_infeas_coeff = options["dual_reg_infeas_coeff"]
         self._dc_infeas = 0.0
         self._perturb_always_cd = options["perturb_always_cd"]
         self._warm_start = options["hessian_perturbation_warm_start"]
+
+        # Curvature test workspace for accepting a wrong inertia
+        self._curv_tol = options["neg_curv_test_tol"]
+        self.curv_step = self.problem.create_vector()
+        self.curv_wd = self.problem.create_vector()
+
+        # A failed decay of the resumed delta_x holds it until a later probe succeeds
+        self._hold = False
+        self._since_probe = 0
+        self._probe_mu = None
+        self._first_try = None
+        self._mu_seen = None
 
         # delta_c floor from the solver's static pivoting, set per factor call
         self._dc_floor = 0.0
@@ -84,10 +104,6 @@ class InertiaCorrector:
         self._degen_iters = 0
         self._degen_iters_max = 3
         self._test_status = self._NO_TEST
-
-        # Adaptive pivot tolerance
-        self._pivtol = 1e-6
-        self._pivtolmax = 0.1
 
         self.verbose = self.options["verbose_barrier"]
 
@@ -249,9 +265,6 @@ class InertiaCorrector:
         # Dual regularization for this KKT system with a mu floor at feasible points
         self._dc_infeas = self._dc_infeas_coeff * max(state.primal_infeas, state.mu)
 
-        # Pivot tolerance persists across iterations.  Once IncreaseQuality
-        # raises pivtol, the solver keeps the tighter setting
-
         # Save last perturbation
         if self._delta_x_curr > 0.0:
             self._delta_x_last = self._delta_x_curr
@@ -279,6 +292,19 @@ class InertiaCorrector:
         else:
             self._delta_x_curr = 0.0
 
+    # Names for the deficiency a factorization testifies
+    _HEALTHY = "healthy"
+    _CURVATURE = "curvature"
+    _RANK = "rank"
+
+    def _diagnose(self, n_pos, n_neg, singular):
+        """Name the deficiency of the factored system from its testimony."""
+        if not singular and self._is_inertia_ok(n_pos, n_neg):
+            return self._HEALTHY
+        if self.num_dual > 0 and (singular or n_neg < self.num_dual):
+            return self._RANK
+        return self._CURVATURE
+
     def _is_inertia_ok(self, np, nn):
         num_total = self.num_primal + self.num_dual
 
@@ -304,14 +330,21 @@ class InertiaCorrector:
         if delta_c > 0:
             delta_c = max(delta_c, self._dc_floor)
             perturb.add_scalar_at(dual_indices, -delta_c)
+        self._applied_delta_c = delta_c
 
         return
 
     def _apply_and_factor(self, solver, diagonal, perturb, hessian):
-        """Apply perturbation, factorize. Returns (n_pos, n_neg, singular)."""
+        """Apply perturbation, factorize. Returns (n_pos, n_neg, singular), or None on a failed factorization."""
 
         self._compute_perturbation(diagonal, perturb)
-        solver.factor(hessian, perturb)
+        flag = solver.factor(hessian, perturb)
+        if flag == SINGULAR_MATRIX:
+            # A singular matrix without an inertia count takes the singular perturbations
+            return 0, 0, True
+        if flag:
+            self.failure = flag
+            return None
 
         npos, nneg = solver.get_inertia()
         # npos + nneg < n means structurally zero pivots, route to delta_c
@@ -335,36 +368,49 @@ class InertiaCorrector:
             return True
 
         self._dc_floor = solver.static_pivot_floor()
+        self.failure = 0
+        self._mu_seen = state.mu
+        self._first_try = None
 
         # Prepare new system: save last perturbation, reset current
         self._consider_new_system(state)
 
-        # Skip the delta_x = 0 try once the degeneracy probes are finished
+        # Resume from the decayed delta_x whenever the last system was regularized
         if (
             self._warm_start
+            and self.last_delta_w > 0.0
             and self._test_status == self._NO_TEST
             and self._hess_degen != self._DEGENERATE
             and self._delta_x_curr == 0.0
             and self._delta_x_last > 0.0
         ):
-            self._delta_x_curr = max(self._dw_min, self._kw_dec * self._delta_x_last)
-
-        # Sync pivot tolerance to solver
-        solver.set_pivot_tolerance(self._pivtol)
-        augsys_improved = False
+            # After a failed decay the perturbation holds at its last value, probing down again on a new barrier
+            if not self._hold or state.mu != self._probe_mu or self._since_probe >= 10:
+                decayed = self._kw_dec * self._delta_x_last
+                self._delta_x_curr = decayed if decayed >= self._dw_init else 0.0
+                self._since_probe = 0
+                self._first_try = "probe"
+            else:
+                self._delta_x_curr = self._delta_x_last
+                self._since_probe += 1
+                self._first_try = "hold"
 
         # Main retry loop
         for attempt in range(self.max_corrections + 1):
-            n_pos, n_neg, singular = self._apply_and_factor(
+            result = self._apply_and_factor(
                 solver, state.diagonal, self.perturbed_diagonal, state.hessian
             )
-            ineritia_ok = self._is_inertia_ok(n_pos, n_neg)
 
-            if not singular and ineritia_ok:
-                # Success
-                self.last_delta_w = self._delta_x_curr
-                self.last_delta_c = self._delta_c_curr
-                self.last_attempts = attempt + 1
+            # A failed factorization cannot be repaired by more regularization
+            if result is None:
+                if state.comm_rank == 0:
+                    print(f"  Inertia: factorization failed because {solver.describe_failure(self.failure)}")
+                break
+
+            n_pos, n_neg, singular = result
+            diagnosis = self._diagnose(n_pos, n_neg, singular)
+
+            if diagnosis == self._HEALTHY:
                 if self._delta_x_curr > 0 and state.comm_rank == 0 and self.verbose:
                     print(
                         f"  Inertia correction: "
@@ -372,47 +418,41 @@ class InertiaCorrector:
                         f"delta_c={self._delta_c_curr:.2e}, "
                         f"attempts={attempt + 1}"
                     )
-                return True
+                return self._accept(attempt)
 
             if state.comm_rank == 0 and not singular and self.verbose:
                 print(
                     f"  Inertia: expected ({self.num_primal}+, {self.num_dual}-), "
-                    f"got ({n_pos}+, {n_neg}-), "
-                    f"dw={self._delta_x_curr:.1e}, pivtol={self._pivtol:.1e}"
+                    f"got ({n_pos}+, {n_neg}-), dw={self._delta_x_curr:.1e}"
                 )
 
-            # Dispatch based on failure type
-            if singular and self.num_dual > 0:
+            # A rank deficiency calls for delta_c first
+            if diagnosis == self._RANK:
                 if not self._perturb_for_singularity(state):
                     break
-            elif not singular and n_neg < self.num_dual:
-                # Too few negatives: IncreaseQuality first, then singular
-                assume_singular = True
-                if not augsys_improved:
-                    augsys_improved = self._increase_quality(solver)
-                    if augsys_improved:
-                        assume_singular = False
-                if assume_singular:
-                    if not self._perturb_for_singularity(state):
-                        break
             else:
-                # SYMSOLVER_WRONG_INERTIA (too many negatives) or
-                # SYMSOLVER_SINGULAR with no constraints
+                # Too many negative pivots or a singular matrix without constraints grow delta_w
+                # A step of positive curvature is usable despite the wrong inertia
+                if (
+                    not singular
+                    and self._curv_tol > 0.0
+                    and self._positive_curvature(solver, evaluator, state)
+                ):
+                    if state.comm_rank == 0 and self.verbose:
+                        print("  Inertia: accepting wrong inertia on positive curvature")
+                    return self._accept(attempt)
                 # Past the cap a mildly perturbed factorization beats a heavily convexified one
                 if (
                     not singular
                     and self._dw_accept > 0.0
                     and self._delta_x_curr >= self._dw_accept
                 ):
-                    self.last_delta_w = self._delta_x_curr
-                    self.last_delta_c = self._delta_c_curr
-                    self.last_attempts = attempt + 1
                     if state.comm_rank == 0 and self.verbose:
                         print(
                             f"  Inertia: accepting wrong inertia at "
                             f"delta_w={self._delta_x_curr:.2e} (cap)"
                         )
-                    return True
+                    return self._accept(attempt)
                 if not self._perturb_for_wrong_inertia(state):
                     if state.comm_rank == 0:
                         print(
@@ -423,18 +463,34 @@ class InertiaCorrector:
 
         # Inertia correction failed, store the last applied values
         self.last_delta_w = self._delta_x_curr
-        self.last_delta_c = self._delta_c_curr
+        self.last_delta_c = self._applied_delta_c
         self.last_attempts = self.max_corrections + 1
 
         return False
 
-    def _increase_quality(self, solver):
-        """Increase pivot tolerance: pivtol = min(pivtolmax, sqrt(pivtol))."""
-        if self._pivtol >= self._pivtolmax:
-            return False
-        self._pivtol = min(self._pivtolmax, self._pivtol**0.5)
-        solver.set_pivot_tolerance(self._pivtol)
+    def _accept(self, attempt):
+        self.last_delta_w = self._delta_x_curr
+        self.last_delta_c = self._applied_delta_c
+        self.last_attempts = attempt + 1
+
+        # A probe that serves at its first try lets the perturbation keep decaying, and one that fails holds it
+        if self._first_try == "probe":
+            self._hold = attempt > 0
+        self._probe_mu = self._mu_seen
         return True
+
+    def _positive_curvature(self, solver, evaluator, state):
+        """Curvature test of Chiang and Zavala on the primal step of the current factorization."""
+        evaluator.evaluate_residual(state)
+        solver.solve(state.residual, self.curv_step)
+        self.curv_step.fill_at(self.problem.get_constraint_indices(), 0.0)
+        self.curv_step.copy_device_to_host()
+        state.hessian.mult(self.curv_step, self.curv_wd)
+
+        d = self.curv_step.get_array()
+        curvature = np.dot(d, self.curv_wd.get_array())
+        curvature += np.dot(self.perturbed_diagonal.get_array() * d, d)
+        return curvature >= self._curv_tol * np.dot(d, d)
 
     def add_log_info(self, info):
         """Add information to the logger"""

@@ -1,9 +1,19 @@
 from . import LinearSolver
+from .linear_solver import SINGULAR_MATRIX
 
 import os
 import sys
 import ctypes
 import numpy as np
+
+# Workspace errors that a larger ICNTL(14) repairs
+WORKSPACE_ERRORS = (-8, -9)
+
+# Doublings of ICNTL(14) before a workspace error ends the factorization
+MAX_WORKSPACE_DOUBLINGS = 20
+
+# Error code of a numerically singular matrix
+MUMPS_SINGULAR = -10
 
 
 def _load_mumps_library():
@@ -268,21 +278,37 @@ class MumpsSolver(LinearSolver):
         self._dmumps_c(self._ct.byref(self._mumps))
 
     def _factor_current(self):
+        """Analyze once and factor, returning zero, SINGULAR_MATRIX, or the MUMPS error code."""
         if not self._have_symbolic:
             self._mumps.job = 1  # symbolic analysis with actual values
             self._call_mumps()
             if self._mumps.infog[0] < 0:
-                raise RuntimeError(
-                    f"MUMPS analysis failed: infog(1)={self._mumps.infog[0]}"
-                )
+                return self._failure("analysis")
             self._have_symbolic = True
         self._mumps.job = 2  # numerical factorization
         self._call_mumps()
+
+        # A workspace error is repaired by doubling the workspace as in IPOPT
+        for _ in range(MAX_WORKSPACE_DOUBLINGS):
+            if self._mumps.infog[0] not in WORKSPACE_ERRORS:
+                break
+            self._mumps.icntl[13] *= 2
+            self._call_mumps()
+
+        if self._mumps.infog[0] == MUMPS_SINGULAR:
+            return SINGULAR_MATRIX
         if self._mumps.infog[0] < 0:
-            raise RuntimeError(
-                f"MUMPS factorize failed: infog(1)={self._mumps.infog[0]}, "
-                f"infog(2)={self._mumps.infog[1]}"
-            )
+            return self._failure("factorization")
+        return 0
+
+    def _failure(self, phase):
+        """Report a failed MUMPS phase and return its error code."""
+        info = int(self._mumps.infog[0])
+        print(
+            f"  MumpsSolver: {phase} failed with INFOG(1) = {info}, "
+            f"INFOG(2) = {self._mumps.infog[1]}"
+        )
+        return info
 
     def _update_values(self, hessian, diagonal):
         data = hessian.get_data()
@@ -290,9 +316,9 @@ class MumpsSolver(LinearSolver):
         self._a[self._diag_indices] += diagonal.get_array()
 
     def factor(self, hessian, diagonal):
-        """Refresh values from self.hess and run MUMPS analysis + factor."""
+        """Refresh the values and factor, returning a nonzero flag on failure."""
         self._update_values(hessian, diagonal)
-        self._factor_current()
+        return self._factor_current()
 
     def solve(self, bx, px):
         """Solve the system of equations"""
@@ -319,10 +345,6 @@ class MumpsSolver(LinearSolver):
         n_neg = int(self._mumps.infog[11])
         n_pos = self.nrows - n_neg
         return n_pos, n_neg
-
-    def set_pivot_tolerance(self, pivtol):
-        """Set the pivot tolerance"""
-        self._mumps.cntl[0] = pivtol
 
     def __del__(self):
         try:

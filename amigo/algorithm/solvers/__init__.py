@@ -21,18 +21,18 @@ def make_solver(options, state, problem=None, optimizer=None):
     elif options["solver"] == "amigo":
         return AmigoSolver(options, state)
     elif options["solver"] == "mumps":
+        # Only a missing library falls back, any other error surfaces
         try:
             return MumpsSolver(options, state)
-        except:
-            warnings.warn("Exception on MUMPS import, reverting to AmigoSolver")
+        except ImportError as e:
+            warnings.warn(f"MUMPS unavailable, using AmigoSolver instead: {e}")
             return AmigoSolver(options, state)
     elif options["solver"] == "cuda":
+        # Only a build without CUDA falls back, any other error surfaces
         try:
             return DirectCudaSolver(options, state)
-        except:
-            warnings.warn(
-                "Exception on DirectCudaSolver import, reverting to AmigoSolver"
-            )
+        except NotImplementedError as e:
+            warnings.warn(f"CUDA unavailable, using AmigoSolver instead: {e}")
             return AmigoSolver(options, state)
     elif options["solver"] == "cuda_bordered":
         # Same iterates as "cuda", with hub columns eliminated by Schur

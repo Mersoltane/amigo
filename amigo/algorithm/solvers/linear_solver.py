@@ -1,15 +1,27 @@
 from abc import ABC, abstractmethod
 import numpy as np
 
+# Factorization flag for a singular matrix that regularization can repair
+SINGULAR_MATRIX = 1
+
 
 class LinearSolver(ABC):
     @abstractmethod
     def factor(self, hess, diag):
+        """Factor hess plus diag, returning SINGULAR_MATRIX or another nonzero flag on failure."""
         return
 
     @abstractmethod
     def solve(self, b, x):
         return
+
+    def describe_failure(self, flag):
+        """Reason for a nonzero factorization flag other than SINGULAR_MATRIX."""
+        return f"the solver returned flag {flag}"
+
+    def reset(self, options, state):
+        """Prepare the solver for a new solve on state, False when it must be rebuilt."""
+        return False
 
     def inertia_enabled(self):
         return False
@@ -17,12 +29,13 @@ class LinearSolver(ABC):
     def get_inertia(self):
         return None
 
-    def set_pivot_tolerance(self, pivtol):
-        pass
-
     def static_pivot_floor(self):
         # Static-pivoting solvers return their perturbation epsilon floor
         return 0.0
+
+    def min_pivot(self):
+        """Smallest pivot magnitude of the last factorization, None when the solver cannot say."""
+        return None
 
     @staticmethod
     def find_diag_indices(rowp, cols, nrows):
