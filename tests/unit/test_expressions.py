@@ -57,6 +57,17 @@ class TestIsZero:
         assert node.is_zero() is False
 
 
+class TestUnsupportedUnary:
+    @pytest.mark.parametrize("op", UnaryNode.unsupported_ops)
+    def test_unsupported_op_raises_before_code_generation(self, op):
+        with pytest.raises(NotImplementedError, match=op):
+            UnaryNode(op, Expr(VarNode("x")))
+
+    def test_unknown_op_names_the_op(self):
+        with pytest.raises(ValueError, match="erf"):
+            UnaryNode("erf", Expr(VarNode("x")))
+
+
 # ---------------------------------------------------------------------------
 # is_active() — active/passive flag for each node type
 # ---------------------------------------------------------------------------
@@ -439,3 +450,327 @@ class TestNormalizeShape:
     def test_float_raises_type_error(self):
         with pytest.raises(TypeError):
             _normalize_shape(3.14)
+
+
+# ---------------------------------------------------------------------------
+# Long sums in the generated derivative code are built in chunks
+# ---------------------------------------------------------------------------
+
+from amigo.expressions import ExprBuilder, _SUM_CHUNK, _balanced_sum, _sum_terms
+
+
+def _names(n):
+    return [Expr(VarNode(f"t{i}")) for i in range(n)]
+
+
+def _lagrangian_lines(nterms, mode="hprod", passive=None):
+    """Generated lines for a Lagrangian built term by term like a component builds it."""
+    x = Expr(VarNode("x", shape=nterms))
+    lam = Expr(VarNode("lam", shape=nterms))
+    rhs = Expr(ConstNode(value=0.0))
+    for i in range(nterms):
+        rhs = rhs + x[i] * lam[i]
+    if passive is not None:
+        rhs = rhs + passive
+
+    lhs = Expr(VarNode("lagrangian__"))
+    builder = ExprBuilder([], [], [x, lam], [], rhs=rhs, lhs=lhs)
+    return builder.get_cpp_lines(mode=mode, template_name="R__")
+
+
+class TestSplitSum:
+    def test_sum_terms_returns_the_terms_in_order(self):
+        a, b, c, d = _names(4)
+        terms = _sum_terms(((a + b) + c) + d)
+        assert [t.to_cpp() for t in terms] == ["t0", "t1", "t2", "t3"]
+
+    def test_sum_terms_keeps_a_difference_whole(self):
+        a, b, c = _names(3)
+        terms = _sum_terms(a + (b - c))
+        assert [t.to_cpp() for t in terms] == ["t0", "(t1 - t2)"]
+
+    def test_balanced_sum_pairs_the_terms(self):
+        total = _balanced_sum(_names(5))
+        assert total.to_cpp() == "(((t0 + t1) + (t2 + t3)) + t4)"
+        assert [t.to_cpp() for t in _sum_terms(total)] == [f"t{i}" for i in range(5)]
+
+    def test_short_sum_keeps_one_eval(self):
+        decl, passive, active = _lagrangian_lines(_SUM_CHUNK)
+        assert len(active) == 1
+        assert active[0].startswith("A2D::Eval(")
+        assert "call_noinline" not in active[0]
+
+    def test_long_sum_builds_each_chunk_in_its_own_frame(self):
+        nterms = 3 * _SUM_CHUNK + 1
+        decl, passive, active = _lagrangian_lines(nterms)
+        chunks, total = active[:-1], active[-1]
+
+        assert len(chunks) == 4
+        assert all(line.startswith("amigo::call_noinline([&]() {") for line in chunks)
+        for g in range(4):
+            assert f"A2D::A2DObj<R__> lagrangian{g}__" in decl
+            assert f"lagrangian{g}__" in total
+
+        # Every term lands in exactly one chunk
+        assert sum(line.count("x[") for line in chunks) == nterms
+        assert "x[" not in total
+        assert total.startswith("A2D::Eval(") and total.endswith(", lagrangian__)")
+
+    def test_eval_mode_is_never_split(self):
+        decl, passive, active = _lagrangian_lines(4 * _SUM_CHUNK, mode="eval")
+        assert len(active) == 1
+        assert active[0].startswith("lagrangian__ = ")
+
+    def test_passive_terms_join_the_final_sum(self):
+        data = Expr(VarNode("d", active=False))
+        decl, passive, active = _lagrangian_lines(2 * _SUM_CHUNK + 1, passive=data * data)
+        assert "(d * d)" in active[-1]
+        assert all("(d * d)" not in line for line in active[:-1])
+
+
+# ---------------------------------------------------------------------------
+# Binary functions with a number, the norm, and table interpolation
+# ---------------------------------------------------------------------------
+
+import pkgutil
+
+import numpy as np
+
+import amigo as am
+import amigo.unary_operations as operations
+from amigo.expressions import InterpNode, _FRAME_DEPTH, _MAX_DEPTH
+
+
+class TestNumberArguments:
+    @pytest.mark.parametrize("op", ["max2", "min2", "atan2"])
+    def test_number_first_becomes_a_float_constant(self, op):
+        a = Expr(VarNode("a"))
+        assert getattr(am, op)(0, a).to_cpp() == f"A2D::{op}(0.0, a)"
+
+    @pytest.mark.parametrize("op", ["max2", "min2", "atan2"])
+    def test_number_second_becomes_a_float_constant(self, op):
+        a = Expr(VarNode("a"))
+        assert getattr(am, op)(a, 2).to_cpp() == f"A2D::{op}(a, 2.0)"
+
+    @pytest.mark.parametrize("op", ["max2", "min2", "atan2"])
+    def test_two_numbers_raise(self, op):
+        with pytest.raises(ValueError):
+            getattr(am, op)(1.0, 2.0)
+
+    def test_unknown_type_raises(self):
+        with pytest.raises(TypeError):
+            am.max2("a", Expr(VarNode("a")))
+
+    def test_code_generation_with_a_number(self):
+        x = Expr(VarNode("x"))
+        lhs = Expr(VarNode("lagrangian__"))
+        builder = ExprBuilder([], [], [x], [], rhs=am.max2(0.0, x) * x, lhs=lhs)
+        decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
+        assert "A2D::max2(0.0, x)" in active[-1]
+
+
+class TestNorm:
+    def test_norm_of_scalars_is_the_root_of_a_balanced_sum(self):
+        a, b, c = (Expr(VarNode(n)) for n in "abc")
+        expected = "A2D::norm_sqrt((((a * a) + (b * b)) + (c * c)))"
+        assert am.norm(a, b, c).to_cpp() == expected
+
+    def test_norm_of_a_vector_reads_its_entries(self):
+        v = Expr(VarNode("v", shape=3))
+        assert am.norm(v).to_cpp() == am.norm(v[0], v[1], v[2]).to_cpp()
+
+    def test_norm_of_a_list(self):
+        a, b = Expr(VarNode("a")), Expr(VarNode("b"))
+        assert am.norm([a, b]).to_cpp() == am.norm(a, b).to_cpp()
+
+    def test_norm_needs_an_argument(self):
+        with pytest.raises(ValueError):
+            am.norm()
+
+    def test_norm_sqrt_costs_like_sqrt(self):
+        a = Expr(VarNode("a"))
+        assert UnaryNode("norm_sqrt", a).compute_cost() == UnaryNode("sqrt", a).compute_cost()
+
+
+def _table(shape=5):
+    return Expr(VarNode("tab", shape=shape, active=False))
+
+
+class TestInterp:
+    def test_vector_table(self):
+        s = Expr(VarNode("s"))
+        e = am.interp1d(s, _table(), dx=0.25, periodic=True)
+        assert e.to_cpp() == "A2D::interp(tab, s, 0.0, 0.25, true)"
+
+    def test_matrix_column(self):
+        s = Expr(VarNode("s"))
+        e = am.interp1d(s, _table((5, 3)), column=2, x0=-1.0)
+        assert e.to_cpp() == "A2D::interp(tab, 2, s, -1.0, 1.0, false)"
+
+    def test_active_table_raises(self):
+        with pytest.raises(TypeError):
+            am.interp1d(Expr(VarNode("s")), Expr(VarNode("tab", shape=5)))
+
+    @pytest.mark.parametrize(
+        "shape, kwargs",
+        [
+            ((5, 3), {}),
+            ((5, 3), {"column": 3}),
+            (5, {"column": 0}),
+            (5, {"dx": 0.0}),
+            (1, {}),
+        ],
+    )
+    def test_invalid_tables_raise(self, shape, kwargs):
+        with pytest.raises(ValueError):
+            am.interp1d(Expr(VarNode("s")), _table(shape), **kwargs)
+
+    def test_activity_follows_the_argument(self):
+        assert am.interp1d(Expr(VarNode("s")), _table()).is_active()
+        assert not am.interp1d(Expr(ConstNode(value=0.3)), _table()).is_active()
+
+    def test_round_trip(self):
+        e = am.interp1d(Expr(VarNode("s")), _table((5, 2)), column=1, x0=0.5, dx=0.1)
+        assert Expr.deserialize(e.serialize()).to_cpp() == e.to_cpp()
+
+    def test_code_generation(self):
+        s = Expr(VarNode("s"))
+        table = _table()
+        lhs = Expr(VarNode("lagrangian__"))
+        rhs = am.interp1d(s, table, dx=0.5) * s
+        builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
+        decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
+        assert "A2D::Vec<R__, 5>& tab" in decl[0]
+        assert "A2D::interp(tab, s, 0.0, 0.5, false)" in active[-1]
+
+    def test_no_operation_shares_its_name_with_a_subpackage(self):
+        # Importing a subpackage binds its name on amigo over any operation of that name
+        names = [m.name for m in pkgutil.iter_modules(am.__path__)]
+        assert [name for name in names if callable(getattr(operations, name, None))] == []
+
+
+class TestFourier:
+    def test_vector_table(self):
+        s = Expr(VarNode("s"))
+        assert am.fourier(s, _table()).to_cpp() == "A2D::fourier(tab, s, 1.0)"
+
+    def test_matrix_column(self):
+        s = Expr(VarNode("s"))
+        e = am.fourier(s, _table((5, 3)), column=2, period=0.5)
+        assert e.to_cpp() == "A2D::fourier(tab, 2, s, 0.5)"
+
+    def test_active_table_raises(self):
+        with pytest.raises(TypeError):
+            am.fourier(Expr(VarNode("s")), Expr(VarNode("tab", shape=5)))
+
+    @pytest.mark.parametrize(
+        "shape, kwargs",
+        [
+            ((5, 3), {}),
+            ((5, 3), {"column": 3}),
+            (5, {"column": 0}),
+            (5, {"period": 0.0}),
+        ],
+    )
+    def test_invalid_tables_raise(self, shape, kwargs):
+        with pytest.raises(ValueError):
+            am.fourier(Expr(VarNode("s")), _table(shape), **kwargs)
+
+    def test_activity_follows_the_argument(self):
+        assert am.fourier(Expr(VarNode("s")), _table()).is_active()
+        assert not am.fourier(Expr(ConstNode(value=0.3)), _table()).is_active()
+
+    def test_round_trip(self):
+        e = am.fourier(Expr(VarNode("s")), _table((5, 2)), column=1, period=2.0)
+        assert Expr.deserialize(e.serialize()).to_cpp() == e.to_cpp()
+
+    def test_code_generation(self):
+        s = Expr(VarNode("s"))
+        table = _table()
+        lhs = Expr(VarNode("lagrangian__"))
+        rhs = am.fourier(s, table, period=0.5) * s
+        builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
+        decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
+        assert "A2D::Vec<R__, 5>& tab" in decl[0]
+        assert "A2D::fourier(tab, s, 0.5)" in active[-1]
+
+    @pytest.mark.parametrize("n", [4, 5, 100])
+    def test_coefficients_give_the_curve_through_the_samples(self, n):
+        rng = np.random.default_rng(n)
+        samples = rng.standard_normal((n, 2))
+        coef = am.fourier_coefficients(samples)
+        s = np.arange(n) / n
+        basis = [np.ones(n)]
+        for k in range(1, (n + 1) // 2):
+            basis += [np.cos(2 * np.pi * k * s), np.sin(2 * np.pi * k * s)]
+        if n % 2 == 0:
+            basis.append(np.cos(np.pi * n * s))
+        assert np.allclose(np.array(basis).T @ coef, samples, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Long chains inside a term end in shallow temporaries
+# ---------------------------------------------------------------------------
+
+
+def _paren_depth(code):
+    best = current = 0
+    for ch in code:
+        if ch == "(":
+            current += 1
+            best = max(best, current)
+        elif ch == ")":
+            current -= 1
+    return best
+
+
+def _chain_builder(nterms):
+    """A term that multiplies a chain of nterms additions, like a long series in a constraint."""
+    x = Expr(VarNode("x", shape=nterms))
+    lam = Expr(VarNode("lam"))
+    chain = x[0]
+    for i in range(1, nterms):
+        chain = chain + x[i] * x[i]
+    lhs = Expr(VarNode("lagrangian__"))
+    return ExprBuilder([], [], [x, lam], [], rhs=lam * chain, lhs=lhs)
+
+
+class TestDepthLimit:
+    def test_short_chains_keep_one_expression(self):
+        builder = _chain_builder(_MAX_DEPTH // 2)
+        assert builder.temp_exprs == []
+
+    def test_long_chain_is_cut_into_shallow_temporaries(self):
+        builder = _chain_builder(100)
+        decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
+        assert len(builder.temp_exprs) >= 100 // _MAX_DEPTH
+        assert max(_paren_depth(line) for line in active) <= _MAX_DEPTH + 4
+
+    def test_deep_temporaries_are_built_in_their_own_frame(self):
+        builder = _chain_builder(100)
+        decl, passive, active = builder.get_cpp_lines(mode="hprod", template_name="R__")
+        temps = active[:-1]
+        assert temps and all(line.startswith("amigo::call_noinline([&]() {") for line in temps)
+        assert all(builder.temp_frames)
+
+    def test_eval_mode_uses_plain_temporaries(self):
+        builder = _chain_builder(100)
+        decl, passive, active = builder.get_cpp_lines(mode="eval", template_name="R__")
+        assert all("call_noinline" not in line for line in active)
+        assert max(_paren_depth(line) for line in active) <= _MAX_DEPTH + 2
+
+    def test_top_level_sum_is_left_to_the_chunks(self):
+        nterms = 4 * _MAX_DEPTH
+        x = Expr(VarNode("x", shape=nterms))
+        lam = Expr(VarNode("lam", shape=nterms))
+        rhs = x[0] * lam[0]
+        for i in range(1, nterms):
+            rhs = rhs + x[i] * lam[i]
+        lhs = Expr(VarNode("lagrangian__"))
+        builder = ExprBuilder([], [], [x, lam], [], rhs=rhs, lhs=lhs)
+        assert builder.temp_exprs == []
+
+    def test_very_deep_chain_generates_code(self):
+        builder = _chain_builder(3000)
+        decl, passive, active = builder.get_cpp_lines(mode="grad", template_name="R__")
+        assert max(_paren_depth(line) for line in active) <= _MAX_DEPTH + 4

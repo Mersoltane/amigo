@@ -108,3 +108,37 @@ class TestParseAttributePath:
         node = ast.parse("a.b", mode="eval").body
         result = _parse_attribute_path(node)
         assert result == ["a", "b"]
+
+
+class TestModelVectorAssigned:
+    """ModelVector records the entries set through it so optimizers apply only those."""
+
+    def make_vector(self, size=5, blank=True):
+        import amigo as am
+        from amigo.model import ModelVector
+
+        return ModelVector(None, am.Vector(size), blank=blank)
+
+    def test_blank_vector_has_no_assignment(self):
+        assert not self.make_vector().get_assigned().any()
+
+    def test_wrapped_vector_counts_as_fully_set(self):
+        vec = self.make_vector(blank=False)
+        vec[1] = 2.0
+        assert vec.get_assigned() is None
+
+    def test_index_and_slice_assignments_are_marked(self):
+        vec = self.make_vector()
+        vec[1] = 2.0
+        vec[np.array([3, 4])] = [5.0, 6.0]
+        assert vec.get_assigned().tolist() == [False, True, False, True, True]
+
+    def test_full_slice_marks_every_entry(self):
+        vec = self.make_vector()
+        vec[:] = 0.0
+        assert vec.get_assigned().all()
+
+    def test_copy_marks_every_entry(self):
+        vec = self.make_vector()
+        vec.copy(self.make_vector())
+        assert vec.get_assigned().all()
