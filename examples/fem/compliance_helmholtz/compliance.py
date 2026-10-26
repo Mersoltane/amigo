@@ -1,573 +1,165 @@
 import amigo as am
 import numpy as np  # used for plotting/analysis
 import argparse
-import time
-import matplotlib.pylab as plt
+from amigo.fem import (
+    Mesh,
+    Problem,
+    SolutionSpace,
+    build_grid,
+)
 
 
-def eval_shape_funcs(xi, eta):
-    N = 0.25 * np.array(
-        [
-            (1.0 - xi) * (1.0 - eta),
-            (1.0 + xi) * (1.0 - eta),
-            (1.0 + xi) * (1.0 + eta),
-            (1.0 - xi) * (1.0 + eta),
-        ]
-    )
-    Nxi = 0.25 * np.array([-(1.0 - eta), (1.0 - eta), (1.0 + eta), -(1.0 + eta)])
-    Neta = 0.25 * np.array([-(1.0 - xi), -(1.0 + xi), (1.0 + xi), (1.0 - xi)])
+def potential_plane_stress(soln, data=None, geo=None):
+    """Strain energy density"""
+    # Displacement gradients in physical space
+    ux, uy = soln["u"].grad
+    vx, vy = soln["v"].grad
 
-    return N, Nxi, Neta
+    # Strain components
+    exx = ux
+    eyy = vy
+    exy = vx + uy
 
+    # Set up the material penalization
+    p = data["p"].value
+    rho = soln["rho"].value
+    rho0 = data["rho0"].value
 
-def dot(N, u):
-    return N[0] * u[0] + N[1] * u[1] + N[2] * u[2] + N[3] * u[3]
+    # Material properties (hardcoded or pull from data)
+    E0 = 1e-3
+    E1 = 1.0
+    nu = 0.3
 
+    # Compute the penalty
+    const = rho0**p
+    factor = p * rho0 ** (p - 1)
+    E = E0 + (E1 - E0) * (const + factor * (rho - rho0))
+    c = E / (1.0 - nu**2)  # poisson's ratio
 
-def compute_detJ(xi, eta, X, Y):
-    N, N_xi, N_ea = eval_shape_funcs(xi, eta)
+    # Constitutive matrix C acting on [e11, e22, e12]
+    # W = 0.5 * eT C e
+    W = 0.5 * c * (exx**2 + eyy**2 + 2.0 * nu * exx * eyy + 0.5 * (1.0 - nu) * exy**2)
 
-    x_xi = dot(N_xi, X)
-    x_ea = dot(N_ea, X)
+    return W
 
-    y_xi = dot(N_xi, Y)
-    y_ea = dot(N_ea, Y)
 
-    detJ = x_xi * y_ea - x_ea * y_xi
+def potential_helmholz_filter(soln, data=None, geo=None):
+    """Potential filter"""
+    rho = soln["rho"].value
+    rhox, rhoy = soln["rho"].grad
 
-    return x_xi, x_ea, y_xi, y_ea, detJ
+    r = 0.1
 
+    return 0.5 * (rho * rho + r**2 * (rhox**2 + rhoy**2)) - 1.0
 
-def compute_shape_derivs(xi, eta, X, Y):
-    N, N_xi, N_ea = eval_shape_funcs(xi, eta)
 
-    x_xi, x_ea, y_xi, y_ea, detJ = compute_detJ(xi, eta, X, Y)
-    invJ = [[y_ea / detJ, -x_ea / detJ], [-y_xi / detJ, x_xi / detJ]]
+def potential_traction(soln, data=None, geo=None):
+    """External Work Line integral integrand"""
+    u = soln["u"].value
+    v = soln["v"].value
 
-    Nx = [
-        invJ[0][0] * N_xi[0] + invJ[1][0] * N_ea[0],
-        invJ[0][0] * N_xi[1] + invJ[1][0] * N_ea[1],
-        invJ[0][0] * N_xi[2] + invJ[1][0] * N_ea[2],
-        invJ[0][0] * N_xi[3] + invJ[1][0] * N_ea[3],
-    ]
+    # traction force for element
+    # W = uT t
+    tx = 0
+    ty = -1
 
-    Ny = [
-        invJ[0][1] * N_xi[0] + invJ[1][1] * N_ea[0],
-        invJ[0][1] * N_xi[1] + invJ[1][1] * N_ea[1],
-        invJ[0][1] * N_xi[2] + invJ[1][1] * N_ea[2],
-        invJ[0][1] * N_xi[3] + invJ[1][1] * N_ea[3],
-    ]
-
-    return N, Nx, Ny, detJ
-
-
-class Helmholtz(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        # Add keyword arguments for the compute function
-        args = []
-        for n in range(4):
-            args.append({"n": n})
-        self.set_args(args)
-
-        # The filter radius
-        self.add_constant("r_filter", 0.1)
-
-        # The x/y coordinates
-        self.add_data("x_coord", shape=(4,))
-        self.add_data("y_coord", shape=(4,))
-
-        # The implicit topology input/constraint
-        self.add_input("x", shape=(4,), value=0.5, lower=0.0, upper=1.0)
-        self.add_input("rho", shape=(4,), value=0.5, lower=0.0, upper=1.0)
-
-        # Add the residual
-        self.add_constraint("rho_res", shape=(4,), value=1.0, lower=0.0, upper=0.0)
-
-        return
-
-    def compute(self, n=None):
-        qpts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
-        xi = qpts[n % 2]
-        eta = qpts[n // 2]
-
-        r = self.constants["r_filter"]
-        x = self.inputs["x"]
-        rho = self.inputs["rho"]
-
-        X = self.data["x_coord"]
-        Y = self.data["y_coord"]
-
-        # Compute the derivatives of the shape functions wrt x and y
-        N, Nx, Ny, detJ = compute_shape_derivs(xi, eta, X, Y)
-
-        x0 = dot(N, x)
-        rhoE = dot(N, rho)
-        rho_x = dot(Nx, rho)
-        rho_y = dot(Ny, rho)
-
-        self.constraints["rho_res"] = [
-            detJ * (N[0] * (rhoE - x0) + r * r * (Nx[0] * rho_x + Ny[0] * rho_y)),
-            detJ * (N[1] * (rhoE - x0) + r * r * (Nx[1] * rho_x + Ny[1] * rho_y)),
-            detJ * (N[2] * (rhoE - x0) + r * r * (Nx[2] * rho_x + Ny[2] * rho_y)),
-            detJ * (N[3] * (rhoE - x0) + r * r * (Nx[3] * rho_x + Ny[3] * rho_y)),
-        ]
-
-        return
-
-
-class Topology(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        # Add keyword arguments for the compute function
-        args = []
-        for n in range(4):
-            args.append({"n": n})
-        self.set_args(args)
-
-        # Constants
-        self.add_constant("E", 1.0)
-        self.add_constant("nu", 0.3)
-        self.add_constant("kappa", 1e-6)
-
-        # Add the penalty
-        self.add_data("p")
-
-        # The x/y coordinates
-        self.add_data("x_coord", shape=(4,))
-        self.add_data("y_coord", shape=(4,))
-        self.add_data("rho0", shape=(4,), value=0.5, lower=0.0, upper=1.0)
-
-        # The inputs to the problem
-        self.add_input("rho", shape=(4,), value=0.5, lower=0.0, upper=1.0)
-        self.add_input("u", shape=(4,), value=0.0)
-        self.add_input("v", shape=(4,), value=0.0)
-
-        # Add the residuals
-        self.add_constraint("u_res", shape=(4,), value=1.0, lower=0.0, upper=0.0)
-        self.add_constraint("v_res", shape=(4,), value=1.0, lower=0.0, upper=0.0)
-
-        # Add the objective
-        self.add_objective("compliance")
-
-        return
-
-    def compute(self, n=None):
-        qpts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
-        xi = qpts[n % 2]
-        eta = qpts[n // 2]
-
-        E = self.constants["E"]
-        nu = self.constants["nu"]
-        kappa = self.constants["kappa"]
-
-        # Extract the input variables
-        rho = self.inputs["rho"]
-        u = self.inputs["u"]
-        v = self.inputs["v"]
-
-        # Extract the input data
-        p = self.data["p"]
-        rho0 = self.data["rho0"]
-        X = self.data["x_coord"]
-        Y = self.data["y_coord"]
-
-        # Compute the derivatives of the shape functions wrt x and y
-        N, Nx, Ny, detJ = compute_shape_derivs(xi, eta, X, Y)
-
-        rho0E = 0.25 * (rho0[0] + rho0[1] + rho0[2] + rho0[3])
-        rhoE = 0.25 * (rho[0] + rho[1] + rho[2] + rho[3])
-
-        E0 = E * (rho0E**p + p * (rhoE - rho0E) * rho0E ** (p - 1) + kappa)
-        Ux = [[dot(Nx, u), dot(Ny, u)], [dot(Nx, v), dot(Ny, v)]]
-        e = [Ux[0][0], Ux[1][1], (Ux[0][1] + Ux[1][0])]
-
-        s = [
-            E0 / (1.0 - nu * nu) * (e[0] + nu * e[1]),
-            E0 / (1.0 - nu * nu) * (e[1] + nu * e[0]),
-            0.5 * E0 / (1.0 + nu) * e[2],
-        ]
-
-        self.constraints["u_res"] = [
-            detJ * (Nx[0] * s[0] + Ny[0] * s[2]),
-            detJ * (Nx[1] * s[0] + Ny[1] * s[2]),
-            detJ * (Nx[2] * s[0] + Ny[2] * s[2]),
-            detJ * (Nx[3] * s[0] + Ny[3] * s[2]),
-        ]
-
-        self.constraints["v_res"] = [
-            detJ * (Nx[0] * s[2] + Ny[0] * s[1]),
-            detJ * (Nx[1] * s[2] + Ny[1] * s[1]),
-            detJ * (Nx[2] * s[2] + Ny[2] * s[1]),
-            detJ * (Nx[3] * s[2] + Ny[3] * s[1]),
-        ]
-
-        # Add the objective values
-        self.objective["compliance"] = (
-            0.5 * detJ * (s[0] * e[0] + s[1] * e[1] + s[2] * e[2])
-        )
-
-        return
-
-
-class MassConstraint(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        # Add keyword arguments for the compute function
-        args = []
-        for n in range(4):
-            args.append({"n": n})
-        self.set_args(args)
-
-        self.add_constant("mass_fraction", value=0.4)
-
-        # The x/y coordinates
-        self.add_data("x_coord", shape=(4,))
-        self.add_data("y_coord", shape=(4,))
-
-        # The implicit topology input/constraint
-        self.add_input("rho", shape=(4,), value=0.5, lower=0.0, upper=1.0)
-
-        # Add the residuals
-        self.add_constraint("mass_con", value=1.0, lower=0.0, upper=0.0)
-
-    def compute(self, n=None):
-        qpts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
-
-        xi = qpts[n % 2]
-        eta = qpts[n // 2]
-
-        mass_fraction = self.constants["mass_fraction"]
-
-        # Extract the input variables
-        rho = self.inputs["rho"]
-
-        # Extract the input data
-        X = self.data["x_coord"]
-        Y = self.data["y_coord"]
-
-        _, _, _, detJ = compute_shape_derivs(xi, eta, X, Y)
-        rho0 = 0.25 * (rho[0] + rho[1] + rho[2] + rho[3])
-
-        self.constraints["mass_con"] = detJ * (rho0 - mass_fraction)
-
-        return
-
-
-class FixedBoundaryCondition(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        self.add_input("u", value=1.0)
-        self.add_input("lam", value=1.0)
-
-        self.add_constraint("disp_res", value=1.0, lower=0.0, upper=0.0)
-        self.add_constraint("bc_res", value=1.0, lower=0.0, upper=0.0)
-
-    def compute(self):
-        self.constraints["bc_res"] = self.inputs["u"]
-        self.constraints["disp_res"] = self.inputs["lam"]
-
-
-class AppliedLoad(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        self.add_constraint("u_res", value=1.0, lower=0.0, upper=0.0)
-        self.add_constraint("v_res", value=1.0, lower=0.0, upper=0.0)
-        self.add_constant("fx", value=-10.0)
-        self.add_constant("fy", value=-10.0)
-        return
-
-    def compute(self):
-        fx = self.constants["fx"]
-        fy = self.constants["fy"]
-        self.constraints["u_res"] = -fx
-        self.constraints["v_res"] = -fy
-        return
-
-
-class NodeSource(am.Component):
-    def __init__(self):
-        super().__init__()
-
-        self.add_input("x", value=0.5, lower=0.0, upper=1.0)
-        self.add_input("rho", value=0.5, lower=0.0, upper=1.0)
-        self.add_input("u", value=0.0, lower=-100, upper=100)
-        self.add_input("v", value=0.0, lower=-100, upper=100)
-
-        self.add_constraint("rho_res", value=1.0, lower=0.0, upper=0.0)
-        self.add_constraint("u_res", value=1.0, lower=0.0, upper=0.0)
-        self.add_constraint("v_res", value=1.0, lower=0.0, upper=0.0)
-
-        self.add_data("x_coord")
-        self.add_data("y_coord")
+    W = u * tx + v * ty
+    return -W
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--build", dest="build", action="store_true", default=False, help="Enable building"
 )
-parser.add_argument(
-    "--order-type",
-    choices=["amd", "nd", "natural"],
-    default="nd",
-    help="Ordering strategy to use (default: amd)",
-)
-parser.add_argument(
-    "--order-for-block",
-    dest="order_for_block",
-    action="store_true",
-    default=False,
-    help="Order for 2x2 block KKT matrix",
-)
-parser.add_argument(
-    "--show-sparsity",
-    dest="show_sparsity",
-    action="store_true",
-    default=False,
-    help="Show the sparsity pattern",
-)
-parser.add_argument(
-    "--with-lnks",
-    dest="use_lnks",
-    action="store_true",
-    default=False,
-    help="Enable the Largrange-Newton-Krylov-Schur inexact solver",
-)
 args = parser.parse_args()
 
-nx = 48
-ny = 24
+# Two displacement DOFs per node
+soln_space = SolutionSpace({"soln": {("u", "v", "rho"): "H1"}})
+geo_space = SolutionSpace({"geo": {("x", "y"): "H1"}})
+data_space = SolutionSpace({"data": {"rho0": "H1"}, "penalty": {"p": "const"}})
 
-nnodes = (nx + 1) * (ny + 1)
-nelems = nx * ny
+integrand_map = {
+    "plane_stress": {
+        "target": ["SURFACE1"],
+        "integrand": potential_plane_stress,
+    },
+    "plane_stress": {
+        "target": ["SURFACE1"],
+        "integrand": potential_helmholz_filter,
+    },
+    "traction": {
+        "target": ["LINE2"],
+        "integrand": potential_traction,
+    },
+}
 
-nodes = np.arange(nnodes, dtype=int).reshape((nx + 1, ny + 1))
+bc_map = {
+    "clamp_x": {
+        "type": "dirichlet",
+        "target": ["LINE4"],  # left edge — fix ux
+        "input": ["u", "v"],
+    },
+}
 
-x_coord = np.zeros(nnodes)
-y_coord = np.zeros(nnodes)
-conn = np.zeros((nelems, 4), dtype=int)
+mesh = Mesh("plate.inp")
+problem = Problem(
+    mesh,
+    soln_space,
+    geo_space,
+    data_space,
+    integrand_map=integrand_map,
+    bc_map=bc_map,
+)
 
-xpts = np.linspace(0, 2, nx + 1)
-ypts = np.linspace(0, 1, ny + 1)
-for j in range(ny + 1):
-    for i in range(nx + 1):
-        x_coord[nodes[i, j]] = xpts[i]
-        y_coord[nodes[i, j]] = ypts[j]
-
-conn = np.zeros((nelems, 4), dtype=int)
-for j in range(ny):
-    for i in range(nx):
-        conn[ny * i + j, 0] = nodes[i, j]
-        conn[ny * i + j, 1] = nodes[i + 1, j]
-        conn[ny * i + j, 2] = nodes[i + 1, j + 1]
-        conn[ny * i + j, 3] = nodes[i, j + 1]
-
-module_name = "compliance"
-model = am.Model(module_name)
-
-node_src = NodeSource()
-model.add_component("src", nnodes, node_src)
-
-helmholtz = Helmholtz()
-model.add_component("helmholtz", nelems, helmholtz)
-
-# Link the inputs and the constraints
-model.link("helmholtz.x_coord", "src.x_coord", tgt_indices=conn)
-model.link("helmholtz.y_coord", "src.y_coord", tgt_indices=conn)
-model.link("helmholtz.x", "src.x", tgt_indices=conn)
-model.link("helmholtz.rho", "src.rho", tgt_indices=conn)
-model.link("helmholtz.rho_res", "src.rho_res", tgt_indices=conn)
-
-topo = Topology()
-model.add_component("topo", nelems, topo)
-
-# Link the data
-model.link("topo.x_coord", "src.x_coord", tgt_indices=conn)
-model.link("topo.y_coord", "src.y_coord", tgt_indices=conn)
-
-# Link the inputs and the constraints
-model.link("topo.u", "src.u", tgt_indices=conn)
-model.link("topo.v", "src.v", tgt_indices=conn)
-
-model.link("topo.u_res", "src.u_res", tgt_indices=conn)
-model.link("topo.v_res", "src.v_res", tgt_indices=conn)
-
-# Link the filtered density field
-model.link("topo.rho", "src.rho", tgt_indices=conn)
-
-# Add the mass constraint
-mass_con = MassConstraint()
-model.add_component("mass", nelems, mass_con)
-
-# Link the mass constraint inputs
-model.link("mass.x_coord", "src.x_coord", tgt_indices=conn)
-model.link("mass.y_coord", "src.y_coord", tgt_indices=conn)
-model.link("mass.rho", "src.rho", tgt_indices=conn)
-
-# Set up the mass constraint
-model.link("mass.mass_con[1:]", "mass.mass_con[0]")
-
-# Add boundary conditions
-bcs_u = FixedBoundaryCondition()
-model.add_component("bcs_u", (ny + 1), bcs_u)
-model.link("src.u", "bcs_u.u", src_indices=nodes[0, :])
-model.link("src.u_res", "bcs_u.disp_res", src_indices=nodes[0, :])
-
-bcs_v = FixedBoundaryCondition()
-model.add_component("bcs_v", (ny + 1), bcs_v)
-model.link("src.v", "bcs_v.u", src_indices=nodes[0, :])
-model.link("src.v_res", "bcs_v.disp_res", src_indices=nodes[0, :])
-
-# Set the applied load
-load = AppliedLoad()
-model.add_component("load", 1, load)
-model.link("src.u_res", "load.u_res", src_indices=nodes[-1, 0])
-model.link("src.v_res", "load.v_res", src_indices=nodes[-1, 0])
+model = problem.create_model("compliance")
 
 if args.build:
     model.build_module()
 
-start = time.perf_counter()
+# Set the lower/upper values
 
-if args.order_type == "amd":
-    order_type = am.OrderingType.AMD
-elif args.order_type == "nd":
-    order_type = am.OrderingType.NESTED_DISSECTION
-elif args.order_type == "natural":
-    order_type = am.OrderingType.NATURAL
+model.initialize()
 
-# Initialize the problem
-model.initialize(order_type=order_type)
-prob = model.get_problem()
+input, cons, data, output = model.get_names()
 
-end = time.perf_counter()
-print(f"Initialization time:        {end - start:.6f} seconds")
-print(f"Num variables:              {model.num_variables}")
-print(f"Num constraints:            {model.num_constraints}")
+for name in data:
+    print(name)
 
-# Set the problem data
 data = model.get_data_vector()
-data["src.x_coord"] = x_coord
-data["src.y_coord"] = y_coord
+data["penalty.p"] = 1.0
+data["data.rho0"] = 1.0
 
-# Set the initial rho0 values
-data["topo.p"] = 1.0
-data["topo.rho0"] = 0.0
-
-# Set the initial problem variable values
+# Create the vectors and matrices for the model
 x = model.create_vector()
 
-# Set initial design variable values
-x["src.x"] = 0.5
-x["src.rho"] = 0.5
+x["soln.rho"] = 1.0
 
-# Set initial multiplier values for the constraints
-x["src.rho_res"] = 1.0
-x["src.u_res"] = 1.0
-x["src.v_res"] = 1.0
+g = model.create_vector()
+mat = model.create_matrix()
 
-# Apply lower and upper bound constraints
-lower = model.create_vector()
-upper = model.create_vector()
-lower["src.x"] = 1e-3
-upper["src.x"] = 1.0
-lower["src.rho"] = 1e-3
-upper["src.rho"] = float("inf")
-lower["src.u"] = -np.inf
-upper["src.u"] = np.inf
-lower["src.v"] = -np.inf
-upper["src.v"] = np.inf
-lower["bcs_u.lam"] = -np.inf
-upper["bcs_u.lam"] = np.inf
-lower["bcs_v.lam"] = -np.inf
-upper["bcs_v.lam"] = np.inf
+print("Evaluating the Hessian...")
+model.eval_gradient(x, g)
+model.eval_hessian(x, mat)
 
-start = time.perf_counter()
-mat_obj = prob.create_matrix()
-end = time.perf_counter()
-print(f"Matrix initialization time: {end - start:.6f} seconds")
+# Solve the equations
+print("Solving...")
+chol = am.SparseLDL(mat, solver_type=am.SolverType.CHOLESKY)
+flag = chol.factor()
 
-start = time.perf_counter()
-prob.hessian(1.0, x.get_vector(), mat_obj)
-end = time.perf_counter()
-print(f"Matrix computation time:    {end - start:.6f} seconds")
+# Solve the equations
+x[:] = -g[:]
+chol.solve(x.get_vector())
 
-grad = prob.create_vector()
-start = time.perf_counter()
-prob.gradient(1.0, x.get_vector(), grad)
-end = time.perf_counter()
-print(f"Residual computation time:  {end - start:.6f} seconds")
+u = x["soln.u"]
+v = x["soln.v"]
 
-solver = "amigo"
-if args.use_lnks:
-    problem = model.get_problem()
+# Plot the solution
+grid = build_grid(problem, "u", x)
+grid.plot(scalars="u", cmap="coolwarm", show_edges=True)
 
-    state_vars = ["src.u", "src.v", "bcs_u.lam", "bcs_v.lam"]
-    residuals = ["src.u_res", "src.v_res", "bcs_u.bc_res", "bcs_v.bc_res"]
-
-    solver = am.LNKSInexactSolver(
-        problem,
-        model=model,
-        state_vars=state_vars,
-        residuals=residuals,
-        gmres_subspace_size=50,
-    )
-
-opt = am.Optimizer(model, x=x, lower=lower, upper=upper, solver=solver)
-
-max_convex_steps = 5
-for i in range(max_convex_steps):
-
-    options = {
-        "max_iterations": 25,
-        "initial_barrier_param": 1.0,
-        "max_line_search_iterations": 1,
-        "convergence_tolerance": 1e-1,
-        "init_least_squares_multipliers": True,
-    }
-
-    if i == max_convex_steps - 1:
-        options["convergence_tolerance"] = 1e-3
-
-    opt.optimize(options)
-
-    vals = x["src.rho"]
-    vals = vals.reshape((nx + 1, ny + 1)).T
-
-    # Set the x and y coordinates
-    X, Y = np.meshgrid(xpts, ypts)
-
-    # Plot the result as a figure
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.set_aspect("equal")
-    ax.get_xaxis().set_ticks([])
-    ax.get_yaxis().set_ticks([])
-    ax.axis("off")
-
-    # Set the number of levels to use.
-    levels = np.linspace(0.0, 1.0, 26)
-    ax.contourf(X, Y, vals, levels, cmap="coolwarm", extend="max")
-
-    plt.savefig(
-        "compliance.png",
-        dpi=500,
-        transparent=True,
-        bbox_inches="tight",
-        pad_inches=0.01,
-    )
-
-    fig.tight_layout(pad=0.01)
-    fig.savefig(f"compliance{i}.png")
-    plt.close(fig)
-
-    # Update the data and the design variable bounds
-    pval = 3.0
-    data["topo.p"] = pval
-    data["topo.rho0"] = x["topo.rho"]
-    lower["src.x"] = (1.0 - 1.0 / pval) * x["src.x"]
-    lower["src.rho"] = (1.0 - 1.0 / pval) * x["src.rho"]
+#     # Update the data and the design variable bounds
+#     pval = 3.0
+#     data["topo.p"] = pval
+#     data["topo.rho0"] = x["topo.rho"]
+#     lower["src.x"] = (1.0 - 1.0 / pval) * x["src.x"]
+#     lower["src.rho"] = (1.0 - 1.0 / pval) * x["src.rho"]

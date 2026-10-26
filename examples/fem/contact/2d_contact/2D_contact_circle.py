@@ -206,7 +206,7 @@ t = x["src.t"]
 U = build_global_displacement(u, v)
 
 # Compute contact forces from barrier multipliers: zl = mu / (v - lb)
-mu = opt.barrier_param
+mu = opt.state.mu
 lbxv = lower["src.v"]
 zl = mu / (x["src.v"] - lbxv)
 zl_highest = [i for i in zl if i >= 1]

@@ -12,6 +12,9 @@ include/amigo_include_paths.h
 /_build_debug
 /amigo/amigo.cpython*
 /**/_amigo_build
+*.vtu
+*.bdf
+*.inp
 
 # Compiled Python
 **/__pycache__
@@ -65,7 +68,6 @@ env/
 /examples/**/lib/
 /examples/**/*.txt
 /examples/**/_amigo_build/
-/examples/**/*.inp
 /examples/**/*.tex
 /examples/**/*.tikz
 /examples/raceproject/

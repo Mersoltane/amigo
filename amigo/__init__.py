@@ -56,5 +56,6 @@ from .interfaces import (
     AmigoIndepVarComp,
 )
 from .trajectory import *
+from .simple_solver import SimpleSolver
 
 inf = float("inf")

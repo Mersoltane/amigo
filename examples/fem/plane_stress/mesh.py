@@ -13,7 +13,7 @@ gmsh.model.add("plate")
 lc = 0.025
 
 # Geometry definition
-Lx = 5.0  # plate size
+Lx = 3.0  # plate size
 Ly = 1.0
 
 # Geometry points rectangle

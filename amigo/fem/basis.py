@@ -1,11 +1,25 @@
 import amigo as am
 import numpy as np
+from dataclasses import dataclass
+from .fem_space import Space, SolutionSpace
+from .cell_types import CellType
+from .vandermonde import Vandermonde1D, Vandermonde2D, VecVandermonde2D
+from .fem_space import FunctionSpace
+from .cell_types import CellType, DofLayout
+from ..expressions import Expr
 
 
 def dot_product(x, y, n=1):
     val = x[0] * y[0]
     for i in range(1, n):
         val = val + x[i] * y[i]
+    return val
+
+
+def triple_product(d, x, y, n=1):
+    val = d[0] * x[0] * y[0]
+    for i in range(1, n):
+        val = val + d[i] * x[i] * y[i]
     return val
 
 
@@ -21,81 +35,386 @@ def mat_vec_transpose(A, x, m=1, n=1):
     return [A[0][0] * x[0] + A[1][0] * x[1], A[0][1] * x[0] + A[1][1] * x[1]]
 
 
-def eval_1d_monomials(p, xi):
-    pows = np.ones(p + 1)
-    for i in range(1, p + 1):
-        pows[i] = pows[i - 1] * xi
-    return pows
+@dataclass
+class ConstValue:
+    value: Expr | None = None
 
 
-def eval_1d_monomial_grad(p, xi):
-    pows = np.ones(p + 1)
-    for i in range(1, p + 1):
-        pows[i] = pows[i - 1] * xi
-
-    grad = np.zeros(p + 1)
-    for i in range(1, p + 1):
-        grad[i] = i * pows[i - 1]
-    return grad
+@dataclass
+class H1Value:
+    value: Expr | None = None
+    grad: list[Expr] | None = None
 
 
-def build_1d_lagrange_vandermonde(p, pts):
-    n = p + 1
-    V = np.zeros((n, n), dtype=float)
-    for a, xi in enumerate(pts):
-        V[a, :] = eval_1d_monomials(p, xi)
-
-    # Compute C = V^{-1}
-    I = np.eye(n, dtype=float)
-    return np.linalg.solve(V, I)
+@dataclass
+class HdivValue:
+    vec: list[Expr] | None = None
+    div: Expr | None = None
 
 
-def eval_2d_monomials(p, xi, eta, exps):
-    """out[k] = xi^i * eta^j for each (i,j)."""
-    xi_pows = np.ones(p + 1)
-    eta_pows = np.ones(p + 1)
+class Basis:
+    def __init__(self, names: list[str], layout: DofLayout, kind: str = "input"):
+        if isinstance(names, (list, tuple)):
+            self.names = names
+        elif isinstance(names, str):
+            self.names = [names]
+        self.layout = layout
+        self.kind = kind
 
-    for a in range(1, p + 1):
-        xi_pows[a] = xi_pows[a - 1] * xi
-    for b in range(1, p + 1):
-        eta_pows[b] = eta_pows[b - 1] * eta
+        if not (
+            self.kind == "input"
+            or self.kind == "data"
+            or self.kind == "multiplier"
+            or self.kind == "output"
+        ):
+            raise ValueError(f"{self.kind} not recognized")
 
-    out = np.empty(len(exps), dtype=float)
-    for k, (i, j) in enumerate(exps):
-        out[k] = xi_pows[i] * eta_pows[j]
+    def add_declarations(self, comp):
+        """Add the declarations to the component"""
 
-    return out
-
-
-def eval_2d_monomial_grad(p, xi, eta, exps):
-    """grads[k] = [i * xi^{i-1} * eta^{j}, j * xi^{i} * eta^{j-1}]"""
-    xi_pows = np.ones(p + 1)
-    eta_pows = np.ones(p + 1)
-
-    for a in range(1, p + 1):
-        xi_pows[a] = xi_pows[a - 1] * xi
-    for b in range(1, p + 1):
-        eta_pows[b] = eta_pows[b - 1] * eta
-
-    grad = np.zeros((len(exps), 2), dtype=float)
-    for k, (i, j) in enumerate(exps):
-        if i > 0:
-            grad[k, 0] = i * xi_pows[i - 1] * eta_pows[j]
-        if j > 0:
-            grad[k, 1] = j * xi_pows[i] * eta_pows[j - 1]
-
-    return grad
+        ndof = self.layout.ndof
+        if self.kind == "input":
+            for name in self.names:
+                comp.add_input(name, shape=(ndof,))
+        elif self.kind == "data":
+            for name in self.names:
+                comp.add_data(name, shape=(ndof,))
+        elif self.kind == "multiplier":
+            for name in self.names:
+                comp.add_constraint(f"res_{name}", shape=(ndof,))
+        elif self.kind == "output":
+            for name in self.names:
+                for dim in range(ndof):
+                    comp.add_output(f"{name}{dim}")
 
 
-def build_2d_lagrange_vandermonde(n, p, pts, exps):
-    # Build Vandermonde: V[a,k] = m_k(node_a)
-    V = np.zeros((n, n), dtype=float)
-    for a, (xi, eta) in enumerate(pts):
-        V[a, :] = eval_2d_monomials(p, xi, eta, exps)
+class ConstantBasis(Basis):
+    def __init__(self, names, space, kind="input"):
 
-    # Compute C = V^{-1}
-    I = np.eye(n, dtype=float)
-    return np.linalg.solve(V, I)
+        layout = DofLayout(ref_cell=CellType.POINT, space=space, pts=([0.0]))
+        super().__init__(names, layout=layout, kind=kind)
+
+    def transform(self, Jdict, orig):
+        soln = {}
+        for name in self.names:
+            value = orig[name].value
+            soln[name] = ConstValue(value=value)
+        return soln
+
+    def eval(self, comp, pt):
+        soln = {}
+        for name in self.names:
+            if self.kind == "input":
+                u = comp.inputs[name]
+            elif self.kind == "data":
+                u = comp.data[name]
+            elif self.kind == "multiplier":
+                u = comp.constraints.get_multipliers()[f"res_{name}"]
+
+            soln[name] = ConstValue(value=u[0])
+
+        return soln
+
+
+class LagrangeBasis1D(Basis):
+    def __init__(self, names: list[str], space: FunctionSpace, kind="input"):
+        if not space.func_space is Space.H1:
+            raise ValueError("Space must be H1")
+        layout = DofLayout.make_layout(space, CellType.SEGMENT)
+        super().__init__(names, layout, kind=kind)
+
+        self.vand = Vandermonde1D(space.degree, layout.pts)
+
+    def transform(self, Jdict, orig):
+        soln = {}
+        for name in self.names:
+            value = orig[name].value
+            grad = orig[name].grad
+            soln[name] = H1Value(value=value, grad=[Jdict["Jinv"] * grad[0]])
+
+        return soln
+
+    def compute_transform(self, geo):
+        if "x" not in geo or "y" not in geo:
+            raise ValueError("Coordinates not defined")
+
+        x_xi = geo["x"].grad[0]
+        y_xi = geo["y"].grad[0]
+
+        detJ = am.sqrt(x_xi**2 + y_xi**2)
+        Jinv = 1.0 / detJ
+        J = detJ
+
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
+
+    def eval(self, comp, pt):
+        xi = pt[0]
+
+        # Evaluate the monomials
+        N = self.vand.eval_basis(xi)
+        Nx = self.vand.eval_basis_grad(xi)
+
+        soln = {}
+        ndof = self.layout.ndof
+        for name in self.names:
+            if self.kind == "input":
+                u = comp.inputs[name]
+            elif self.kind == "data":
+                u = comp.data[name]
+            elif self.kind == "multiplier":
+                u = comp.constraints.get_multipliers()[f"res_{name}"]
+
+            soln[name] = H1Value(
+                value=dot_product(u, N, n=ndof), grad=[dot_product(u, Nx, n=ndof)]
+            )
+
+        return soln
+
+
+class LagrangeBasis2D(Basis):
+    def __init__(
+        self,
+        names: list[str],
+        layout: DofLayout,
+        exps: tuple[tuple[int]],
+        kind: str = "input",
+    ):
+        super().__init__(names, layout, kind=kind)
+        self.vand = Vandermonde2D(layout.ndof, exps, layout.pts)
+        return
+
+    def eval(self, comp, pt):
+        xi = pt[0]
+        eta = pt[1]
+
+        # Evaluate the monomials
+        N = self.vand.eval_basis(xi, eta)
+
+        # Evaluate the derivatives of the monomials
+        Nxi, Neta = self.vand.eval_basis_grad(xi, eta)
+
+        soln = {}
+        ndof = self.layout.ndof
+        for name in self.names:
+            if self.kind == "input":
+                u = comp.inputs[name]
+            elif self.kind == "data":
+                u = comp.data[name]
+            elif self.kind == "multiplier":
+                u = comp.constraints.get_multipliers()[f"res_{name}"]
+
+            soln[name] = H1Value(
+                value=dot_product(u, N, n=ndof),
+                grad=[dot_product(u, Nxi, n=ndof), dot_product(u, Neta, n=ndof)],
+            )
+
+        return soln
+
+    def transform(self, Jdict, orig):
+        soln = {}
+        for name in self.names:
+            value = orig[name].value
+            grad = orig[name].grad
+            soln[name] = H1Value(
+                value=value, grad=mat_vec_transpose(Jdict["Jinv"], grad, n=2, m=2)
+            )
+
+        return soln
+
+    def compute_transform(self, geo):
+        if "x" not in geo or "y" not in geo:
+            raise ValueError("Coordinates not defined")
+
+        x_xi, x_eta = geo["x"].grad
+        y_xi, y_eta = geo["y"].grad
+
+        detJ = x_xi * y_eta - x_eta * y_xi
+        J = [[x_xi, x_eta], [y_xi, y_eta]]
+        inv = 1.0 / detJ
+        Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
+
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
+
+
+class TriangleLagrangeBasis(LagrangeBasis2D):
+    def __init__(self, names: list[str], space: FunctionSpace, kind: str = "input"):
+        if not space.func_space is Space.H1:
+            raise ValueError("Space must be H1")
+        layout = DofLayout.make_layout(space, CellType.TRIANGLE)
+        exps = self._get_monomial_exponents(space.degree)
+
+        super().__init__(names, layout, exps, kind=kind)
+        return
+
+    def _get_monomial_exponents(self, p):
+        exps = []
+        for i in range(p + 1):
+            for j in range(p + 1 - i):
+                exps.append((i, j))
+        return exps
+
+
+class QuadLagrangeBasis(LagrangeBasis2D):
+    def __init__(self, names: list[str], space: FunctionSpace, kind: str = "input"):
+        if not space.func_space is Space.H1:
+            raise ValueError("Space must be H1")
+        layout = DofLayout.make_layout(space, CellType.QUADRILATERAL)
+        exps = self._get_monomial_exponents(space.degree)
+        super().__init__(names, layout, exps, kind=kind)
+
+        return
+
+    def _get_monomial_exponents(self, p):
+        exps = []
+        for j in range(p + 1):
+            for i in range(p + 1):
+                exps.append((i, j))
+        return exps
+
+
+class RTBasis2D(Basis):
+    def __init__(
+        self,
+        names: list[str],
+        layout: DofLayout,
+        uexps: tuple[tuple[int]],
+        vexps: tuple[tuple[int]],
+        kind="input",
+    ):
+        super().__init__(names, layout, kind=kind)
+        self.vand = VecVandermonde2D(layout.ndof, uexps, vexps, layout.pts, layout.dirs)
+        return
+
+    def add_declarations(self, comp):
+        """Add the declarations to the component"""
+
+        ndof = self.layout.ndof
+        if self.kind == "input":
+            for name in self.names:
+                comp.add_input(name, shape=(2, ndof))
+        elif self.kind == "data":
+            for name in self.names:
+                comp.add_data(name, shape=(2, ndof))
+        elif self.kind == "multiplier":
+            for name in self.names:
+                comp.add_constraint(f"res_{name}", shape=(2, ndof))
+
+        comp.add_data("hdiv_signs", shape=(ndof,))
+
+    def eval(self, comp, pt):
+        xi = pt[0]
+        eta = pt[1]
+
+        # Evaluate the monomials
+        N = self.vand.eval_basis(xi, eta)
+
+        # Evaluate the derivatives of the monomials
+        Nxi, Neta = self.vand.eval_basis_grad(xi, eta)
+
+        soln = {}
+        d = comp.data["hdiv_signs"]
+        ndof = self.layout.ndof
+        for name in self.names:
+            if self.kind == "input":
+                u = comp.inputs[name]
+            elif self.kind == "data":
+                u = comp.data[name]
+            elif self.kind == "multiplier":
+                u = comp.constraints.get_multipliers()[f"res_{name}"]
+
+            vx = d[0] * N[0, 0] * u[0, 0]
+            vy = d[0] * N[1, 0] * u[1, 0]
+            div = d[0] * (Nxi[0, 0] * u[0, 0] + Neta[1, 0] * u[0, 0])
+
+            for i in range(1, ndof):
+                vx = vx + d[i] * N[0, i] * u[0, i]
+                vy = vy + d[i] * N[1, i] * u[1, i]
+                div = div + d[i] * (Nxi[0, i] * u[0, i] + Neta[1, i] * u[0, i])
+
+            soln[name] = HdivValue(vec=[vx, vy], div=div)
+
+        return soln
+
+    def transform(self, Jdict, orig):
+        soln = {}
+        for name in self.names:
+            vec = orig[name].vec
+            div = orig[name].div
+            detJ = Jdict["detJ"]
+            J = Jdict["J"]
+            vx = (J[0][0] * vec[0] + J[0][1] * vec[1]) / detJ
+            vy = (J[1][0] * vec[0] + J[1][1] * vec[1]) / detJ
+            soln[name] = HdivValue(vec=[vx, vy], div=div / detJ)
+
+        return soln
+
+    def compute_transform(self, geo):
+        if "x" not in geo or "y" not in geo:
+            raise ValueError("Coordinates not defined")
+
+        x_xi, x_eta = geo["x"].grad
+        y_xi, y_eta = geo["y"].grad
+
+        detJ = x_xi * y_eta - x_eta * y_xi
+        J = [[x_xi, x_eta], [y_xi, y_eta]]
+        inv = 1.0 / detJ
+        Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
+
+        return {"detJ": detJ, "J": J, "Jinv": Jinv}
+
+
+class QuadRTBasis(RTBasis2D):
+    def __init__(self, names: list[str], space: FunctionSpace, kind="input"):
+        if not space.func_space is Space.HDIV:
+            raise ValueError("Space must be H(div)")
+        if space.degree == 1:
+            uexps = [(0, 0), (-1, -1), (1, 0), (0, 0)]
+            vexps = [(-1, -1), (0, 0), (-1, -1), (0, 1)]
+        elif space.degree == 2:
+            uexps = []
+            vexps = []
+        else:
+            raise ValueError(f"Degree {space.degree} must be <= 2")
+
+        layout = DofLayout.make_layout(space, CellType.QUADRILATERAL)
+        super().__init__(names, layout, uexps, vexps, kind=kind)
+        return
+
+
+class TriangleRTBasis(RTBasis2D):
+    def __init__(self, names: list[str], space: FunctionSpace, kind="input"):
+        if not space.func_space is Space.HDIV:
+            raise ValueError("Space must be H(div)")
+        if space.degree == 1:
+            uexps = [(0, 0), (-1, -1), (1, 0)]
+            vexps = [(-1, -1), (0, 0), (0, 1)]
+        elif space.degree == 2:
+            uexps = [
+                (0, 0),
+                (-1, -1),
+                (1, 0),
+                (-1, -1),
+                (0, 1),
+                (-1, -1),
+                (2, 0),
+                (1, 1),
+            ]
+            vexps = [
+                (-1, -1),
+                (0, 0),
+                (-1, -1),
+                (1, 0),
+                (-1, -1),
+                (0, 1),
+                (1, 1),
+                (0, 2),
+            ]
+        else:
+            raise ValueError(f"Degree {space.degree} must be <= 2")
+
+        layout = DofLayout.make_layout(space, CellType.TRIANGLE)
+        super().__init__(names, layout, uexps, vexps, kind=kind)
+        return
 
 
 class BasisCollection:
@@ -112,447 +431,46 @@ class BasisCollection:
             soln.update(basis.eval(comp, pt))
         return soln
 
-    def transform(self, detJ, Jinv, orig):
+    def transform(self, Jdict, orig):
         soln = {}
         for basis in self.basis:
-            soln.update(basis.transform(detJ, Jinv, orig))
+            soln.update(basis.transform(Jdict, orig))
         return soln
 
     def compute_transform(self, geo):
         return self.basis[0].compute_transform(geo)
 
 
-class Basis:
-    def __init__(self, names, nnodes=1, kind="input"):
-        if isinstance(names, (list, tuple)):
-            self.names = names
-        elif isinstance(names, str):
-            self.names = [names]
-        self.nnodes = nnodes
-        self.kind = kind
-
-        if not (
-            self.kind == "input" or self.kind == "data" or self.kind == "multiplier"
-        ):
-            raise ValueError(f"{self.kind} not recognized")
-
-    def add_declarations(self, comp):
-        """Add the declarations to the component"""
-
-        if self.kind == "input":
-            for name in self.names:
-                comp.add_input(name, shape=(self.nnodes,))
-        elif self.kind == "data":
-            for name in self.names:
-                comp.add_data(name, shape=(self.nnodes,))
-        elif self.kind == "multiplier":
-            for name in self.names:
-                comp.add_constraint(f"res_{name}", shape=(self.nnodes,))
-
-
-class ConstantBasis(Basis):
-    def __init__(self, names, nnodes=1, kind="input"):
-        super().__init__(names, nnodes=nnodes, kind=kind)
-
-    def transform(self, detJ, Jinv, orig):
-        soln = {}
-        for name in orig:
-            value = orig[name]["value"]
-            soln[name] = {
-                "value": value,
-            }
-        return soln
-
-    def eval(self, comp, pt):
-        soln = {}
-        for name in self.names:
-            if self.kind == "input":
-                u = comp.inputs[name]
-            elif self.kind == "data":
-                u = comp.data[name]
-            elif self.kind == "multiplier":
-                u = comp.constraints.get_multipliers()[f"res_{name}"]
-
-            soln[name] = {
-                "value": u[0],
-            }
-        return soln
-
-
-class LagrangeBasis1D(Basis):
-    def __init__(self, p, names, kind="input"):
-        self.p = p
-        nnodes = p + 1
-        super().__init__(names, nnodes=nnodes, kind=kind)
-
-        self.pts = np.linspace(-1, 1, nnodes)
-        self.C = build_1d_lagrange_vandermonde(self.p, self.pts)
-
-    def transform(self, detJ, Jinv, orig):
-        soln = {}
-        for name in orig:
-            value = orig[name]["value"]
-            grad = orig[name]["grad"]
-            soln[name] = {
-                "value": value,
-                "grad": [Jinv * grad[0]],
-            }
-        return soln
-
-    def compute_transform(self, geo):
-        if "x" not in geo or "y" not in geo:
-            raise ValueError("Coordinates not defined")
-
-        x_xi = geo["x"]["grad"][0]
-        y_xi = geo["y"]["grad"][0]
-
-        detJ = am.sqrt(x_xi**2 + y_xi**2)
-        Jinv = 1.0 / detJ
-        return detJ, Jinv
-
-    def eval(self, comp, pt):
-        xi = pt[0]
-
-        # Evaluate the monomials
-        m = eval_1d_monomials(self.p, xi)
-        N = m @ self.C
-
-        mgrad = eval_1d_monomial_grad(self.p, xi)
-        Nx = mgrad @ self.C
-        soln = {}
-        for name in self.names:
-            if self.kind == "input":
-                u = comp.inputs[name]
-            elif self.kind == "data":
-                u = comp.data[name]
-            elif self.kind == "multiplier":
-                u = comp.constraints.get_multipliers()[f"res_{name}"]
-
-            soln[name] = {
-                "value": dot_product(u, N, n=self.nnodes),
-                "grad": [dot_product(u, Nx, n=self.nnodes)],
-            }
-
-        return soln
-
-
-class LagrangeBasis2D(Basis):
-    def __init__(self, names, nnodes=1, kind="input"):
-        super().__init__(names, nnodes=nnodes, kind=kind)
-
-    def transform(self, detJ, Jinv, orig):
-        soln = {}
-        for name in orig:
-            value = orig[name]["value"]
-            grad = orig[name]["grad"]
-            soln[name] = {
-                "value": value,
-                "grad": mat_vec_transpose(Jinv, grad, n=2, m=2),
-            }
-
-        return soln
-
-    def compute_transform(self, geo):
-        if "x" not in geo or "y" not in geo:
-            raise ValueError("Coordinates not defined")
-
-        x_xi, x_eta = geo["x"]["grad"]
-        y_xi, y_eta = geo["y"]["grad"]
-
-        detJ = x_xi * y_eta - x_eta * y_xi
-        inv = 1.0 / detJ
-        Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
-
-        return detJ, Jinv
-
-
-class TriangleLagrangeBasis(LagrangeBasis2D):
-    def __init__(self, p, names, kind="input"):
-        if p < 0:
-            raise ValueError(f"Degree {p} must be >= 0")
-
-        self.p = p
-        nnodes = (p + 1) * (p + 2) // 2
-        super().__init__(names, nnodes=nnodes, kind=kind)
-
-        self.pts = self._get_tri_nodes(self.p)
-        self.exps = self._get_monomial_exponents(self.p)
-        self.C = build_2d_lagrange_vandermonde(self.nnodes, self.p, self.pts, self.exps)
-
-        return
-
-    def _get_tri_nodes(self, p):
-        """Get the node locations"""
-        pts = []
-
-        if p == 0:
-            return [[1 / 3, 1 / 3]]
-        else:
-            # Set the vertices
-            pts = [[0, 0], [1, 0], [0, 1]]
-
-            # At points on the edges
-            edges = [[0, 1], [1, 2], [2, 0]]
-            for a, b in edges:
-                for i in range(1, p):
-                    t = i / p
-                    xi = (1 - t) * pts[a][0] + t * pts[b][0]
-                    eta = (1 - t) * pts[a][1] + t * pts[b][1]
-                    pts.append([xi, eta])
-
-            # Add the remaining points in the interior
-            for i in range(1, p):
-                for j in range(1, p - i):
-                    k = p - i - j
-                    xi = j / p
-                    eta = k / p
-                    pts.append((xi, eta))
-
-        return np.array(pts, dtype=float)
-
-    def _get_monomial_exponents(self, p):
-        exps = []
-        for i in range(p + 1):
-            for j in range(p + 1 - i):
-                exps.append((i, j))
-        return exps
-
-    def eval(self, comp, pt):
-        xi = pt[0]
-        eta = pt[1]
-
-        # Evaluate the monomials
-        m = eval_2d_monomials(self.p, xi, eta, self.exps)
-        N = m @ self.C
-
-        # Evaluate the derivatives of the monomials
-        mgrad = eval_2d_monomial_grad(self.p, xi, eta, self.exps)
-        Nxi = mgrad[:, 0] @ self.C
-        Neta = mgrad[:, 1] @ self.C
-
-        soln = {}
-        for name in self.names:
-            if self.kind == "input":
-                u = comp.inputs[name]
-            elif self.kind == "data":
-                u = comp.data[name]
-            elif self.kind == "multiplier":
-                u = comp.constraints.get_multipliers()[f"res_{name}"]
-
-            soln[name] = {
-                "value": dot_product(u, N, n=self.nnodes),
-                "grad": [
-                    dot_product(u, Nxi, n=self.nnodes),
-                    dot_product(u, Neta, n=self.nnodes),
-                ],
-            }
-
-        return soln
-
-
-class QuadLagrangeBasis(LagrangeBasis2D):
-    def __init__(self, p, names, kind="input"):
-        if p < 0:
-            raise ValueError(f"Degree {p} must be >= 0")
-
-        self.p = p
-        nnodes = (p + 1) * (p + 1)
-        super().__init__(names, nnodes=nnodes, kind=kind)
-
-        self.pts = self._get_quad_nodes(self.p)
-        self.exps = self._get_monomial_exponents(self.p)
-        self.C = build_2d_lagrange_vandermonde(self.nnodes, self.p, self.pts, self.exps)
-
-        return
-
-    def _get_quad_nodes(self, p):
-        """Get the node locations"""
-        pts = []
-
-        if p == 0:
-            return [[0, 0]]
-        else:
-            # Set the vertices
-            pts = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
-
-            # At points on the edges
-            edges = [[0, 1], [1, 2], [2, 3], [3, 0]]
-            for a, b in edges:
-                for i in range(1, p):
-                    t = i / p
-                    xi = (1 - t) * pts[a][0] + t * pts[b][0]
-                    eta = (1 - t) * pts[a][1] + t * pts[b][1]
-                    pts.append([xi, eta])
-
-            # Add the remaining points in the interior
-            for j in range(1, p):
-                for i in range(1, p):
-                    xi = -1 + 2 * i / p
-                    eta = -1 + 2 * j / p
-                    pts.append((xi, eta))
-
-        return np.array(pts, dtype=float)
-
-    def _get_monomial_exponents(self, p):
-        exps = []
-        for j in range(p + 1):
-            for i in range(p + 1):
-                exps.append((i, j))
-        return exps
-
-    def eval(self, comp, pt):
-        xi = pt[0]
-        eta = pt[1]
-
-        # Evaluate the monomials
-        m = eval_2d_monomials(self.p, xi, eta, self.exps)
-        N = m @ self.C
-
-        # Evaluate the derivatives of the monomials
-        mgrad = eval_2d_monomial_grad(self.p, xi, eta, self.exps)
-        Nxi = mgrad[:, 0] @ self.C
-        Neta = mgrad[:, 1] @ self.C
-
-        soln = {}
-        for name in self.names:
-            if self.kind == "input":
-                u = comp.inputs[name]
-            elif self.kind == "data":
-                u = comp.data[name]
-            elif self.kind == "multiplier":
-                u = comp.constraints.get_multipliers()[f"res_{name}"]
-
-            soln[name] = {
-                "value": dot_product(u, N, n=self.nnodes),
-                "grad": [
-                    dot_product(u, Nxi, n=self.nnodes),
-                    dot_product(u, Neta, n=self.nnodes),
-                ],
-            }
-
-        return soln
-
-
-class Quadrature:
-    def get_args(self):
-        return []
-
-
-class TriangleQuadrature(Quadrature):
-    def __init__(self, order):
-        self.weights = [1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0]
-        self.points = [[0.5, 0.5], [0.5, 0.0], [0.0, 0.5]]
-        self.args = [{"n": 0}, {"n": 1}, {"n": 2}]
-
-        if order == 1:
-            # 1-point (exact for degree 1)
-            self.xi = np.array([1 / 3])
-            self.eta = np.array([1 / 3])
-            self.weights = np.array([1.0 / 2.0])
-
-        elif order == 2:
-            # 3-point (exact for degree 2)
-            self.xi = np.array([1 / 6, 2 / 3, 1 / 6])
-            self.eta = np.array([1 / 6, 1 / 6, 2 / 3])
-            self.weights = np.array([1 / 6, 1 / 6, 1 / 6])
-
-        elif order == 3:
-            # 4-point (exact for degree 3)
-            self.xi = np.array([1 / 3, 3 / 5, 1 / 5, 1 / 5])
-            self.eta = np.array([1 / 3, 1 / 5, 3 / 5, 1 / 5])
-            self.weights = np.array([-9 / 32, 25 / 96, 25 / 96, 25 / 96])
-
-        elif order == 4:
-            a = 0.445948490915965
-            b = 0.108103018168070
-            c = 0.091576213509771
-            d = 0.816847572980459
-
-            w1 = 0.223381589678011
-            w2 = 0.109951743655322
-
-            self.xi = np.array([a, a, b, c, c, d])
-            self.eta = np.array([a, b, a, c, d, c])
-            self.weights = np.array([w1, w1, w1, w2, w2, w2])
+def make_basis(
+    solution_space: SolutionSpace, cell_type: CellType, kind: str = "input"
+) -> BasisCollection:
+    objs = []
+
+    for space in solution_space.get_spaces():
+        names = solution_space.get_names(space)
+
+        obj = None
+        if space.func_space == Space.CONST:
+            obj = ConstantBasis(names, space, kind=kind)
+        elif space.func_space == Space.H1:
+            if cell_type == CellType.SEGMENT:
+                obj = LagrangeBasis1D(names, space, kind=kind)
+            elif cell_type == CellType.TRIANGLE:
+                obj = TriangleLagrangeBasis(names, space, kind=kind)
+            elif cell_type == CellType.QUADRILATERAL:
+                obj = QuadLagrangeBasis(names, space, kind=kind)
+            else:
+                raise NotImplementedError
+        elif space.func_space == Space.HDIV:
+            if cell_type == CellType.TRIANGLE:
+                obj = TriangleRTBasis(names, space, kind=kind)
+            elif cell_type == CellType.QUADRILATERAL:
+                obj = QuadRTBasis(names, space, kind=kind)
+            else:
+                raise NotImplementedError
         else:
             raise NotImplementedError
 
-        self.args = []
-        for n in range(len(self.weights)):
-            self.args.append({"n": n})
+        objs.append(obj)
 
-        return
-
-    def get_args(self):
-        return self.args
-
-    def get_point(self, n=0):
-        return self.weights[n], [self.xi[n], self.eta[n]]
-
-
-class QuadQuadrature(Quadrature):
-    def __init__(self, npts):
-        self.points, self.weights = np.polynomial.legendre.leggauss(npts)
-        self.args = []
-
-        for m in range(npts):
-            for n in range(npts):
-                self.args.append({"n": n, "m": m})
-
-    def get_args(self):
-        return self.args
-
-    def get_point(self, n=0, m=0):
-        wt = self.weights[n] * self.weights[m]
-        pt = [self.points[n], self.points[m]]
-        return wt, pt
-
-
-class ReducedQuadQuadrature(Quadrature):
-    def __init__(self):
-        self.args = [{"n": 0, "m": 0}]
-        self.points = np.array([0.0])
-        self.weights = np.array([4.0])  # full area of biunit square
-
-    def get_args(self):
-        return self.args
-
-    def get_point(self, n=0, m=0):
-        return self.weights[0], [0.0, 0.0]
-
-
-class LineQuadrature(Quadrature):
-    def __init__(self, npts):
-        pts, wts = np.polynomial.legendre.leggauss(npts)
-        self.xi = pts
-        self.weights = wts
-        self.args = [{"n": n} for n in range(npts)]
-
-    def get_args(self):
-        return self.args
-
-    def get_point(self, n=0):
-        return self.weights[n], [self.xi[n]]
-
-
-class SolutionSpace:
-    def __init__(self, mapping):
-        self._allowed_spaces = ["H1", "L2", "H(div)", "H(curl)", "const"]
-
-        self.names = {}
-        for name in mapping:
-            if not mapping[name] in self._allowed_spaces:
-                raise ValueError(f"{mapping[name]} not an allowed solution space")
-            if not mapping[name] in self.names:
-                self.names[mapping[name]] = [name]
-            else:
-                self.names[mapping[name]].append(name)
-
-    def get_spaces(self):
-        return list(self.names.keys())
-
-    def get_names(self, space):
-        if space in self.names:
-            return self.names[space]
-        else:
-            return []
+    return BasisCollection(objs)

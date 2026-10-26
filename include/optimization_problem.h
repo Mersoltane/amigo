@@ -402,7 +402,8 @@ class OptimizationProblem {
    * @brief Evaluation point in scaled space: x_eval = x .* var_scale. Returns x
    *        unchanged when no scaling is set.
    */
-  std::shared_ptr<Vector<T>> apply_var_scale(const std::shared_ptr<Vector<T>> x) {
+  std::shared_ptr<Vector<T>> apply_var_scale(
+      const std::shared_ptr<Vector<T>> x) {
     if (!var_scale) {
       return x;
     }
@@ -999,6 +1000,17 @@ class OptimizationProblem {
 #ifdef AMIGO_USE_CUDA
     AMIGO_CHECK_CUDA(cudaGetLastError());
 #endif
+  }
+
+  /**
+   * @brief Zero the fixed entries within the vector
+   *
+   * @param vec The entries to be zeroed
+   */
+  void zero_fixed_entries(std::shared_ptr<Vector<T>> vec) {
+    if (fixed) {
+      fixed->zero_rows<policy>(vec);
+    }
   }
 
   /**
