@@ -88,6 +88,10 @@ class Vector {
     }
   }
 
+  // The vector owns its buffers so it is never copied implicitly
+  Vector(const Vector&) = delete;
+  Vector& operator=(const Vector&) = delete;
+
   MemoryLocation get_memory_location() const { return mem_loc; }
 
   std::shared_ptr<Vector<T>> duplicate() const {
@@ -284,7 +288,7 @@ class Vector {
     const int* idx = indices->template get_array<policy>();
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
-      for (int i = 0; i < size; i++) {
+      for (int i = 0; i < nentries; i++) {
         array[idx[i]] *= alpha;
       }
     } else {
@@ -376,7 +380,7 @@ class Vector {
   int ext_size;    // Size of externally owned nodes referenced on this proc
   int size;        // Total size of the vector
   MemoryLocation mem_loc;  // Location of the data
-  T* array;                // Host array
+  T* array = nullptr;      // Host array
 
   // Backend for the GPU implementation
   Backend backend;

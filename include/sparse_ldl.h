@@ -1,10 +1,15 @@
 #ifndef AMIGO_SPARSE_LDL_H
 #define AMIGO_SPARSE_LDL_H
 
+#include <algorithm>
 #include <deque>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mutex>
+#include <new>
+#include <queue>
+#include <vector>
 
 #include "blas_interface.h"
 #include "csr_matrix.h"
@@ -21,6 +26,9 @@ class SparseLDL {
  public:
   // Type of solver
   enum class SolverType { LDL, CHOLESKY };
+
+  // Factorization code when delayed pivots overflow the budget or the memory of a front
+  static constexpr int FRONT_OVERFLOW = -100;
 
   // Block size for the working array for the LDL solver
   static constexpr int block_size = 64;
@@ -68,34 +76,18 @@ class SparseLDL {
             OrderingType order = OrderingType::NATURAL)
       : mat(mat),
         solver_type(solver_type),
-        ustab(ustab),
         pivot_tol(pivot_tol),
-        delay_growth(delay_growth),
         order(order) {
-    // Bound the stability factor between [0, 0.5]
-    if (ustab > 0.5) {
-      ustab = 0.5;
-    }
-    if (ustab < 0.0) {
-      ustab = 0.0;
-    }
+    set_pivot_threshold(ustab);
 
     // Bound the growth factor
     if (solver_type == SolverType::CHOLESKY) {
-      delay_growth = 1.0;
+      this->delay_growth = 1.0;
     } else {
-      if (delay_growth < 1.0) {
-        delay_growth = 1.0;
-      }
-      if (delay_growth > 10.0) {
-        delay_growth = 10.0;
-      }
+      this->delay_growth = std::clamp(delay_growth, 1.0, 10.0);
     }
 
     // Initialize data
-    max_frontal_mat_dimension = 0;
-    stack_int_estimate = 0;
-    stack_nnz_estimate = 0;
     cholesky_int_nnz = 0;
     cholesky_factor_nnz = 0;
     num_nodes = 0;
@@ -126,6 +118,24 @@ class SparseLDL {
     delete[] node_children_ptr;
     delete[] contrib_ptr;
     delete[] contrib_rows;
+  }
+
+  /**
+   * @brief Get the dimension of the factored matrix
+   */
+  int get_size() const {
+    int nrows;
+    mat->get_data(&nrows, nullptr, nullptr, nullptr, nullptr, nullptr);
+    return nrows;
+  }
+
+  /**
+   * @brief Set the threshold pivoting parameter used by the next factorization
+   *
+   * @param threshold Stability parameter bounded to [0, 0.5]
+   */
+  void set_pivot_threshold(double threshold) {
+    ustab = std::clamp(threshold, 0.0, 0.5);
   }
 
   /**
@@ -197,20 +207,27 @@ class SparseLDL {
   }
 
   /**
-   * @brief Get the inertia of the matrix based on the factorization
+   * @brief Get the inertia of the matrix counted during the last factorization
    *
    * @param npos Number of positive eigenvalues
    * @param nneg Number of negative eigenvalues
    */
   void get_inertia(int* npos, int* nneg) const {
-    *npos = 0;
-    *nneg = 0;
-    if (solver_type == SolverType::LDL) {
-      for (int ks = 0; ks < num_nodes; ks++) {
-        add_pivot_inertia(ks, npos, nneg);
-      }
-    }
+    *npos = inertia_pos;
+    *nneg = inertia_neg;
   }
+
+  /**
+   * @brief Get the smallest pivot magnitude of the last factorization
+   *
+   * The magnitude of a 2x2 pivot is its determinant over its largest entry.
+   */
+  T get_min_pivot() const { return pivot_min; }
+
+  /**
+   * @brief Get the number of pivots delayed during the last factorization
+   */
+  int get_num_delayed() const { return num_delayed_total; }
 
  private:
   /**
@@ -232,9 +249,22 @@ class SparseLDL {
      * @param init_capacity The initial capacity of the slab
      */
     void reset(std::size_t init_capacity = default_size) {
-      slabs.clear();
-      slabs.emplace_back(std::max(init_capacity, default_size));
-      current_slab = &slabs.back();
+      // Size the next slab for the request and the last cycle's use
+      std::size_t used = offset;
+      for (const auto& slab : slabs) {
+        if (&slab != current_slab) {
+          used += slab.capacity;
+        }
+      }
+      next_size = std::max({init_capacity, default_size, used});
+
+      // Threads allocate on first use unless one slab already fits
+      if (slabs.size() == 1 && slabs.front().capacity >= next_size) {
+        current_slab = &slabs.front();
+      } else {
+        slabs.clear();
+        current_slab = nullptr;
+      }
       offset = 0;
     }
 
@@ -249,10 +279,10 @@ class SparseLDL {
       n = (n + 7) & ~std::size_t(7);
 
       if (!current_slab || offset + n > current_slab->capacity) {
-        const std::size_t actual_size = std::max(default_size, n);
-        slabs.emplace_back(actual_size);
+        slabs.emplace_back(std::max(next_size, n));
         current_slab = &slabs.back();
         offset = 0;
+        next_size = default_size;
       }
 
       R* ptr = current_slab->start + offset;
@@ -273,6 +303,7 @@ class SparseLDL {
     std::deque<MemorySlab> slabs;
     MemorySlab* current_slab = nullptr;
     std::size_t offset = 0;
+    std::size_t next_size = default_size;
   };
 
   template <typename R>
@@ -358,7 +389,7 @@ class SparseLDL {
       NodeFactor& node = nodes[ks];
 
       const int nrows = num_pivots + num_delayed + contrib_size;
-      const int local_block_size = nrows * num_pivots;
+      const std::size_t local_block_size = std::size_t(nrows) * num_pivots;
 
       node.num_pivots = num_pivots;
       node.num_delayed = num_delayed;
@@ -405,7 +436,7 @@ class SparseLDL {
       node.pivots = int_pool.allocate(num_pivots);
       node.delayed = nullptr;
       node.ipiv = int_pool.allocate(num_pivots);
-      node.L = real_pool.allocate(num_pivots * num_pivots);
+      node.L = real_pool.allocate(std::size_t(num_pivots) * num_pivots);
 
       if (pivots) {
         *pivots = node.pivots;
@@ -714,35 +745,118 @@ class SparseLDL {
   };
 
   /**
-   * @brief Object for handling threaded BLAS for the root node factorization
+   * @brief Ratio of the total front work to the work on the longest tree path.
+   *
+   * The front work is estimated as pivots times front size squared. The
+   * ratio bounds the speedup available from factoring subtrees in
+   * parallel, and chain shaped trees have a ratio near one. Children
+   * precede their parents in the post-ordered tree.
    */
-  class BlasRootFactorThreadScope {
-   public:
-    explicit BlasRootFactorThreadScope(int front_size) {
-#ifdef AMIGO_USE_MKL
-      old_threads = mkl_get_max_threads();
-      int nthreads = std::min(old_threads, front_size / block_size);
-      mkl_set_num_threads_local(nthreads);
-#elif defined(AMIGO_USE_OPENBLAS)
-      old_threads = openblas_get_num_threads();
-      int nthreads = std::min(old_threads, front_size / block_size);
-      openblas_set_num_threads(nthreads);
-#else
-      old_threads = 1;
-#endif
+  void estimate_tree_parallelism() {
+    std::vector<double> path(num_nodes, 0.0);
+    double total = 0.0;
+    for (int k = 0; k < num_nodes; k++) {
+      double pivots = node_ptr[k + 1] - node_ptr[k];
+      double front = pivots + (contrib_ptr[k + 1] - contrib_ptr[k]);
+      double work = pivots * front * front;
+      double longest_child = 0.0;
+      for (int jp = node_children_ptr[k]; jp < node_children_ptr[k + 1]; jp++) {
+        longest_child = std::max(longest_child, path[node_children[jp]]);
+      }
+      path[k] = work + longest_child;
+      total += work;
     }
 
-    ~BlasRootFactorThreadScope() {
-#ifdef AMIGO_USE_MKL
-      mkl_set_num_threads_local(old_threads);
-#elif defined(AMIGO_USE_OPENBLAS)
-      openblas_set_num_threads(old_threads);
-#endif
+    double critical = 0.0;
+    for (int jp = node_children_ptr[num_nodes];
+         jp < node_children_ptr[num_nodes + 1]; jp++) {
+      critical = std::max(critical, path[node_children[jp]]);
+    }
+    tree_parallelism = critical > 0.0 ? total / critical : 1.0;
+
+#ifdef AMIGO_USE_OPENMP
+    // A third of the parallelism keeps Brent's bound on the efficiency above three quarters
+    team_threads = std::clamp(static_cast<int>(tree_parallelism / 3.0), 1,
+                              omp_get_max_threads());
+#endif  // AMIGO_USE_OPENMP
+  }
+
+  /**
+   * @brief Choose the subtrees that the triangular solves process in parallel.
+   *
+   * The subtree with the most solve work, estimated as pivots times front
+   * size, is split into its children until each thread has four subtrees
+   * to choose from or the heaviest subtree is a single node. The roots that
+   * were split form the top of the tree, which is solved serially. A solve
+   * below min_parallel_solve_work factor entries stays serial.
+   */
+  void select_solve_tasks() {
+    solve_task_first.clear();
+    solve_task_root.clear();
+    task_of_root.assign(num_nodes, -1);
+    solve_top.assign(num_nodes, 0);
+    if (team_threads <= 1) {
+      return;
     }
 
-   private:
-    int old_threads = 1;
-  };
+    // Solve work and first postorder node of every subtree
+    std::vector<double> work(num_nodes, 0.0);
+    std::vector<int> first(num_nodes);
+    for (int k = 0; k < num_nodes; k++) {
+      double pivots = node_ptr[k + 1] - node_ptr[k];
+      work[k] = pivots * (pivots + (contrib_ptr[k + 1] - contrib_ptr[k]));
+      first[k] = k;
+      for (int jp = node_children_ptr[k]; jp < node_children_ptr[k + 1]; jp++) {
+        int child = node_children[jp];
+        work[k] += work[child];
+        first[k] = std::min(first[k], first[child]);
+      }
+    }
+
+    std::priority_queue<std::pair<double, int>> heaviest;
+    double total_work = 0.0;
+    for (int jp = node_children_ptr[num_nodes];
+         jp < node_children_ptr[num_nodes + 1]; jp++) {
+      int root = node_children[jp];
+      heaviest.push({work[root], root});
+      total_work += work[root];
+    }
+
+    // A small solve costs less than the parallel regions it would need
+    if (total_work < min_parallel_solve_work) {
+      return;
+    }
+    const std::size_t target = 4 * static_cast<std::size_t>(team_threads);
+    while (heaviest.size() < target) {
+      int k = heaviest.top().second;
+      if (node_children_ptr[k + 1] == node_children_ptr[k]) {
+        break;
+      }
+      heaviest.pop();
+      solve_top[k] = 1;
+      for (int jp = node_children_ptr[k]; jp < node_children_ptr[k + 1]; jp++) {
+        int child = node_children[jp];
+        heaviest.push({work[child], child});
+      }
+    }
+
+    // Too few subtrees leave the solve serial
+    if (heaviest.size() < 2) {
+      solve_top.assign(num_nodes, 0);
+      return;
+    }
+    std::vector<int> roots;
+    while (!heaviest.empty()) {
+      roots.push_back(heaviest.top().second);
+      heaviest.pop();
+    }
+    std::sort(roots.begin(), roots.end());
+    for (int root : roots) {
+      task_of_root[root] = static_cast<int>(solve_task_root.size());
+      solve_task_first.push_back(first[root]);
+      solve_task_root.push_back(root);
+    }
+  }
 
   /**
    * @brief Perform the multifrontal factorization
@@ -767,11 +881,17 @@ class SparseLDL {
   template <SolverType stype>
   int factor_numeric(const int ncols, const int colp[], const int rows[],
                      const T data[], const T diag_entries[]) {
-    // Clear any old factorization data
+    // Clear any old factorization data, error code, and inertia
     fact.reset();
+    numeric_error = 0;
+    front_overflow = 0;
+    inertia_pos = 0;
+    inertia_neg = 0;
+    pivot_min = std::numeric_limits<T>::infinity();
+    num_delayed_total = 0;
 
-    // Estimate the max front dimension
-    ResourcePool pool;
+    // Front workspaces persist so repeated factorizations reuse them
+    ResourcePool& pool = front_pool;
 
     // Use estimates of the contribution
     ContributionData contrib(num_nodes);
@@ -787,26 +907,31 @@ class SparseLDL {
     int nroots =
         node_children_ptr[num_nodes + 1] - node_children_ptr[num_nodes];
 
+    // Independent roots are factored as concurrent tasks of one team
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel num_threads(team_threads) if (team_threads > 1)
+#pragma omp single
+#endif  // AMIGO_USE_OPENMP
     for (int is = node_children_ptr[num_nodes];
          is < node_children_ptr[num_nodes + 1]; is++) {
       int root = node_children[is];
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel
-#endif  // AMIGO_USE_OPENMP
-      {
-#ifdef AMIGO_USE_OPENMP
-#pragma omp single
-#endif  // AMIGO_USE_OPENMP
-        {
-#ifdef AMIGO_USE_OPENMP
-#pragma task firstprivate(nroots) \
+#pragma omp task firstprivate(root) \
     shared(colp, rows, data, contrib, pool, factor) if (nroots > 1)
-#endif
-          {
-            int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
-                                                       data, diag_entries,
-                                                       contrib, pool, factor);
-          }
+#endif  // AMIGO_USE_OPENMP
+      factor_numeric_node_task<stype>(root, ncols, colp, rows, data,
+                                      diag_entries, contrib, pool, factor);
+    }
+
+    // The parallel solves need the node that pivots each variable after the delays
+    if (!solve_task_root.empty() && numeric_error == 0) {
+      pivot_node.resize(ncols);
+      for (int ks = 0; ks < num_nodes; ks++) {
+        int num_pivots;
+        const int* pivots;
+        fact.get_factor(ks, &num_pivots, &pivots, nullptr, nullptr, nullptr);
+        for (int j = 0; j < num_pivots; j++) {
+          pivot_node[pivots[j] >= 0 ? pivots[j] : -pivots[j] - 1] = ks;
         }
       }
     }
@@ -820,7 +945,7 @@ class SparseLDL {
         std::max(factor_nnz, std::size_t(delay_growth * cholesky_factor_nnz));
     fact.set_sizes(num_nodes, int_nnz, factor_nnz);
 
-    return 0;
+    return numeric_error;
   }
 
   template <SolverType stype>
@@ -832,6 +957,7 @@ class SparseLDL {
     int num_children = node_children_ptr[ks + 1] - node_children_ptr[ks];
     const int* children = &node_children[node_children_ptr[ks]];
 
+    // Each node records its own error code, so the children return values are unused
     if (num_children > 1) {
       for (int k = 0; k < num_children; k++) {
         int child = children[k];
@@ -839,11 +965,8 @@ class SparseLDL {
 #pragma omp task firstprivate(child) \
     shared(colp, rows, data, contrib, pool, factor)
 #endif
-        {
-          int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
-                                                     data, diag_entries,
-                                                     contrib, pool, factor);
-        }
+        factor_numeric_node_task<stype>(child, ncols, colp, rows, data,
+                                        diag_entries, contrib, pool, factor);
       }
 
 #ifdef AMIGO_USE_OPENMP
@@ -851,13 +974,50 @@ class SparseLDL {
 #endif  // AMIGO_USE_OPENMP
     } else {
       for (int k = 0; k < num_children; k++) {
-        int child = children[k];
-        int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
-                                                   data, diag_entries, contrib,
-                                                   pool, factor);
+        factor_numeric_node_task<stype>(children[k], ncols, colp, rows, data,
+                                        diag_entries, contrib, pool, factor);
       }
     }
 
+    // An overflowed child leaves no contribution block to assemble
+    int overflow = 0;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic read
+#endif  // AMIGO_USE_OPENMP
+    overflow = front_overflow;
+    if (overflow) {
+      return FRONT_OVERFLOW;
+    }
+
+    int info = 0;
+    try {
+      info = factor_numeric_front<stype>(ks, num_children, children, ncols,
+                                         colp, rows, data, diag_entries,
+                                         contrib, pool, factor);
+    } catch (const std::bad_alloc&) {
+      info = FRONT_OVERFLOW;
+    }
+
+    // Record the overflow so the remaining fronts stop early
+    if (info == FRONT_OVERFLOW) {
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic write
+#endif  // AMIGO_USE_OPENMP
+      front_overflow = 1;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic write
+#endif  // AMIGO_USE_OPENMP
+      numeric_error = FRONT_OVERFLOW;
+    }
+    return info;
+  }
+
+  template <SolverType stype>
+  int factor_numeric_front(int ks, int num_children, const int* children,
+                           const int ncols, const int colp[], const int rows[],
+                           const T data[], const T diag_entries[],
+                           ContributionData& contrib, ResourcePool& pool,
+                           MatrixFactor& factor) {
     // Get the front variable arrays from the resource pool
     auto node = pool.borrow_node();
     if (node.vars.size() < ncols) {
@@ -874,21 +1034,31 @@ class SparseLDL {
     get_frontal_vars(ks, num_children, children, contrib, front_vars,
                      front_indices, &fully_summed, &front_size);
 
+    // Delayed pivots past the growth budget mean the pivoting has broken down
+    const int delayed = fully_summed - (node_ptr[ks + 1] - node_ptr[ks]);
+    if (delayed > (delay_growth - 1.0) * (front_size - delayed) + block_size) {
+      reset_front_vars(fully_summed, front_size, front_vars, front_indices);
+      pool.return_node(std::move(node));
+      return FRONT_OVERFLOW;
+    }
+
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
     const int min_dim = 16;
+    const std::size_t front_entries = std::size_t(front_size) * front_size;
     if (front_size < min_dim && node.F.size() < min_dim * min_dim) {
       node.F.resize(min_dim * min_dim);
-    } else if (node.F.size() < front_size * front_size) {
-      node.F.resize(front_size * front_size);
+    } else if (node.F.size() < front_entries) {
+      node.F.resize(front_entries);
     }
 
     if (stype == SolverType::LDL) {
+      const std::size_t panel_entries =
+          std::size_t(std::min(block_size, front_size)) * front_size;
       if (front_size < min_dim && node.W.size() < min_dim * min_dim) {
         node.W.resize(min_dim * min_dim);
-      } else if (node.W.size() <
-                 std::min(block_size, front_size) * front_size) {
-        node.W.resize(std::min(block_size, front_size) * front_size);
+      } else if (node.W.size() < panel_entries) {
+        node.W.resize(panel_entries);
       }
     }
 
@@ -911,14 +1081,32 @@ class SparseLDL {
                                          front_vars, node.F.data(), nblock,
                                          node.W.data(), contrib, factor);
       } else {
-#if defined(AMIGO_USE_OPENMP) && \
-    (defined(AMIGO_USE_MKL) || defined(AMIGO_USE_OPENBLAS))
-#pragma omp task shared(colp, rows, data, contrib, pool, factor)
+        info = factor_root_matrix(ks, front_size, front_vars, node.F.data(),
+                                  factor);
+      }
+
+      // Count the inertia of the new pivots while they are still in cache
+      int pos = 0, neg = 0, ndelay = 0;
+      T pmin = std::numeric_limits<T>::infinity();
+      add_pivot_inertia(ks, &pos, &neg, &pmin, &ndelay);
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic
 #endif  // AMIGO_USE_OPENMP
-        {
-          BlasRootFactorThreadScope blas_threads(front_size);
-          info = factor_root_matrix(ks, front_size, front_vars, node.F.data(),
-                                    factor);
+      inertia_pos += pos;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic
+#endif  // AMIGO_USE_OPENMP
+      inertia_neg += neg;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic
+#endif  // AMIGO_USE_OPENMP
+      num_delayed_total += ndelay;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp critical(amigo_pivot_min)
+#endif  // AMIGO_USE_OPENMP
+      {
+        if (pmin < pivot_min) {
+          pivot_min = pmin;
         }
       }
     }
@@ -928,6 +1116,12 @@ class SparseLDL {
 
     pool.return_node(std::move(node));
 
+    if (info != 0) {
+#ifdef AMIGO_USE_OPENMP
+#pragma omp atomic write
+#endif  // AMIGO_USE_OPENMP
+      numeric_error = info;
+    }
     return info;
   }
 
@@ -1020,7 +1214,7 @@ class SparseLDL {
                              const int colp[], const int rows[], const T data[],
                              const T diag_entries[], ContributionData& contrib,
                              T F[]) {
-    std::fill(F, F + front_size * front_size, 0.0);
+    std::fill(F, F + std::size_t(front_size) * front_size, 0.0);
 
     int k = node_ptr[ks];
     int ns = node_ptr[ks + 1] - node_ptr[ks];
@@ -1232,9 +1426,11 @@ class SparseLDL {
     T* L;
     factor.reserve_factor_root(ks, n, &vars, &L, &ipiv);
 
-    // The work space size = matrix size
+    // The factor storage doubles as workspace, capped at the LAPACK int range
+    const std::size_t entries = std::size_t(n) * n;
     T* work = L;
-    int lwork = n * n;
+    int lwork = static_cast<int>(
+        std::min<std::size_t>(entries, std::numeric_limits<int>::max()));
 
     // Factor the matrix
     int info;
@@ -1242,9 +1438,10 @@ class SparseLDL {
 
     // Copy the data into the factorization storage
     std::copy(front_vars, front_vars + n, vars);
-    std::copy(F, F + n * n, L);
+    std::copy(F, F + entries, L);
 
-    return info;
+    // An exact zero pivot is singular and shows up in the inertia instead
+    return info < 0 ? info : 0;
   }
 
   /**
@@ -1434,7 +1631,8 @@ class SparseLDL {
             double wii = W[imax + (kw + 1) * ldw];
             double det = std::abs(wkk * wii - wik * wik);
 
-            if (det < pivot_tol) {
+            // Relative to the block scale so the smaller eigenvalue meets pivot_tol
+            if (det < pivot_tol * std::max({abswkk, abswii, abswik})) {
               // We can't use this as a pivot because the determinant is too
               // small, delay factoring either column
               step = 0;
@@ -1815,8 +2013,26 @@ class SparseLDL {
     }
   }
 
+  // Updates from a subtree to variables pivoted outside it, kept in the serial order
+  struct DeferredUpdates {
+    std::vector<int> index;
+    std::vector<T> value;
+  };
+
+  // Postorder range of a subtree and the updates it defers
+  struct SubtreeSink {
+    int first;
+    int root;
+    DeferredUpdates* updates;
+  };
+
   /**
    * @brief Solve the system of equations based on an LDL factorization
+   *
+   * Independent subtrees are solved in parallel. A subtree defers the forward
+   * updates it sends to variables pivoted above it, and a serial postorder
+   * walk replays them where the serial sweep would, so the result is the same
+   * bit for bit.
    *
    * @param nrhs The number of right-hand-sides
    * @param x The right hand side and solution vector
@@ -1825,104 +2041,211 @@ class SparseLDL {
   void solve_ldl(int nrhs, T* x, int ldx) const {
     int max_pivots = 0, max_delayed = 0;
     fact.get_max_pivots_and_delayed(&max_pivots, &max_delayed);
-    int ldt = max_pivots + max_delayed + max_contrib;
-    T* temp = new T[nrhs * ldt];
+    const std::size_t ldt = max_pivots + max_delayed + max_contrib;
+    const int num_tasks = static_cast<int>(solve_task_root.size());
+    std::vector<T> temp(nrhs * ldt);
 
+    if (num_tasks == 0) {
+      for (int ks = 0; ks < num_nodes; ks++) {
+        forward_node(ks, nrhs, x, ldx, temp.data(), nullptr);
+      }
+      for (int ks = num_nodes - 1; ks >= 0; ks--) {
+        backward_node(ks, nrhs, x, ldx, temp.data());
+      }
+      return;
+    }
+
+    // Subtrees run forward in parallel and defer updates to variables pivoted above them
+    deferred.resize(num_tasks);
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) num_threads(team_threads)
+#endif  // AMIGO_USE_OPENMP
+    for (int t = 0; t < num_tasks; t++) {
+      std::vector<T> task_temp(nrhs * ldt);
+      SubtreeSink sink{solve_task_first[t], solve_task_root[t], &deferred[t]};
+      sink.updates->index.clear();
+      sink.updates->value.clear();
+      for (int ks = sink.first; ks <= sink.root; ks++) {
+        forward_node(ks, nrhs, x, ldx, task_temp.data(), &sink);
+      }
+    }
+
+    // A postorder walk replays each subtree's updates where the serial sweep finishes it
     for (int ks = 0; ks < num_nodes; ks++) {
-      // Get the pointers to the factor data
-      int num_pivots, num_delayed, num_ipiv;
-      const int* pivots = nullptr;
-      const int* delayed = nullptr;
-      const T* L;
-      const int* ipiv = nullptr;
+      if (solve_top[ks]) {
+        forward_node(ks, nrhs, x, ldx, temp.data(), nullptr);
+      } else if (task_of_root[ks] >= 0) {
+        const DeferredUpdates& updates = deferred[task_of_root[ks]];
+        for (std::size_t e = 0; e < updates.index.size(); e++) {
+          for (int k = 0; k < nrhs; k++) {
+            x[updates.index[e] + k * ldx] -= updates.value[e * nrhs + k];
+          }
+        }
+      }
+    }
 
-      // Get the factor L = (L11, L21) that constitute the factor data
-      fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L,
-                      &num_ipiv, &ipiv);
+    // The top of the tree runs backward first so every subtree reads final values
+    for (int ks = num_nodes - 1; ks >= 0; ks--) {
+      if (solve_top[ks]) {
+        backward_node(ks, nrhs, x, ldx, temp.data());
+      }
+    }
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) num_threads(team_threads)
+#endif  // AMIGO_USE_OPENMP
+    for (int t = 0; t < num_tasks; t++) {
+      std::vector<T> task_temp(nrhs * ldt);
+      for (int ks = solve_task_root[t]; ks >= solve_task_first[t]; ks--) {
+        backward_node(ks, nrhs, x, ldx, task_temp.data());
+      }
+    }
+  }
+
+  /**
+   * @brief Forward elimination and diagonal solve of one supernode
+   *
+   * @param ks The supernode index
+   * @param nrhs The number of right-hand-sides
+   * @param x The right hand side and solution vector
+   * @param ldx Leading dimension of x
+   * @param temp Workspace for the frontal entries
+   * @param sink The subtree whose outside updates are deferred, or nullptr to apply them all
+   */
+  void forward_node(int ks, int nrhs, T* x, int ldx, T* temp,
+                    SubtreeSink* sink) const {
+    int num_pivots, num_delayed, num_ipiv;
+    const int* pivots = nullptr;
+    const int* delayed = nullptr;
+    const T* L;
+    const int* ipiv = nullptr;
+
+    // Get the factor L = (L11, L21) that constitute the factor data
+    fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L,
+                    &num_ipiv, &ipiv);
+    int num_contrib = contrib_ptr[ks + 1] - contrib_ptr[ks];
+    int ldl = num_pivots + num_delayed + num_contrib;
+
+    // Extract the variables from x - 2x2 pivots have negative entries
+    gather_pivot(num_pivots, pivots, nrhs, x, ldx, temp, ldl);
+
+    if (ipiv) {
+      int info;
+      lapack_sytrs("L", ldl, nrhs, L, ldl, ipiv, temp, ldl, &info);
+    } else if (num_pivots > 0) {
+      // Find the solution t1 = L11^{-1} * t1, overwriting temp
+      // with the solution
+      solve_pivot_lower(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
+
+      // Compute the matrix-vector t2 = L21 * t1 and add the contributions
+      // to the lower block
+      int size = num_delayed + num_contrib;
+      if (nrhs == 1) {
+        blas_gemv<T>("N", size, num_pivots, 1.0, &L[num_pivots], ldl, temp, 1,
+                     0.0, &temp[num_pivots], 1);
+      } else {
+        blas_gemm<T>("N", "N", size, nrhs, num_pivots, 1.0, &L[num_pivots],
+                     ldl, temp, ldl, 0.0, &temp[num_pivots], ldl);
+      }
+
+      // Add the contributions
+      const int* contrib_indices = &contrib_rows[contrib_ptr[ks]];
+      subtract_updates(num_delayed, delayed, nrhs, &temp[num_pivots], ldl, x,
+                       ldx, sink);
+      subtract_updates(num_contrib, contrib_indices, nrhs,
+                       &temp[num_pivots + num_delayed], ldl, x, ldx, sink);
+
+      // Compute x = D11^{1} * temp
+      solve_pivot_diagonal(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
+    }
+
+    // Assign the entries back
+    scatter_pivot(num_pivots, pivots, nrhs, temp, ldl, x, ldx);
+  }
+
+  /**
+   * @brief Backward substitution of one supernode
+   *
+   * @param ks The supernode index
+   * @param nrhs The number of right-hand-sides
+   * @param x The right hand side and solution vector
+   * @param ldx Leading dimension of x
+   * @param temp Workspace for the frontal entries
+   */
+  void backward_node(int ks, int nrhs, T* x, int ldx, T* temp) const {
+    int num_pivots, num_delayed, num_ipiv;
+    const int* pivots = nullptr;
+    const int* delayed = nullptr;
+    const T* L;
+    const int* ipiv;
+
+    // Get the factor L = (L11, L21) that constitute the factor data
+    fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L,
+                    &num_ipiv, &ipiv);
+
+    if (!ipiv && num_pivots > 0) {
       int num_contrib = contrib_ptr[ks + 1] - contrib_ptr[ks];
       int ldl = num_pivots + num_delayed + num_contrib;
 
-      // Extract the variables from x - 2x2 pivots have negative entries
+      // Extract the variables from x
       gather_pivot(num_pivots, pivots, nrhs, x, ldx, temp, ldl);
 
-      if (ipiv) {
-        int info;
-        lapack_sytrs("L", ldl, nrhs, L, ldl, ipiv, temp, ldl, &info);
-      } else if (num_pivots > 0) {
-        // Find the solution t1 = L11^{-1} * t1, overwriting temp
-        // with the solution
-        solve_pivot_lower(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
+      // Collect the values from the contributions
+      const int* contrib_indices = &contrib_rows[contrib_ptr[ks]];
+      gather(num_delayed, delayed, nrhs, x, ldx, &temp[num_pivots], ldl);
+      gather(num_contrib, contrib_indices, nrhs, x, ldx,
+             &temp[num_pivots + num_delayed], ldl);
 
-        // Compute the matrix-vector t2 = L21 * t1 and add the contributions
-        // to the lower block
-        int size = num_delayed + num_contrib;
-        if (nrhs == 1) {
-          blas_gemv<T>("N", size, num_pivots, 1.0, &L[num_pivots], ldl, temp, 1,
-                       0.0, &temp[num_pivots], 1);
-        } else {
-          blas_gemm<T>("N", "N", size, nrhs, num_pivots, 1.0, &L[num_pivots],
-                       ldl, temp, ldl, 0.0, &temp[num_pivots], ldl);
-        }
-
-        // Add the contributions
-        const int* contrib_indices = &contrib_rows[contrib_ptr[ks]];
-        scatter_subtract(num_delayed, delayed, nrhs, &temp[num_pivots], ldl, x,
-                         ldx);
-        scatter_subtract(num_contrib, contrib_indices, nrhs,
-                         &temp[num_pivots + num_delayed], ldl, x, ldx);
-
-        // Compute x = D11^{1} * temp
-        solve_pivot_diagonal(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
+      // Compute the matrix-vector product
+      int size = num_delayed + num_contrib;
+      if (nrhs == 1) {
+        blas_gemv<T>("T", size, num_pivots, -1.0, &L[num_pivots], ldl,
+                     &temp[num_pivots], 1, 1.0, temp, 1);
+      } else {
+        blas_gemm<T>("T", "N", num_pivots, nrhs, size, -1.0, &L[num_pivots],
+                     ldl, &temp[num_pivots], ldl, 1.0, temp, ldl);
       }
+
+      // Solve L11^{T} * x = temp
+      solve_pivot_transpose(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
 
       // Assign the entries back
       scatter_pivot(num_pivots, pivots, nrhs, temp, ldl, x, ldx);
     }
+  }
 
-    for (int ks = num_nodes - 1; ks >= 0; ks--) {
-      // Get the pointers to the factor data
-      int num_pivots, num_delayed, num_ipiv;
-      const int* pivots = nullptr;
-      const int* delayed = nullptr;
-      const T* L;
-      const int* ipiv;
-
-      // Get the factor L = (L11, L21) that constitute the factor data
-      fact.get_factor(ks, &num_pivots, &pivots, &num_delayed, &delayed, &L,
-                      &num_ipiv, &ipiv);
-
-      if (!ipiv && num_pivots > 0) {
-        int num_contrib = contrib_ptr[ks + 1] - contrib_ptr[ks];
-        int ldl = num_pivots + num_delayed + num_contrib;
-
-        // Extract the variables from x
-        gather_pivot(num_pivots, pivots, nrhs, x, ldx, temp, ldl);
-
-        // Collect the values from the contributions
-        const int* contrib_indices = &contrib_rows[contrib_ptr[ks]];
-        gather(num_delayed, delayed, nrhs, x, ldx, &temp[num_pivots], ldl);
-        gather(num_contrib, contrib_indices, nrhs, x, ldx,
-               &temp[num_pivots + num_delayed], ldl);
-
-        // Compute the matrix-vector product
-        int size = num_delayed + num_contrib;
-        if (nrhs == 1) {
-          blas_gemv<T>("T", size, num_pivots, -1.0, &L[num_pivots], ldl,
-                       &temp[num_pivots], 1, 1.0, temp, 1);
-        } else {
-          blas_gemm<T>("T", "N", num_pivots, nrhs, size, -1.0, &L[num_pivots],
-                       ldl, &temp[num_pivots], ldl, 1.0, temp, ldl);
+  /**
+   * @brief Subtract a node's updates from x, deferring those a subtree sends above itself
+   *
+   * @param n Number of indices
+   * @param indices Indices in x
+   * @param nrhs The number of right-hand-sides
+   * @param t The updates
+   * @param ldt Leading dimension of t
+   * @param x The right hand side and solution vector
+   * @param ldx Leading dimension of x
+   * @param sink The subtree whose outside updates are deferred, or nullptr to apply them all
+   */
+  void subtract_updates(const int n, const int indices[], const int nrhs,
+                        const T* t, const int ldt, T* x, const int ldx,
+                        SubtreeSink* sink) const {
+    if (!sink) {
+      scatter_subtract(n, indices, nrhs, t, ldt, x, ldx);
+      return;
+    }
+    for (int j = 0; j < n; j++) {
+      const int var = indices[j];
+      const int owner = pivot_node[var];
+      if (owner >= sink->first && owner <= sink->root) {
+        for (int k = 0; k < nrhs; k++) {
+          x[var + k * ldx] -= t[j + k * ldt];
         }
-
-        // Solve L11^{T} * x = temp
-        solve_pivot_transpose(num_pivots, nrhs, pivots, L, ldl, temp, ldl);
-
-        // Assign the entries back
-        scatter_pivot(num_pivots, pivots, nrhs, temp, ldl, x, ldx);
+      } else {
+        sink->updates->index.push_back(var);
+        for (int k = 0; k < nrhs; k++) {
+          sink->updates->value.push_back(t[j + k * ldt]);
+        }
       }
     }
-
-    delete[] temp;
   }
 
   /**
@@ -1932,7 +2255,8 @@ class SparseLDL {
    * @param npos Pointer where to add the positive number of eigenvalues
    * @param nneg Pointer where to add the negative number of eigenvalues
    */
-  void add_pivot_inertia(int ks, int* npos, int* nneg) const {
+  void add_pivot_inertia(int ks, int* npos, int* nneg, T* pmin,
+                         int* ndelay) const {
     // Get the pointers to the factor data
     int num_pivots, num_delayed;
     const int* pivots = nullptr;
@@ -1953,9 +2277,11 @@ class SparseLDL {
     }
 
     int pos = 0, neg = 0;
+    T pivot_small = std::numeric_limits<T>::infinity();
     for (int i = 0; i < num_pivots;) {
       if (piv[i] >= 0) {
         T d = L[i * (ldl + 1)];
+        pivot_small = std::min(pivot_small, std::abs(d));
         // A pivot below pivot_tol counts as rank deficient so npos + nneg < n
         if (std::abs(d) >= pivot_tol) {
           if (d >= 0.0) {
@@ -1970,8 +2296,16 @@ class SparseLDL {
         T d21 = L[i * (ldl + 1) + 1];
         T d22 = L[(i + 1) * (ldl + 1)];
         T det = d11 * d22 - d21 * d21;
+        T scale = std::max({std::abs(d11), std::abs(d21), std::abs(d22)});
 
-        if (std::abs(det) < pivot_tol) {
+        // The smallest eigenvalue of the block scales as its determinant over its largest entry
+        if (scale > 0.0) {
+          pivot_small = std::min(pivot_small, std::abs(det) / scale);
+        } else {
+          pivot_small = 0.0;
+        }
+
+        if (std::abs(det) < pivot_tol * scale) {
           // A near singular 2x2 block has one zero eigenvalue and the trace sign gives the other
           if (d11 + d22 >= 0.0) {
             pos++;
@@ -1995,6 +2329,8 @@ class SparseLDL {
     // Set the output values
     *npos += pos;
     *nneg += neg;
+    *pmin = pivot_small;
+    *ndelay = num_delayed;
   }
 
   /**
@@ -2352,6 +2688,9 @@ class SparseLDL {
       }
     }
 
+    estimate_tree_parallelism();
+    select_solve_tasks();
+
     // Fill in the rows in the contribution blocks
     contrib_rows = new int[contrib_ptr[num_nodes]];
     build_nonzero_pattern(ncols, colp, rows, perm, iperm, parent, num_nodes,
@@ -2366,7 +2705,7 @@ class SparseLDL {
       }
     }
 
-    estimate_cholesky_nonzeros(work);
+    estimate_cholesky_nonzeros();
 
     // Set the array sizes within the factorization
     std::size_t int_nnz = std::size_t(delay_growth * cholesky_int_nnz);
@@ -2843,8 +3182,10 @@ class SparseLDL {
         kids[i] = ip;
       }
 
+      // Merge the narrowest children first
       std::sort(kids.begin(), kids.end(), [&](int a, int b) {
-        return width[find_root(a)] < width[find_root(b)];
+        return width[find_root(snode_children[a])] <
+               width[find_root(snode_children[b])];
       });
 
       // Loop over the children
@@ -3133,119 +3474,19 @@ class SparseLDL {
   }
 
   /**
-   * @brief Compute the square root of an integer and cast it to an integer
+   * @brief Count the pivot and factor storage of a Cholesky factorization
+   *
+   * The LDL factorization scales these counts by the delayed pivot growth.
    */
-  int approx_root(int val) { return int(std::sqrt(val)); }
-
-  /**
-   * @brief Given the square root of two integers, find the sum of the square
-   * roots of the integers
-   *
-   * Given a and b where a = sqrt(v) and b = sqrt(w)
-   *
-   * Find c = sqrt(v + w) = sqrt(v) * sqrt(1 + w / v) so that
-   *
-   * c = a sqrt(1 + b * b / a * a)
-   *
-   * @param a First square root
-   * @param b Second square root
-   * @return int The resulting integer
-   */
-  int approx_root_sum(int count, int a[], int incr) {
-    int amax = 0;
-    for (int i = 0; i < count; i++) {
-      if (amax > a[i * incr]) {
-        amax = a[i * incr];
-      }
-    }
-
-    double sum = 0.0;
-    for (int i = 0; i < count; i++) {
-      double r = 1.0 * a[i * incr] / amax;
-      sum += r * r;
-    }
-
-    return int(amax * std::sqrt(sum));
-  }
-
-  /**
-   * @brief Estimate the square root of the flops at a particular node
-   */
-  // void estimate_flops(int flops_est[]) {
-  //   for (int ks = 0; ks < num_nodes; ks++) {
-  //     int ns = node_ptr[ks + 1] - node_ptr[ks];
-  //     int contrib_size = contrib_ptr[ks + 1] - contrib_ptr[ks];
-
-  //     // Set the flops estimate for the node
-  //     flops_est[ks] =
-  //         approx_root(ns * (ns + contrib_size) * (ns + contrib_size));
-  //   }
-  // }
-
-  /**
-   * @brief Estimate the non-zeros in the factor and stack and max frontal
-   * matrix size. This serves as an estimate of the
-   *
-   * @param work Work array of at least size 2 * num_snodes
-   */
-  void estimate_cholesky_nonzeros(int work[]) {
-    // Maximum frontal matrix size
-    max_frontal_mat_dimension = 0;
-
-    // Estimate the size of the stack
-    stack_int_estimate = 0;
-    stack_nnz_estimate = 0;
-
-    int top = 0;
-    for (int ks = 0; ks < num_nodes; ks++) {
-      int ns = node_ptr[ks + 1] - node_ptr[ks];
-      int contrib_size = contrib_ptr[ks + 1] - contrib_ptr[ks];
-
-      // Find the total stack size at this point
-      int int_size = 0;
-      int nnz_size = 0;
-      for (int tmp_top = top - 2; tmp_top >= 0; tmp_top -= 2) {
-        int_size += work[tmp_top];
-        nnz_size += work[tmp_top + 1];
-      }
-
-      // Now pop the children off the stack
-      int num_children = node_children_ptr[ks + 1] - node_children_ptr[ks];
-      int k = 0;
-      for (; k < num_children && top > 0; k++) {
-        top -= 2;
-      }
-
-      if (int_size > stack_int_estimate) {
-        stack_int_estimate = int_size;
-      }
-      if (nnz_size > stack_nnz_estimate) {
-        stack_nnz_estimate = nnz_size;
-      }
-
-      if (max_frontal_mat_dimension > ns + contrib_size) {
-        max_frontal_mat_dimension = ns + contrib_size;
-      }
-
-      // Push this contribution on to the stack
-      work[top] = 2 + contrib_size;
-      work[top + 1] = contrib_size * (contrib_size + 1) / 2;
-      top += 2;
-    }
-
-    // Count up the size for the cholesky factorization
+  void estimate_cholesky_nonzeros() {
     cholesky_int_nnz = 0;
     cholesky_factor_nnz = 0;
     for (int is = 0; is < num_nodes; is++) {
-      int ns = node_ptr[is + 1] - node_ptr[is];
-      int contrib_size = contrib_ptr[is + 1] - contrib_ptr[is];
-      int ldf = contrib_size + ns;
-      cholesky_int_nnz += ns;           // Space to store pivots
-      cholesky_factor_nnz += ns * ldf;  // Space to store factorization
+      std::size_t ns = node_ptr[is + 1] - node_ptr[is];
+      std::size_t contrib_size = contrib_ptr[is + 1] - contrib_ptr[is];
+      cholesky_int_nnz += ns;
+      cholesky_factor_nnz += ns * (ns + contrib_size);
     }
-
-    // Add the space for the root ipiv array
-    cholesky_int_nnz += max_frontal_mat_dimension;
   }
 
   // The matrix
@@ -3266,16 +3507,9 @@ class SparseLDL {
   // Type of ordering used for the matrix
   OrderingType order;
 
-  // Space required for the frontal matrix for a Cholesky
-  int max_frontal_mat_dimension;
-
-  // Space required for the stack and the max front size
-  int stack_int_estimate;
-  int stack_nnz_estimate;
-
-  // Space required for a Choleksy factorization
-  int cholesky_int_nnz;
-  int cholesky_factor_nnz;
+  // Space required for a Cholesky factorization
+  std::size_t cholesky_int_nnz;
+  std::size_t cholesky_factor_nnz;
 
   // Permutation array defined - nullptr if order == NATURAL
   int* invperm;
@@ -3298,6 +3532,44 @@ class SparseLDL {
 
   // Storage for the matrix factorization
   MatrixFactor fact;
+
+  // Frontal matrix workspaces reused across factorizations
+  ResourcePool front_pool;
+
+  // Nonzero error code of any front in the last numeric factorization
+  int numeric_error = 0;
+
+  // Set once a front overflows so the remaining fronts stop early
+  int front_overflow = 0;
+
+  // Positive and negative pivots counted during the last numeric factorization
+  int inertia_pos = 0;
+  int inertia_neg = 0;
+
+  // Smallest pivot magnitude and delayed pivot total of the last factorization
+  T pivot_min = std::numeric_limits<T>::infinity();
+  int num_delayed_total = 0;
+
+  // Available tree parallelism and the team size that factors the tree
+  double tree_parallelism = 1.0;
+  int team_threads = 1;
+
+  // Factor entries a solve must read before its subtrees run in parallel
+  static constexpr double min_parallel_solve_work = 1e6;
+
+  // Subtrees solved in parallel as postorder ranges from their first node to their root
+  std::vector<int> solve_task_first;
+  std::vector<int> solve_task_root;
+
+  // Task of each subtree root and the nodes above the subtrees that are solved serially
+  std::vector<int> task_of_root;
+  std::vector<char> solve_top;
+
+  // Node that pivots each variable in the last numeric factorization
+  std::vector<int> pivot_node;
+
+  // Updates each parallel subtree sends above itself during the last solve
+  mutable std::vector<DeferredUpdates> deferred;
 };
 
 }  // namespace amigo

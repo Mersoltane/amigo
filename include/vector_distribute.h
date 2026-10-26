@@ -143,7 +143,7 @@ class VectorDistribute {
       if constexpr (policy == ExecPolicy::CUDA) {
 #ifdef AMIGO_USE_CUDA
         if (num_recv_nodes > 0) {
-          AMIGO_CHECK_CUDA(cudaMemcpy(&array + num_owned_nodes, recv_buffer,
+          AMIGO_CHECK_CUDA(cudaMemcpy(array + num_owned_nodes, recv_buffer,
                                       num_recv_nodes * sizeof(T),
                                       cudaMemcpyHostToDevice));
         }
@@ -158,6 +158,14 @@ class VectorDistribute {
                     policy == ExecPolicy::OPENMP) {
         return &array[num_owned_nodes];
       }
+#ifdef AMIGO_USE_CUDA
+      // The halo values live on the device and are sent from the host buffer
+      if (num_recv_nodes > 0) {
+        AMIGO_CHECK_CUDA(cudaMemcpy(recv_buffer, array + num_owned_nodes,
+                                    num_recv_nodes * sizeof(T),
+                                    cudaMemcpyDeviceToHost));
+      }
+#endif  // AMIGO_USE_CUDA
       return recv_buffer;
     }
 

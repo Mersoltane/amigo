@@ -690,10 +690,12 @@ class BlockAMD {
         : size(size), is_multiplier(is_multiplier) {
       degree = new int[size];
       first = new int[size + 1];
+      first_mult = new int[size + 1];
       next = new int[size + 1];
       prev = new int[size + 1];
 
       std::fill(first, first + size + 1, -1);
+      std::fill(first_mult, first_mult + size + 1, -1);
       std::fill(next, next + size + 1, -1);
       std::fill(prev, prev + size + 1, -1);
 
@@ -710,22 +712,13 @@ class BlockAMD {
 
       // Set the intial data structure
       for (int i = 0; i < size; i++) {
-        int d = degree[i];
-
-        // Initial list is empty
-        if (first[d] == -1) {
-          first[d] = i;
-        } else {
-          // Update the list
-          prev[first[d]] = i;
-          next[i] = first[d];
-          first[d] = i;
-        }
+        push(i);
       }
     }
     ~MinDegreeList() {
       delete[] degree;
       delete[] first;
+      delete[] first_mult;
       delete[] next;
       delete[] prev;
     }
@@ -734,12 +727,13 @@ class BlockAMD {
 
     // Remove the variable from the list structure
     void remove(int i) {
+      int* head = is_multiplier[i] ? first_mult : first;
       int d = degree[i];
 
       // If this was the first variable of the given degree, increment to the
       // next element
-      if (i == first[d]) {
-        first[d] = next[i];
+      if (i == head[d]) {
+        head[d] = next[i];
       }
       if (next[i] != -1) {
         prev[next[i]] = prev[i];
@@ -759,34 +753,32 @@ class BlockAMD {
 
       // Remove i from the old list
       remove(i);
-
-      if (first[d] == -1) {
-        first[d] = i;
-      } else {
-        // Update the list
-        prev[first[d]] = i;
-        next[i] = first[d];
-        first[d] = i;
-      }
       degree[i] = d;
+      push(i);
     }
 
     // Retrieve the variable with the minimum degree
     int get_min_degree_var(int no_multiplier) {
-      if (no_multiplier) {
-        for (int d = min_degree; d <= size; d++) {
-          if (first[d] != -1 && !is_multiplier[first[d]]) {
-            return first[d];
-          }
+      for (int d = min_degree; d <= size; d++) {
+        if (first[d] != -1) {
+          return first[d];
         }
-      } else {
-        for (int d = min_degree; d <= size; d++) {
-          if (first[d] != -1) {
-            return first[d];
-          }
+        if (!no_multiplier && first_mult[d] != -1) {
+          return first_mult[d];
         }
       }
       return -1;
+    }
+
+    // Put the variable at the head of the list for its degree
+    void push(int i) {
+      int* head = is_multiplier[i] ? first_mult : first;
+      int d = degree[i];
+      if (head[d] != -1) {
+        prev[head[d]] = i;
+      }
+      next[i] = head[d];
+      head[d] = i;
     }
 
     // Size of the matrix
@@ -798,8 +790,11 @@ class BlockAMD {
     // The degree associated with each variable
     int* degree;
 
-    // For each degree, which is the first variable
+    // For each degree, which is the first variable that is not a multiplier
     int* first;
+
+    // For each degree, which is the first multiplier
+    int* first_mult;
 
     // For each variable what is the next variable with the same degree
     int* next;

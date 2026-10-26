@@ -3,6 +3,9 @@
 
 #include <mpi.h>
 
+#include <cmath>
+#include <vector>
+
 #include "component_group_base.h"
 #include "fixed_variables.h"
 #include "matrix_distribute.h"
@@ -67,6 +70,10 @@ class OptimizationProblem {
       var_types = std::make_shared<Vector<int>>(var_owners->get_local_size(),
                                                 var_owners->get_ext_size());
     } else {
+      // Keep the model types so fixed variables can follow later bound changes
+      const int* types = var_types->get_array();
+      model_var_types.assign(types, types + var_types->get_local_size());
+
       // Initialize the primal and constraint vectors
       initialize_primal_and_constraints();
     }
@@ -343,6 +350,27 @@ class OptimizationProblem {
   }
 
   /**
+   * @brief Treat primals whose finite bounds are equal as fixed variables
+   *
+   * Variables fixed in the model stay fixed and the others follow the current
+   * bounds, so a later bound change can free them again.
+   */
+  void update_fixed_variables() {
+    int* types = var_types->get_array();
+    const T* lb = lower->get_array();
+    const T* ub = upper->get_array();
+    int free_mask = static_cast<int>(OptVarType::PRIMAL) |
+                    static_cast<int>(OptVarType::SLACK);
+    for (size_t i = 0; i < model_var_types.size(); i++) {
+      int type = model_var_types[i];
+      if ((type & free_mask) && std::isfinite(lb[i]) && lb[i] == ub[i]) {
+        type = static_cast<int>(OptVarType::FIXED);
+      }
+      types[i] = type;
+    }
+  }
+
+  /**
    * @brief Get the primal indices
    */
   std::shared_ptr<Vector<int>> get_primal_indices() { return primal_indices; }
@@ -358,7 +386,15 @@ class OptimizationProblem {
    * @brief Set the NLP variable scaling (1 on primals/slacks, dc on duals).
    *        A null vector disables scaling.
    */
-  void set_var_scale(std::shared_ptr<Vector<T>> scale) { var_scale = scale; }
+  void set_var_scale(std::shared_ptr<Vector<T>> scale) {
+    var_scale = scale;
+
+    // Ghost entries take the values of their owners for the symmetric scaling
+    if (var_scale) {
+      var_dist.begin_forward(var_scale, var_ctx);
+      var_dist.end_forward(var_scale, var_ctx);
+    }
+  }
 
   std::shared_ptr<Vector<T>> get_var_scale() { return var_scale; }
 
@@ -844,11 +880,20 @@ class OptimizationProblem {
       // Columns sorted in MatrixDistribute initialization
       bool sort_columns = false;
 
+      // Groups that know their Hessian pattern couple only its nonzero pairs
+      auto element_pattern = [&](int element, const int** pattern_rowp,
+                                 const int** pattern_cols) {
+        auto it = std::upper_bound(intervals.begin(), intervals.end(), element);
+        int idx = static_cast<int>(it - intervals.begin()) - 1;
+        components[idx]->get_element_hessian_pattern(pattern_rowp,
+                                                     pattern_cols);
+      };
+
       // Generate the non-zero pattern
       int *rowp, *cols;
       OrderingUtils::create_csr_from_element_conn(
           num_variables, num_variables, num_elements, element_nodes,
-          include_diagonal, sort_columns, &rowp, &cols);
+          include_diagonal, sort_columns, &rowp, &cols, element_pattern);
 
       // Now optionally add the components with a non-zero CSR sparsity pattern
       int num_csr_components = 0;
@@ -906,6 +951,7 @@ class OptimizationProblem {
         }
       }
 
+      fixed = nullptr;
       if (num_fixed > 0) {
         // Initialized the fixed dof
         MemoryLocation mem_loc = MemoryLocation::HOST_AND_DEVICE;
@@ -1652,6 +1698,9 @@ class OptimizationProblem {
 
   // Array indicating the types of each variable
   std::shared_ptr<Vector<int>> var_types;
+
+  // Variable types from the model before any bound based fixing
+  std::vector<int> model_var_types;
 
   // Component groups for the optimization problem
   std::vector<std::shared_ptr<ComponentGroupBase<T, policy>>> components;

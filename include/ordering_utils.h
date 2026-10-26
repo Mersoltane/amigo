@@ -20,8 +20,30 @@ namespace amigo {
 
 enum class OrderingType { NESTED_DISSECTION, AMD, MULTI_COLOR, NATURAL };
 
+// Element pattern functor for elements whose nodes all couple to each other
+struct NoElementPattern {
+  void operator()(int elem, const int** rowp, const int** cols) const {
+    *rowp = nullptr;
+    *cols = nullptr;
+  }
+};
+
 class OrderingUtils {
  public:
+  /**
+   * @brief Use AMD in place of nested dissection when METIS is not compiled in
+   *
+   * @param order The requested ordering type
+   */
+  static OrderingType available(OrderingType order) {
+#ifndef AMIGO_USE_METIS
+    if (order == OrderingType::NESTED_DISSECTION) {
+      return OrderingType::AMD;
+    }
+#endif
+    return order;
+  }
+
   /**
    * @brief Reorder the CSR matrix entries based on the prescribed ordering type
    *
@@ -37,6 +59,7 @@ class OrderingUtils {
    */
   static void reorder(OrderingType order, int nrows, int* rowp, int* cols,
                       int** perm_, int** iperm_) {
+    order = available(order);
     if (order == OrderingType::NESTED_DISSECTION) {
       nested_dissection(nrows, rowp, cols, perm_, iperm_);
     } else if (order == OrderingType::AMD) {
@@ -74,6 +97,7 @@ class OrderingUtils {
    */
   static void reorder_block(OrderingType order, int nrows, int* rowp, int* cols,
                             int nmult, int* mult, int** perm_, int** iperm_) {
+    order = available(order);
     if (order == OrderingType::NESTED_DISSECTION ||
         order == OrderingType::NATURAL || order == OrderingType::MULTI_COLOR) {
       reorder(order, nrows, rowp, cols, perm_, iperm_);
@@ -82,7 +106,7 @@ class OrderingUtils {
 
       int* is_mult = new int[nrows];
       std::fill(is_mult, is_mult + nrows, 0);
-      for (int i = 0; i < nrows; i++) {
+      for (int i = 0; i < nmult; i++) {
         if (mult[i] >= 0 && mult[i] < nrows) {
           is_mult[mult[i]] = 1;
         }
@@ -287,7 +311,7 @@ class OrderingUtils {
     }
 
     for (int i = 0; i < nrows; i++) {
-      iperm[perm[i]] = i;
+      perm[iperm[i]] = i;
     }
 
     delete[] tmp;
@@ -315,7 +339,7 @@ class OrderingUtils {
                                int* cols_copy_[]) {
     int* rowp_copy = nullptr;
     int* cols_copy = nullptr;
-    if (order == OrderingType::NESTED_DISSECTION) {
+    if (available(order) == OrderingType::NESTED_DISSECTION) {
       rowp_copy = new int[nrows + 1];
       cols_copy = new int[rowp[nrows]];
 
@@ -370,17 +394,66 @@ class OrderingUtils {
    * @param sort_columns Sort the columns of the matrix in each row
    * @param rowp_ Output pointer into the columns array
    * @param cols_ Array of column indices
+   * @param element_pattern Functor returning the element-local coupling pattern
+   * in CSR form, or null pointers when every pair of element nodes couples
    */
-  template <class Functor>
-  static void create_csr_from_element_conn(int nrows, int ncols, int nelems,
-                                           const Functor& element_nodes,
-                                           bool include_diagonal,
-                                           bool sort_columns, int** rowp_,
-                                           int** cols_) {
+  template <class Functor, class Pattern = NoElementPattern>
+  static void create_csr_from_element_conn(
+      int nrows, int ncols, int nelems, const Functor& element_nodes,
+      bool include_diagonal, bool sort_columns, int** rowp_, int** cols_,
+      const Pattern& element_pattern = Pattern()) {
     int* node_to_elem_ptr = nullptr;
     int* node_to_elem = nullptr;
     compute_node_to_element_ptr(ncols, nelems, element_nodes, &node_to_elem_ptr,
                                 &node_to_elem);
+
+    // Pass each node that element elem couples to row i to add
+    auto visit = [&](int i, int elem, auto&& add) {
+      const int* ptr;
+      int ncon = 0;
+      bool is_linear = false;
+      int nodes_per_element = element_nodes(elem, &ptr, &ncon, &is_linear);
+
+      const int* pattern_rowp = nullptr;
+      const int* pattern_cols = nullptr;
+      element_pattern(elem, &pattern_rowp, &pattern_cols);
+
+      if (pattern_rowp) {
+        // Only the listed couplings of every local position of the row node
+        for (int ii = 0; ii < nodes_per_element; ii++) {
+          if (ptr[ii] == i) {
+            for (int kp = pattern_rowp[ii]; kp < pattern_rowp[ii + 1]; kp++) {
+              add(ptr[pattern_cols[kp]]);
+            }
+          }
+        }
+      } else if (is_linear || ncon > 0) {
+        // Find the i-index of the row
+        int ii = 0;
+        for (; ii < nodes_per_element; ii++) {
+          if (i == ptr[ii]) {
+            break;
+          }
+        }
+
+        // Set the start/end of the array
+        int kstart = 0;
+        int kend = nodes_per_element;
+        if (ii >= nodes_per_element - ncon) {
+          kend = nodes_per_element - ncon;
+        } else if (is_linear) {
+          kstart = nodes_per_element - ncon;
+        }
+
+        for (int k = kstart; k < kend; k++) {
+          add(ptr[k]);
+        }
+      } else {
+        for (int k = 0; k < nodes_per_element; k++) {
+          add(ptr[k]);
+        }
+      }
+    };
 
     // Set up the CSR data structure
     int* rowp = new int[nrows + 1];
@@ -403,47 +476,12 @@ class OrderingUtils {
 
       // Count the off-diagonals
       for (int j = node_to_elem_ptr[i]; j < node_to_elem_ptr[i + 1]; j++) {
-        int elem = node_to_elem[j];
-
-        const int* ptr;
-        int ncon = 0;
-        bool is_linear = false;
-        int nodes_per_element = element_nodes(elem, &ptr, &ncon, &is_linear);
-        if (is_linear || ncon > 0) {
-          // Find the i-index of the row
-          int ii = 0;
-          for (; ii < nodes_per_element; ii++) {
-            if (i == ptr[ii]) {
-              break;
-            }
+        visit(i, node_to_elem[j], [&](int node) {
+          if (counter[node] < i) {
+            counter[node] = i;
+            nnz_count++;
           }
-
-          // Set the start/end of the array
-          int kstart = 0;
-          int kend = nodes_per_element;
-          if (ii >= nodes_per_element - ncon) {
-            kend = nodes_per_element - ncon;
-          } else if (is_linear) {
-            kstart = nodes_per_element - ncon;
-          }
-
-          // Check if we should add this node
-          for (int k = kstart; k < kend; k++) {
-            int node = ptr[k];
-            if (counter[node] < i) {
-              counter[node] = i;
-              nnz_count++;
-            }
-          }
-        } else {
-          for (int k = 0; k < nodes_per_element; k++) {
-            int node = ptr[k];
-            if (counter[node] < i) {
-              counter[node] = i;
-              nnz_count++;
-            }
-          }
-        }
+        });
       }
       rowp[i + 1] = nnz_count;
     }
@@ -456,7 +494,7 @@ class OrderingUtils {
       counter[i] = -1;
     }
 
-    // Count up the number of non-zero entries
+    // Fill in the non-zero entries
     nnz_count = 0;
     for (int i = 0; i < nrows; i++) {
       // Add the diagonal
@@ -468,49 +506,13 @@ class OrderingUtils {
 
       // Add the off-diagonals
       for (int j = node_to_elem_ptr[i]; j < node_to_elem_ptr[i + 1]; j++) {
-        int elem = node_to_elem[j];
-
-        const int* ptr;
-        int ncon = 0;
-        bool is_linear = false;
-        int nodes_per_element = element_nodes(elem, &ptr, &ncon, &is_linear);
-        if (is_linear || ncon > 0) {
-          // Find the i-index of the row
-          int ii = 0;
-          for (; ii < nodes_per_element; ii++) {
-            if (i == ptr[ii]) {
-              break;
-            }
+        visit(i, node_to_elem[j], [&](int node) {
+          if (counter[node] < i) {
+            counter[node] = i;
+            cols[nnz_count] = node;
+            nnz_count++;
           }
-
-          // Set the start/end of the array
-          int kstart = 0;
-          int kend = nodes_per_element;
-          if (ii >= nodes_per_element - ncon) {
-            kend = nodes_per_element - ncon;
-          } else if (is_linear) {
-            kstart = nodes_per_element - ncon;
-          }
-
-          // Check if we should add this node
-          for (int k = kstart; k < kend; k++) {
-            int node = ptr[k];
-            if (counter[node] < i) {
-              counter[node] = i;
-              cols[nnz_count] = node;
-              nnz_count++;
-            }
-          }
-        } else {
-          for (int k = 0; k < nodes_per_element; k++) {
-            int node = ptr[k];
-            if (counter[node] < i) {
-              counter[node] = i;
-              cols[nnz_count] = node;
-              nnz_count++;
-            }
-          }
-        }
+        });
       }
 
       // Sort the column indices for later use

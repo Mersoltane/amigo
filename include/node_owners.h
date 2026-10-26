@@ -3,6 +3,8 @@
 
 #include <mpi.h>
 
+#include <algorithm>
+
 namespace amigo {
 
 /**
@@ -31,7 +33,7 @@ class NodeOwners {
   NodeOwners(MPI_Comm comm, const int range_[], int num_ext_nodes = 0,
              const int ext_nodes_[] = nullptr)
       : comm(comm), num_ext_nodes(num_ext_nodes) {
-    int size, rank;
+    int size;
     MPI_Comm_size(comm, &size);
     MPI_Comm_rank(comm, &rank);
 
@@ -90,8 +92,6 @@ class NodeOwners {
    * @param global Outupt global node numbers
    */
   void local_to_global(int nnodes, const int nodes[], int global[]) const {
-    int rank;
-    MPI_Comm_rank(comm, &rank);
     for (int i = 0; i < nnodes; i++) {
       if (nodes[i] < num_local_nodes) {
         global[i] = range[rank] + nodes[i];
@@ -101,8 +101,33 @@ class NodeOwners {
     }
   }
 
+  /**
+   * @brief Local node number of a global node, or -1 when it is not on this
+   * processor
+   *
+   * @param node The global node number
+   */
+  int global_to_local(int node) const {
+    if (node >= range[rank] && node < range[rank + 1]) {
+      return node - range[rank];
+    }
+    const int* begin = ext_nodes;
+    const int* end = begin + num_ext_nodes;
+    const int* it = std::lower_bound(begin, end, node);
+    if (it != end && *it == node) {
+      return num_local_nodes + static_cast<int>(it - begin);
+    }
+    return -1;
+  }
+
+  /**
+   * @brief True when the global and local node numbers coincide
+   */
+  bool is_identity() const { return range[rank] == 0 && num_ext_nodes == 0; }
+
  private:
   MPI_Comm comm;
+  int rank;
   int* range;
   int num_local_nodes;
 

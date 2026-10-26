@@ -31,6 +31,7 @@ inline bool check_consistent_policy_and_location(ExecPolicy policy,
 #define AMIGO_DEVICE __device__
 #define AMIGO_HOST_DEVICE __host__ __device__
 #define AMIGO_RESTRICT __restrict__
+#define AMIGO_NOINLINE __noinline__
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -87,9 +88,14 @@ inline bool check_consistent_policy_and_location(ExecPolicy policy,
 
 #else
 #define AMIGO_KERNEL
-#define AMGIO_DEVICE
+#define AMIGO_DEVICE
 #define AMIGO_HOST_DEVICE
 #define AMIGO_RESTRICT
+#ifdef _MSC_VER
+#define AMIGO_NOINLINE __declspec(noinline)
+#else
+#define AMIGO_NOINLINE __attribute__((noinline))
+#endif
 #endif  // AMIGO_USE_CUDA
 
 #endif  // AMIGO_H

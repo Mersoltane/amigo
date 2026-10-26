@@ -147,12 +147,10 @@ class ExternalComponentGroup : public ComponentGroupBase<T, policy> {
     // Retrieve the constraint Jacobian and compute its transpose
     std::shared_ptr<const CSRMat<T>> jacobian = extrn->get_jacobian();
     jacobian->copy_transpose(jacobian_transpose);
-
-    xlocal = *extrn->get_variables();
   }
 
   T lagrangian(T alpha, const Vector<T>& data, const Vector<T>& x) const {
-    T value = extrn->get_objective();
+    T value = alpha * extrn->get_objective();
     const Vector<T>& constraints = *extrn->get_constraints();
 
     int ncon = extrn->get_num_constraints();
@@ -177,8 +175,15 @@ class ExternalComponentGroup : public ComponentGroupBase<T, policy> {
                     Vector<T>& g) const {
     const std::shared_ptr<CSRMat<T>> jacobian = extrn->get_jacobian();
     const Vector<T>& constraints = *extrn->get_constraints();
+    const Vector<T>& fobj_gradient = *extrn->get_objective_gradient();
     const int* var_idx = var_indices->get_array();
     const int* con_idx = con_indices->get_array();
+
+    // Objective gradient weighted by the objective scale
+    int nvars = extrn->get_num_variables();
+    for (int j = 0; j < nvars; j++) {
+      g[var_idx[j]] += alpha * fobj_gradient[j];
+    }
 
     int nrows;
     const int *rowp, *cols;
@@ -189,12 +194,9 @@ class ExternalComponentGroup : public ComponentGroupBase<T, policy> {
       int row = con_idx[i];
       g[row] += constraints[i];
 
+      T lambda = x[row];
       for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
-        int j = cols[jp];
-        int col = var_idx[j];
-
-        T lambda = x[row];
-        g[col] += A[jp] * lambda;
+        g[var_idx[cols[jp]]] += A[jp] * lambda;
       }
     }
   }

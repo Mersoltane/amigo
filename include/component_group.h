@@ -1,12 +1,15 @@
 #ifndef AMIGO_COMPONENT_GROUP_H
 #define AMIGO_COMPONENT_GROUP_H
 
-#include "a2dcore.h"
+#include <algorithm>
+#include <vector>
+
 #include "component_group_base.h"
 #include "csr_matrix.h"
 #include "layout.h"
 #include "node_owners.h"
 #include "ordering_utils.h"
+#include "scalar_ad.h"
 #include "vector.h"
 
 #ifdef AMIGO_USE_CUDA
@@ -54,6 +57,76 @@ void compute_hessian(T alpha, Data& data, Input& input, Input& dir, Input& grad,
   if constexpr (sizeof...(Remain) > 0) {
     compute_hessian<T, Data, Input, Remain...>(alpha, data, input, dir, grad,
                                                h);
+  }
+}
+
+// Add the structurally nonzero Hessian entries of each component to the matrix
+template <typename T, class Data, class Input, class Component, class... Remain>
+void add_hessian_entries(T alpha, Data& data, Input& input, const int index[],
+                         const int index_global[], CSRMat<T>& jac) {
+  if constexpr (!Component::is_compute_empty) {
+    Component::hessian_entries(alpha, data, input,
+                               [&](int row, int col, T value) {
+                                 jac.add_row(index[row], 1, &index_global[col],
+                                             &value);
+                               });
+  }
+
+  if constexpr (sizeof...(Remain) > 0) {
+    add_hessian_entries<T, Data, Input, Remain...>(alpha, data, input, index,
+                                                   index_global, jac);
+  }
+}
+
+// Number of Hessian entries the components emit for one element
+template <class Component, class... Remain>
+constexpr int count_hessian_entries() {
+  int count = 0;
+  if constexpr (!Component::is_compute_empty) {
+    count = Component::hessian_entry_ptr[Component::hessian_num_dirs];
+  }
+  if constexpr (sizeof...(Remain) > 0) {
+    return count + count_hessian_entries<Remain...>();
+  } else {
+    return count;
+  }
+}
+
+// Store the Hessian entries of each component in the order they are emitted
+template <typename T, class Data, class Input, class Component, class... Remain>
+void compute_hessian_entries(T alpha, Data& data, Input& input, T values[]) {
+  if constexpr (!Component::is_compute_empty) {
+    int k = 0;
+    Component::hessian_entries(
+        alpha, data, input, [&](int row, int col, T value) { values[k++] = value; });
+    values += Component::hessian_entry_ptr[Component::hessian_num_dirs];
+  }
+  if constexpr (sizeof...(Remain) > 0) {
+    compute_hessian_entries<T, Data, Input, Remain...>(alpha, data, input,
+                                                       values);
+  }
+}
+
+// Matrix data position of each Hessian entry of one element or -1 when absent
+template <class Component, class... Remain>
+void find_hessian_positions(const int rowp[], const int cols[],
+                            const int index[], const int index_global[],
+                            int positions[]) {
+  if constexpr (!Component::is_compute_empty) {
+    int count = Component::hessian_entry_ptr[Component::hessian_num_dirs];
+    for (int e = 0; e < count; e++) {
+      int row = index[Component::hessian_entry_row[e]];
+      int col = index_global[Component::hessian_entry_col[e]];
+      const int* start = &cols[rowp[row]];
+      const int* end = &cols[rowp[row + 1]];
+      const int* it = std::lower_bound(start, end, col);
+      positions[e] = (it != end && *it == col) ? static_cast<int>(it - cols) : -1;
+    }
+    positions += count;
+  }
+  if constexpr (sizeof...(Remain) > 0) {
+    find_hessian_positions<Remain...>(rowp, cols, index, index_global,
+                                      positions);
   }
 }
 
@@ -137,7 +210,7 @@ class SerialGroupBackend {
     if constexpr (ncomp > 0) {
       int num_elems = layout.get_num_elements();
       Data data;
-      Input input, gradient, direction, result;
+      Input input;
       for (int elem = 0; elem < num_elems; elem++) {
         int index[ncomp], index_global[ncomp];
         layout.get_indices(elem, index);
@@ -146,18 +219,8 @@ class SerialGroupBackend {
         data_layout.get_values(elem, data_vec, data);
         layout.get_values(elem, vec, input);
 
-        for (int j = 0; j < ncomp; j++) {
-          direction.zero();
-          gradient.zero();
-          result.zero();
-
-          direction[j] = 1.0;
-
-          compute_hessian<T, Data, Input, Components...>(
-              alpha, data, input, direction, gradient, result);
-
-          jac.add_row(index[j], ncomp, index_global, result);
-        }
+        add_hessian_entries<T, Data, Input, Components...>(
+            alpha, data, input, index, index_global, jac);
       }
     }
   }
@@ -377,52 +440,44 @@ template <typename T, int ncomp, class Input, int ndata, class Data,
           class... Components>
 class OmpGroupBackend {
  public:
+  // Smaller loops run serially since a parallel region costs more than their work
+  static constexpr int min_parallel_work = 1 << 14;
+
+  // Values buffered per chunk of elements
+  static constexpr int max_buffer_entries = 1 << 20;
+
+  static constexpr int entries_per_element =
+      count_hessian_entries<Components...>();
+
   template <int noutputs>
   OmpGroupBackend(IndexLayout<ndata>& data_layout, IndexLayout<ncomp>& layout,
-                  IndexLayout<noutputs>& output_layout)
-      : num_colors(0), elem_per_color(nullptr) {
-    int num_elems, ncomps;
-    const int* array;
-    layout.get_data(&num_elems, &ncomps, &array);
+                  IndexLayout<noutputs>& output_layout) {}
 
-    // Create a coloring for the layout
-    int* elem_by_color_ptr;
-    int* elem_by_color;
-    OrderingUtils::color_elements(num_elems, ncomp, array, &num_colors,
-                                  &elem_by_color_ptr, &elem_by_color);
-
-    // Re-order the data and the variable layouts
-    data_layout.reorder(elem_by_color);
-    layout.reorder(elem_by_color);
-    output_layout.reorder(elem_by_color);
-
-    elem_per_color = new int[num_colors];
-    for (int i = 0; i < num_colors; i++) {
-      elem_per_color[i] = elem_by_color_ptr[i + 1] - elem_by_color_ptr[i];
-    }
-
-    delete[] elem_by_color_ptr;
-    delete[] elem_by_color;
-  }
-  ~OmpGroupBackend() { delete[] elem_per_color; }
-
+  // Elements are evaluated in parallel and accumulated serially in element order
   T lagrangian_kernel(T alpha, const IndexLayout<ndata>& data_layout,
                       const IndexLayout<ncomp>& layout,
                       const Vector<T>& data_vec, const Vector<T>& vec) const {
     T value = 0.0;
     if constexpr (ncomp > 0) {
-      int num_elems = layout.get_num_elements();
-
+      const int num_elems = layout.get_num_elements();
+      const int chunk = chunk_size(1);
+      values.resize(std::min(chunk, num_elems));
+      for (int start = 0; start < num_elems; start += chunk) {
+        const int end = std::min(start + chunk, num_elems);
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel for reduction(+ : value)
+#pragma omp parallel for schedule(dynamic, 32) if ((end - start) * ncomp >= min_parallel_work)
 #endif
-      for (int i = 0; i < num_elems; i++) {
-        Data data;
-        Input input;
-        data_layout.get_values(i, data_vec, data);
-        layout.get_values(i, vec, input);
-        value += compute_lagrangian<T, Data, Input, Components...>(alpha, data,
-                                                                   input);
+        for (int elem = start; elem < end; elem++) {
+          Data data;
+          Input input;
+          data_layout.get_values(elem, data_vec, data);
+          layout.get_values(elem, vec, input);
+          values[elem - start] = compute_lagrangian<T, Data, Input, Components...>(
+              alpha, data, input);
+        }
+        for (int elem = start; elem < end; elem++) {
+          value += values[elem - start];
+        }
       }
     }
 
@@ -434,22 +489,26 @@ class OmpGroupBackend {
                            const Vector<T>& data_vec, const Vector<T>& vec,
                            Vector<T>& res) const {
     if constexpr (ncomp > 0) {
-      int end = 0;
-      for (int j = 0; j < num_colors; j++) {
-        int start = end;
-        end = start + elem_per_color[j];
+      const int num_elems = layout.get_num_elements();
+      const int chunk = chunk_size(ncomp);
+      inputs.resize(std::min(chunk, num_elems));
+      for (int start = 0; start < num_elems; start += chunk) {
+        const int end = std::min(start + chunk, num_elems);
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 32) if ((end - start) * ncomp >= min_parallel_work)
 #endif
         for (int elem = start; elem < end; elem++) {
           Data data;
-          Input input, gradient;
+          Input input;
+          Input& gradient = inputs[elem - start];
           data_layout.get_values(elem, data_vec, data);
           layout.get_values(elem, vec, input);
           gradient.zero();
           compute_gradient<T, Data, Input, Components...>(alpha, data, input,
                                                           gradient);
-          layout.add_values(elem, gradient, res);
+        }
+        for (int elem = start; elem < end; elem++) {
+          layout.add_values(elem, inputs[elem - start], res);
         }
       }
     }
@@ -462,16 +521,18 @@ class OmpGroupBackend {
                                   const Vector<T>& vec, const Vector<T>& dir,
                                   Vector<T>& res) const {
     if constexpr (ncomp > 0) {
-      int end = 0;
-      for (int j = 0; j < num_colors; j++) {
-        int start = end;
-        end = start + elem_per_color[j];
+      const int num_elems = layout.get_num_elements();
+      const int chunk = chunk_size(ncomp);
+      inputs.resize(std::min(chunk, num_elems));
+      for (int start = 0; start < num_elems; start += chunk) {
+        const int end = std::min(start + chunk, num_elems);
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 32) if ((end - start) * ncomp >= min_parallel_work)
 #endif
         for (int elem = start; elem < end; elem++) {
           Data data;
-          Input input, gradient, direction, result;
+          Input input, gradient, direction;
+          Input& result = inputs[elem - start];
           data_layout.get_values(elem, data_vec, data);
           layout.get_values(elem, vec, input);
           layout.get_values(elem, dir, direction);
@@ -479,48 +540,62 @@ class OmpGroupBackend {
           result.zero();
           compute_hessian<T, Data, Input, Components...>(
               alpha, data, input, direction, gradient, result);
-          layout.add_values(elem, result, res);
+        }
+        for (int elem = start; elem < end; elem++) {
+          layout.add_values(elem, inputs[elem - start], res);
         }
       }
     }
   }
 
   void initialize_hessian_pattern(const IndexLayout<ncomp>& layout,
-                                  const NodeOwners& owners, CSRMat<T>& mat) {}
+                                  const NodeOwners& owners, CSRMat<T>& mat) {
+    find_positions(layout, owners, mat);
+  }
 
   void add_hessian_kernel(T alpha, const IndexLayout<ndata>& data_layout,
                           const IndexLayout<ncomp>& layout,
                           const Vector<T>& data_vec, const Vector<T>& vec,
                           const NodeOwners& owners, CSRMat<T>& jac) const {
-    if constexpr (ncomp > 0) {
-      int end = 0;
-      for (int j = 0; j < num_colors; j++) {
-        int start = end;
-        end = start + elem_per_color[j];
+    if constexpr (ncomp > 0 && entries_per_element > 0) {
+      int nnz;
+      const int *rowp, *cols;
+      T* matrix;
+      jac.get_data(nullptr, nullptr, &nnz, &rowp, &cols, &matrix);
+
+      // Positions found for another pattern are found again for this one
+      if (cols != pattern_cols || nnz != pattern_nnz) {
+        find_positions(layout, owners, jac);
+      }
+
+      const int num_elems = layout.get_num_elements();
+      const int chunk = chunk_size(entries_per_element);
+      values.resize(static_cast<std::size_t>(std::min(chunk, num_elems)) *
+                    entries_per_element);
+      for (int start = 0; start < num_elems; start += chunk) {
+        const int end = std::min(start + chunk, num_elems);
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 32) if ((end - start) * entries_per_element >= min_parallel_work)
 #endif
         for (int elem = start; elem < end; elem++) {
           Data data;
-          Input input, gradient, direction, result;
-          int index[ncomp], index_global[ncomp];
-          layout.get_indices(elem, index);
-          owners.local_to_global(ncomp, index, index_global);
-
+          Input input;
           data_layout.get_values(elem, data_vec, data);
           layout.get_values(elem, vec, input);
-
-          for (int k = 0; k < ncomp; k++) {
-            direction.zero();
-            gradient.zero();
-            result.zero();
-
-            direction[k] = 1.0;
-
-            compute_hessian<T, Data, Input, Components...>(
-                alpha, data, input, direction, gradient, result);
-
-            jac.add_row(index[k], ncomp, index_global, result);
+          compute_hessian_entries<T, Data, Input, Components...>(
+              alpha, data, input,
+              &values[static_cast<std::size_t>(elem - start) *
+                      entries_per_element]);
+        }
+        for (int elem = start; elem < end; elem++) {
+          const int* pos =
+              &positions[static_cast<std::size_t>(elem) * entries_per_element];
+          const T* value =
+              &values[static_cast<std::size_t>(elem - start) * entries_per_element];
+          for (int k = 0; k < entries_per_element; k++) {
+            if (pos[k] >= 0) {
+              matrix[pos[k]] += value[k];
+            }
           }
         }
       }
@@ -550,18 +625,23 @@ class OmpGroupBackend {
         typename __get_collection_input_type<ADtype, Components...>::type;
 
     if constexpr (ncomp > 0 && ndata > 0) {
-      int end = 0;
-      for (int j = 0; j < num_colors; j++) {
-        int start = end;
-        end = start + elem_per_color[j];
+      // Element Jacobians are computed in parallel and added serially in element order
+      constexpr int per_element = ncomp * ndata;
+      const int num_elems = layout.get_num_elements();
+      const int chunk = chunk_size(per_element);
+      values.resize(static_cast<std::size_t>(std::min(chunk, num_elems)) *
+                    per_element);
+      for (int start = 0; start < num_elems; start += chunk) {
+        const int end = std::min(start + chunk, num_elems);
 #ifdef AMIGO_USE_OPENMP
-#pragma omp parallel for
+#pragma omp parallel for schedule(dynamic, 32) if ((end - start) * per_element >= min_parallel_work)
 #endif
         for (int elem = start; elem < end; elem++) {
           InputAD input;
           layout.get_values(elem, vec, input);
 
-          T jac_elem[ncomp * ndata];
+          T* jac_elem =
+              &values[static_cast<std::size_t>(elem - start) * per_element];
           for (int i = 0; i < ndata; i++) {
             DataAD data;
             data_layout.get_values(elem, data_vec, data);
@@ -578,7 +658,8 @@ class OmpGroupBackend {
               jac_elem[ndata * k + i] = gradient[k].deriv[0];
             }
           }
-
+        }
+        for (int elem = start; elem < end; elem++) {
           int input_index[ncomp];
           layout.get_indices(elem, input_index);
 
@@ -586,6 +667,8 @@ class OmpGroupBackend {
           data_layout.get_indices(elem, data_indices);
           owners.local_to_global(ndata, data_indices, data_indices_global);
 
+          const T* jac_elem =
+              &values[static_cast<std::size_t>(elem - start) * per_element];
           for (int i = 0; i < ncomp; i++) {
             jac.add_row(input_index[i], ndata, data_indices_global,
                         &jac_elem[ndata * i]);
@@ -596,8 +679,41 @@ class OmpGroupBackend {
   }
 
  private:
-  int num_colors;
-  int* elem_per_color;
+  // Elements per buffered chunk for the given number of values per element
+  static int chunk_size(int per_element) {
+    return std::max(1, max_buffer_entries / std::max(1, per_element));
+  }
+
+  // Find the matrix position of every Hessian entry of every element
+  void find_positions(const IndexLayout<ncomp>& layout, const NodeOwners& owners,
+                      CSRMat<T>& mat) const {
+    if constexpr (ncomp > 0 && entries_per_element > 0) {
+      const int *rowp, *cols;
+      T* data;
+      mat.get_data(nullptr, nullptr, &pattern_nnz, &rowp, &cols, &data);
+      pattern_cols = cols;
+
+      const int num_elems = layout.get_num_elements();
+      positions.resize(static_cast<std::size_t>(num_elems) * entries_per_element);
+      for (int elem = 0; elem < num_elems; elem++) {
+        int index[ncomp], index_global[ncomp];
+        layout.get_indices(elem, index);
+        owners.local_to_global(ncomp, index, index_global);
+        find_hessian_positions<Components...>(
+            rowp, cols, index, index_global,
+            &positions[static_cast<std::size_t>(elem) * entries_per_element]);
+      }
+    }
+  }
+
+  // Matrix positions of the Hessian entries and the pattern they index
+  mutable std::vector<int> positions;
+  mutable int pattern_nnz = -1;
+  mutable const int* pattern_cols = nullptr;
+
+  // Buffers reused by the kernels
+  mutable std::vector<T> values;
+  mutable std::vector<Input> inputs;
 };
 
 // Set up a struct to select the backend type depending on policy
@@ -665,7 +781,19 @@ class ComponentGroup : public ComponentGroupBase<T, policy> {
       : data_layout(num_elements, data_indices),
         layout(num_elements, indices),
         output_layout(num_elements, output_indices),
-        backend(data_layout, layout, output_layout) {}
+        backend(data_layout, layout, output_layout) {
+    // Union of the structural Hessian patterns of the components by local row
+    std::vector<std::vector<int>> rows(ncomp);
+    (add_component_pattern<Components>(rows), ...);
+
+    pattern_rowp.assign(1, 0);
+    for (auto& row : rows) {
+      std::sort(row.begin(), row.end());
+      row.erase(std::unique(row.begin(), row.end()), row.end());
+      pattern_cols.insert(pattern_cols.end(), row.begin(), row.end());
+      pattern_rowp.push_back(static_cast<int>(pattern_cols.size()));
+    }
+  }
 
   std::shared_ptr<ComponentGroupBase<T, policy>> clone(
       int num_elements, std::shared_ptr<Vector<int>> data_idx,
@@ -695,6 +823,17 @@ class ComponentGroup : public ComponentGroupBase<T, policy> {
   }
   void initialize_hessian_pattern(const NodeOwners& owners, CSRMat<T>& mat) {
     backend.initialize_hessian_pattern(layout, owners, mat);
+  }
+  void get_element_hessian_pattern(const int* rowp[],
+                                   const int* cols[]) const {
+    // The CUDA backend writes every element pair and keeps the full pattern
+    if constexpr (policy == ExecPolicy::CUDA) {
+      *rowp = nullptr;
+      *cols = nullptr;
+    } else {
+      *rowp = pattern_rowp.data();
+      *cols = pattern_cols.data();
+    }
   }
   void add_hessian(T alpha, const Vector<T>& data_vec, const Vector<T>& vec,
                    const NodeOwners& owners, CSRMat<T>& jac) const {
@@ -755,12 +894,27 @@ class ComponentGroup : public ComponentGroupBase<T, policy> {
   }
 
  private:
+  template <class Component>
+  static void add_component_pattern(std::vector<std::vector<int>>& rows) {
+    if constexpr (!Component::is_compute_empty) {
+      int nnz = Component::hessian_entry_ptr[Component::hessian_num_dirs];
+      for (int e = 0; e < nnz; e++) {
+        rows[Component::hessian_entry_row[e]].push_back(
+            Component::hessian_entry_col[e]);
+      }
+    }
+  }
+
   IndexLayout<ndata> data_layout;
   IndexLayout<ncomp> layout;
   IndexLayout<noutputs> output_layout;
 
   Backend backend;
   OutputBackend output_backend;
+
+  // Element-local Hessian pattern shared by all elements of the group
+  std::vector<int> pattern_rowp;
+  std::vector<int> pattern_cols;
 };
 
 }  // namespace amigo

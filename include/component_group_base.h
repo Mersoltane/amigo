@@ -7,6 +7,9 @@
 
 namespace amigo {
 
+// Version of the component group interface that model modules must match
+inline constexpr int abi_version = 3;
+
 template <typename T, ExecPolicy policy>
 class ComponentGroupBase {
  public:
@@ -42,6 +45,14 @@ class ComponentGroupBase {
                                    Vector<T>& h) const {}
   virtual void initialize_hessian_pattern(const NodeOwners& owners,
                                           CSRMat<T>& mat) {}
+
+  // Element-local Hessian coupling pattern in CSR form that is null for fully
+  // coupled elements
+  virtual void get_element_hessian_pattern(const int* rowp[],
+                                           const int* cols[]) const {
+    *rowp = nullptr;
+    *cols = nullptr;
+  }
   virtual void add_hessian(T alpha, const Vector<T>& data, const Vector<T>& x,
                            const NodeOwners& owners, CSRMat<T>& mat) const {}
 

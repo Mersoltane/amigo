@@ -319,6 +319,7 @@ inline constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::SERIAL;
 
 PYBIND11_MODULE(amigo, mod) {
   mod.doc() = "Amigo: A friendly library for MDO on HPC";
+  mod.attr("abi_version") = amigo::abi_version;
 
   // Import mpi4py
   if (import_mpi4py() < 0) {
@@ -400,10 +401,15 @@ PYBIND11_MODULE(amigo, mod) {
       .def("copy", &amigo::CSRMat<double>::copy)
       .def("add_diagonal",
            &amigo::CSRMat<double>::template add_diagonal<detail::policy>)
+      .def("add_diagonal_host",
+           &amigo::CSRMat<double>::template add_diagonal<
+               amigo::ExecPolicy::SERIAL>)
       .def("row_maxabs",
            &amigo::CSRMat<double>::template row_maxabs<detail::policy>)
       .def("scale_symmetric",
            &amigo::CSRMat<double>::template scale_symmetric<detail::policy>)
+      .def("equilibrate", &amigo::CSRMat<double>::equilibrate,
+           py::arg("sweeps"), py::arg("scale"))
       .def("get_data",
            [](py::object self) -> py::array_t<double> {
              auto& mat = self.cast<amigo::CSRMat<double>&>();
@@ -431,7 +437,6 @@ PYBIND11_MODULE(amigo, mod) {
            })
       .def("get_row_owners", &amigo::CSRMat<double>::get_row_owners)
       .def("get_column_owners", &amigo::CSRMat<double>::get_column_owners)
-      .def("gauss_seidel", &amigo::CSRMat<double>::gauss_seidel)
       .def("mult", &amigo::CSRMat<double>::mult)
       .def("copy_data_host_to_device",
            &amigo::CSRMat<double>::copy_data_host_to_device)
@@ -551,6 +556,9 @@ PYBIND11_MODULE(amigo, mod) {
            &amigo::OptimizationProblem<double, detail::policy>::set_var_scale)
       .def("get_var_scale",
            &amigo::OptimizationProblem<double, detail::policy>::get_var_scale)
+      .def("update_fixed_variables",
+           &amigo::OptimizationProblem<double,
+                                       detail::policy>::update_fixed_variables)
       .def("partition_from_root",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::partition_from_root,
@@ -644,9 +652,7 @@ PYBIND11_MODULE(amigo, mod) {
       .def(py::init<int>(), py::arg("size"))
       .def("alias", &amigo::AliasTracker<int>::alias, py::arg("var1"),
            py::arg("var2"))
-      .def("get_alias_group", &amigo::AliasTracker<int>::get_alias_group,
-           py::arg("var"))
-      .def("assign_group_vars", [](amigo::AliasTracker<int> tracker) {
+      .def("assign_group_vars", [](amigo::AliasTracker<int>& tracker) {
         py::array_t<int> array(tracker.size());
         int counter = tracker.assign_group_vars(array.mutable_data());
         return py::make_tuple(counter, array);
@@ -676,11 +682,17 @@ PYBIND11_MODULE(amigo, mod) {
            py::arg("order") = amigo::OrderingType::NATURAL)
       .def("factor", &amigo::SparseLDL<double>::factor,
            py::arg("diagonal") = nullptr)
+      .def("set_pivot_threshold",
+           &amigo::SparseLDL<double>::set_pivot_threshold,
+           py::arg("threshold"))
       .def("solve",
            [](std::shared_ptr<amigo::SparseLDL<double>> self, py::object x) {
              // Case 1: amigo::Vector<double>
              if (py::isinstance<amigo::Vector<double>>(x)) {
                auto xvec = x.cast<std::shared_ptr<amigo::Vector<double>>>();
+               if (xvec->get_size() < self->get_size()) {
+                 throw py::value_error("Vector is shorter than the matrix");
+               }
                self->solve(xvec);
                return;
              }
@@ -701,18 +713,18 @@ PYBIND11_MODULE(amigo, mod) {
                int nrhs =
                    darr.ndim() == 1 ? 1 : static_cast<int>(darr.shape(1));
 
+               if (n != self->get_size()) {
+                 throw py::value_error("Array length must match the matrix");
+               }
                if (!darr.writeable()) {
                  throw py::type_error("NumPy array must be writeable");
                }
 
-               // Check Fortran layout: leading dimension stride should be
-               // sizeof(double)
+               // Solve in place only when the columns are contiguous
+               const py::ssize_t item = sizeof(double);
                bool is_fortran =
-                   darr.ndim() == 1 ||
-                   (darr.strides(0) ==
-                        static_cast<py::ssize_t>(sizeof(double)) &&
-                    darr.strides(1) ==
-                        static_cast<py::ssize_t>(n * sizeof(double)));
+                   darr.strides(0) == item &&
+                   (darr.ndim() == 1 || darr.strides(1) == n * item);
 
                if (is_fortran) {
                  // In-place path: overwrites the original array, if
@@ -743,7 +755,9 @@ PYBIND11_MODULE(amigo, mod) {
         int npos = 0, nneg = 0;
         self.get_inertia(&npos, &nneg);
         return py::make_tuple(npos, nneg);
-      });
+      })
+      .def("get_min_pivot", &amigo::SparseLDL<double>::get_min_pivot)
+      .def("get_num_delayed", &amigo::SparseLDL<double>::get_num_delayed);
 
 #ifdef AMIGO_USE_CUDA
   py::class_<amigo::CSRMatFactorCuda, std::shared_ptr<amigo::CSRMatFactorCuda>>(
@@ -822,6 +836,9 @@ PYBIND11_MODULE(amigo, mod) {
       .def("get_num_constraints", &IPMOpt::get_num_constraints)
       .def("initialize_duals", &IPMOpt::initialize_duals)
       .def("initialize_duals_warm", &IPMOpt::initialize_duals_warm)
+      .def("initialize_duals_keep", &IPMOpt::initialize_duals_keep,
+           py::arg("push"), py::arg("zmin"), py::arg("vars"))
+      .def("set_fixed_values", &IPMOpt::set_fixed_values, py::arg("x"))
       .def("compute_residual", &IPMOpt::compute_residual)
       .def("compute_update", &IPMOpt::compute_update)
       .def("compute_diagonal", &IPMOpt::compute_diagonal)
@@ -868,12 +885,31 @@ PYBIND11_MODULE(amigo, mod) {
       .def("compute_sum_squared_complementarity",
            &IPMOpt::compute_sum_squared_complementarity, py::arg("mu"),
            py::arg("vars"))
+#ifndef AMIGO_USE_CUDA
+      .def("compute_quality_function_trial",
+           [](const IPMOpt& self, double sigma, double mu_nat, double tau,
+              std::shared_ptr<OV> vars, std::shared_ptr<Vec> px0,
+              std::shared_ptr<Vec> dpx) {
+             double ax, az, comp_sq;
+             self.compute_quality_function_trial(sigma, mu_nat, tau, vars, px0,
+                                                 dpx, ax, az, comp_sq);
+             return py::make_tuple(ax, az, comp_sq);
+           })
+#endif  // AMIGO_USE_CUDA
       .def("compute_dual_residual", &IPMOpt::compute_dual_residual,
            py::arg("vars"), py::arg("grad"), py::arg("output"))
-      .def("get_lbx", &IPMOpt::get_lbx)
-      .def("get_ubx", &IPMOpt::get_ubx)
-      .def("get_lbx_relaxed", &IPMOpt::get_lbx_relaxed)
-      .def("get_ubx_relaxed", &IPMOpt::get_ubx_relaxed)
+      .def("compute_constraint_violation",
+           &IPMOpt::compute_constraint_violation, py::arg("grad"))
+      .def(
+          "compute_kkt_error_squares",
+          [](const IPMOpt& self, std::shared_ptr<OV> vars,
+             std::shared_ptr<Vec> grad) {
+            double d, p;
+            self.compute_kkt_error_squares(vars, grad, d, p);
+            return py::make_tuple(d, p);
+          },
+          py::arg("vars"), py::arg("grad"))
+      .def("set_var_scale", &IPMOpt::set_var_scale, py::arg("scale"))
       .def("relax_bounds", &IPMOpt::relax_bounds, py::arg("factor") = 1e-8,
            py::arg("constr_viol_tol") = 1e-4);
 }

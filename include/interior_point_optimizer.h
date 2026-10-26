@@ -3,7 +3,10 @@
 
 #include <mpi.h>
 
+#include <cmath>
+#include <limits>
 #include <memory>
+#include <vector>
 
 #include "amigo.h"
 #include "interior_point_backend.h"
@@ -119,23 +122,53 @@ class InteriorPointOptimizer {
       loc = MemoryLocation::HOST_AND_DEVICE;
     }
 
+    // Fixed variables stay out of the barrier and sit at equal bounds
+    const T inf = std::numeric_limits<T>::infinity();
+    std::vector<int> fixed_idx;
+    std::vector<T> fixed_val;
     lbx = std::make_shared<Vector<T>>(num_primals, 0, loc);
     ubx = std::make_shared<Vector<T>>(num_primals, 0, loc);
     for (int i = 0; i < num_primals; i++) {
       int idx = (*primal_indices)[i];
-      (*lbx)[i] = lb[idx];
-      (*ubx)[i] = ub[idx];
+
+      // Bounds at or beyond the infinity threshold are absent, as in IPOPT
+      (*lbx)[i] = lb[idx] <= -bound_infinity ? -inf : lb[idx];
+      (*ubx)[i] = ub[idx] >= bound_infinity ? inf : ub[idx];
+      if (vtypes[idx] == static_cast<int>(OptVarType::FIXED)) {
+        (*lbx)[i] = -inf;
+        (*ubx)[i] = inf;
+        if (std::isfinite(lb[idx]) && lb[idx] == ub[idx]) {
+          fixed_idx.push_back(idx);
+          fixed_val.push_back(lb[idx]);
+        }
+      }
     }
     lbx->copy_host_to_device();
     ubx->copy_host_to_device();
 
-    // Set the constraint bounds
+    int num_fixed = static_cast<int>(fixed_idx.size());
+    if (num_fixed > 0) {
+      fixed_indices = std::make_shared<Vector<int>>(num_fixed, 0, loc);
+      fixed_values = std::make_shared<Vector<T>>(num_fixed, 0, loc);
+      for (int i = 0; i < num_fixed; i++) {
+        (*fixed_indices)[i] = fixed_idx[i];
+        (*fixed_values)[i] = fixed_val[i];
+      }
+      fixed_indices->copy_host_to_device();
+      fixed_values->copy_host_to_device();
+    }
+
+    // Set the constraint targets, kept unscaled in lbh0
+    lbh0 = std::make_shared<Vector<T>>(num_constraints, 0, loc);
     lbh = std::make_shared<Vector<T>>(num_constraints, 0, loc);
     for (int i = 0; i < num_constraints; i++) {
       int idx = (*constraint_indices)[i];
+      (*lbh0)[i] = lb[idx];
       (*lbh)[i] = lb[idx];
     }
+    lbh0->copy_host_to_device();
     lbh->copy_host_to_device();
+    con_scale = std::make_shared<Vector<T>>(num_constraints, 0, loc);
 
     // Set the host/device pointers into the info
     info.num_primals = num_primals;
@@ -245,6 +278,47 @@ class InteriorPointOptimizer {
       AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
 
       detail::initialize_bound_duals_warm_cuda(mu, zmax, info, xlam, zl, zu);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+      AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
+    }
+#endif
+  }
+
+  /**
+   * @brief Place the fixed variables with equal bounds at their bound value
+   *
+   * @param x The primal-dual vector
+   */
+  void set_fixed_values(std::shared_ptr<Vector<T>> x) const {
+    if (fixed_indices) {
+      x->template set_values_at<policy>(fixed_indices, fixed_values);
+    }
+  }
+
+  /**
+   * @brief Warm start that keeps the given bound duals, projecting the
+   * primals with a small push and raising each bound dual to at least zmin
+   *
+   * @param push The bound push fraction for the interior projection
+   * @param zmin The bound dual floor
+   * @param vars All of the optimization variables
+   */
+  void initialize_duals_keep(T push, T zmin,
+                             std::shared_ptr<OptVector<T>> vars) const {
+    T* xlam = vars->template get_solution_array<policy>();
+    T *zl, *zu;
+    vars->template get_bound_duals<policy>(&zl, &zu);
+
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      detail::project_primals_into_interior(info, xlam, push, push);
+      detail::push_bound_duals(zmin, info, zl, zu);
+    }
+#ifdef AMIGO_USE_CUDA
+    else {
+      detail::project_primals_into_interior_cuda(info, xlam, push, push);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+      detail::push_bound_duals_cuda(zmin, info, zl, zu);
       AMIGO_CHECK_CUDA(cudaGetLastError());
       AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
     }
@@ -628,6 +702,48 @@ class InteriorPointOptimizer {
   }
 
   /**
+   * @brief Step lengths and trial complementarity of a quality function step
+   *
+   * Replaces compute_update, compute_max_step, apply_step_update and
+   * compute_sum_squared_complementarity for the step px0 + sigma * dpx at mu =
+   * sigma * mu_nat without forming the step or the trial point.
+   *
+   * @param sigma The centering parameter
+   * @param mu_nat The average complementarity
+   * @param tau The fraction to the boundary
+   * @param vars The values of the optimization variables
+   * @param px0 The primal dual step at mu = 0
+   * @param dpx The change of the primal dual step from mu = 0 to mu_nat
+   * @param ax The max primal step
+   * @param az The max dual step
+   * @param comp_sq The squared complementarity at the trial point
+   */
+  void compute_quality_function_trial(T sigma, T mu_nat, T tau,
+                                      const std::shared_ptr<OptVector<T>> vars,
+                                      const std::shared_ptr<Vector<T>> px0,
+                                      const std::shared_ptr<Vector<T>> dpx,
+                                      T& ax, T& az, T& comp_sq) const {
+    static_assert(policy != ExecPolicy::CUDA,
+                  "The quality function trial has no CUDA kernel");
+    detail::OptState<const T> current =
+        detail::OptState<const T>::template make<policy>(vars);
+    const T* p0 = px0->template get_array<policy>();
+    const T* dp = dpx->template get_array<policy>();
+
+    // Every rank evaluates the trial point at the global step lengths
+    T local[2] = {1.0, 1.0}, global[2];
+    detail::compute_quality_function_steps(sigma, mu_nat, tau, info, current, p0,
+                                           dp, local[0], local[1]);
+    MPI_Allreduce(local, global, 2, get_mpi_type<T>(), MPI_MIN, comm);
+    ax = global[0];
+    az = global[1];
+
+    T local_sq = detail::compute_quality_function_complementarity(
+        sigma, mu_nat, ax, az, info, current, p0, dp);
+    MPI_Allreduce(&local_sq, &comp_sq, 1, get_mpi_type<T>(), MPI_SUM, comm);
+  }
+
+  /**
    * @brief Compute the infeasibility in the l1 norm based on the gradient
    *
    * @param gradient The gradient at a point
@@ -685,38 +801,112 @@ class InteriorPointOptimizer {
 #endif
   }
 
+  // Global counts of the dual, primal, and complementarity components
   void get_kkt_element_counts(int& n_d, int& n_p, int& n_c) const {
-    n_d = num_primals;      // dual stationarity has n_primal components
-    n_p = num_constraints;  // primal feasibility has n_constraints components
-    n_c = 0;                // complementarity count: sum of finite bounds
+    n_d = num_global_primals;
+    n_p = num_global_constraints;
+    int local = 0;
     for (int i = 0; i < num_primals; i++) {
-      if (!std::isinf((*lbx)[i])) n_c++;
-      if (!std::isinf((*ubx)[i])) n_c++;
+      if (!std::isinf((*lbx)[i])) local++;
+      if (!std::isinf((*ubx)[i])) local++;
     }
+    MPI_Allreduce(&local, &n_c, 1, MPI_INT, MPI_SUM, comm);
   }
 
-  std::shared_ptr<Vector<T>> get_lbx() const { return lbx; }
-  std::shared_ptr<Vector<T>> get_ubx() const { return ubx; }
-
-  // Return relaxed bounds if available, otherwise original bounds.
-  // These are the bounds actually used by the IPM backend (info.lbx/ubx).
-  std::shared_ptr<Vector<T>> get_lbx_relaxed() const {
-    if (lbx_relaxed) {
-      return lbx_relaxed;
+  /**
+   * @brief Set the NLP scale factors on the problem and match the constraint
+   * targets to them
+   *
+   * The scale is one on the primals and dc on each constraint row, so a
+   * scaled constraint dc * c(x) = dc * b keeps the solution of c(x) = b. A
+   * null scale restores the unscaled problem.
+   *
+   * @param scale The scale factors over the full vector, or null
+   */
+  void set_var_scale(std::shared_ptr<Vector<T>> scale) {
+    problem->set_var_scale(scale);
+    info.con_scale = nullptr;
+    lbh->copy(lbh0);
+    if (scale) {
+      scale->copy_device_to_host();
+      for (int i = 0; i < num_constraints; i++) {
+        T dc = (*scale)[(*constraint_indices)[i]];
+        (*con_scale)[i] = dc;
+        (*lbh)[i] = dc * (*lbh0)[i];
+      }
+      con_scale->copy_host_to_device();
+      info.con_scale = con_scale->template get_array<policy>();
     }
-    return lbx;
-  }
-  std::shared_ptr<Vector<T>> get_ubx_relaxed() const {
-    if (ubx_relaxed) {
-      return ubx_relaxed;
-    }
-    return ubx;
+    lbh->copy_host_to_device();
   }
 
-  // Relax bounds by bound_relax_factor (default 1e-8).
-  // Repeated calls relax from the original bounds and never compound
+  /**
+   * @brief Squared 2-norms of the dual and primal residuals
+   *
+   * @param vars The values of the optimization variables
+   * @param gradient The gradient at the point
+   * @param dual_sq The output sum of squares of the dual residual
+   * @param primal_sq The output sum of squares of the primal residual
+   */
+  void compute_kkt_error_squares(const std::shared_ptr<OptVector<T>> vars,
+                                 const std::shared_ptr<Vector<T>> gradient,
+                                 T& dual_sq, T& primal_sq) const {
+    detail::OptState<const T> s =
+        detail::OptState<const T>::template make<policy>(vars);
+    const T* grad = gradient->template get_array<policy>();
+    T local[2] = {0, 0}, global[2];
+
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      detail::compute_kkt_error_squares(info, s, grad, local[0], local[1]);
+    }
+#ifdef AMIGO_USE_CUDA
+    else {
+      detail::compute_kkt_error_squares_cuda(info, s, grad, local[0], local[1]);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+    }
+#endif
+
+    MPI_Allreduce(local, global, 2, get_mpi_type<T>(), MPI_SUM, comm);
+    dual_sq = global[0];
+    primal_sq = global[1];
+  }
+
+  /**
+   * @brief Largest constraint violation in the units of the unscaled problem
+   *
+   * @param gradient The gradient whose constraint rows hold the residuals
+   */
+  T compute_constraint_violation(const std::shared_ptr<Vector<T>> gradient) {
+    const T* grad = gradient->template get_array<policy>();
+    T local = 0.0;
+
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      local = detail::compute_constraint_violation(info, grad);
+    }
+#ifdef AMIGO_USE_CUDA
+    else {
+      local = detail::compute_constraint_violation_cuda(info, grad);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+    }
+#endif
+
+    T result;
+    MPI_Allreduce(&local, &result, 1, get_mpi_type<T>(), MPI_MAX, comm);
+    return result;
+  }
+
+  // Relax bounds by bound_relax_factor from the original bounds
+  // A factor of zero restores the original bounds
   void relax_bounds(T factor = 1e-8, T constr_viol_tol = 1e-4) {
-    if (factor <= 0) return;
+    if (factor <= 0) {
+      lbx_relaxed = nullptr;
+      ubx_relaxed = nullptr;
+      info.lbx = lbx->template get_array<policy>();
+      info.ubx = ubx->template get_array<policy>();
+      return;
+    }
     lbx_relaxed =
         std::make_shared<Vector<T>>(num_primals, 0, lbx->get_memory_location());
     ubx_relaxed =
@@ -736,6 +926,9 @@ class InteriorPointOptimizer {
   }
 
  private:
+  // Bound magnitude treated as infinite
+  static constexpr double bound_infinity = 1e19;
+
   std::shared_ptr<OptimizationProblem<T, policy>> problem;
   MPI_Comm comm;
 
@@ -745,7 +938,13 @@ class InteriorPointOptimizer {
   std::shared_ptr<Vector<int>> constraint_indices;
   std::shared_ptr<Vector<T>> lbx, ubx;
   std::shared_ptr<Vector<T>> lbx_relaxed, ubx_relaxed;
-  std::shared_ptr<Vector<T>> lbh;
+
+  // Unscaled constraint targets, the scaled targets, and the constraint scales
+  std::shared_ptr<Vector<T>> lbh0, lbh, con_scale;
+
+  // Fixed variables with equal bounds and their values
+  std::shared_ptr<Vector<int>> fixed_indices;
+  std::shared_ptr<Vector<T>> fixed_values;
 
   // Object for storing informabout about the problem
   detail::OptProblemInfo<T> info;

@@ -39,10 +39,11 @@
 */
 
 #include <cmath>
+#include <limits>
 #include <memory>
 
-#include "a2dcore.h"
 #include "amigo.h"
+#include "scalar_ad.h"
 
 namespace amigo {
 
@@ -63,7 +64,16 @@ struct OptProblemInfo {
   const int* constraint_indices = nullptr;
   const T *lbx = nullptr, *ubx = nullptr;
   const T* lbh = nullptr;
+
+  // Per constraint NLP scale factors, or null when the constraints are unscaled
+  const T* con_scale = nullptr;
 };
+
+// Maximum that keeps a NaN from either argument
+template <typename T>
+AMIGO_HOST_DEVICE T max_nan(T a, T b) {
+  return (a > b || a != a) ? a : b;
+}
 
 // Pointers into OptVector storage. T may be const-qualified for read-only
 // access.
@@ -332,6 +342,15 @@ void initialize_bound_duals_warm(T mu, T zmax, const OptProblemInfo<T>& info,
   }
 }
 
+// Keep the given bound duals but hold them at least zmin on finite bounds
+template <typename T>
+void push_bound_duals(T zmin, const OptProblemInfo<T>& info, T* zl, T* zu) {
+  for (int i = 0; i < info.num_primals; i++) {
+    zl[i] = std::isinf(info.lbx[i]) ? T(0) : A2D::max2(zl[i], zmin);
+    zu[i] = std::isinf(info.ubx[i]) ? T(0) : A2D::max2(zu[i], zmin);
+  }
+}
+
 // Sigma safeguard clipping each bound dual near mu/gap
 template <typename T>
 void correct_bound_multipliers(T mu, T kappa, const OptProblemInfo<T>& info,
@@ -392,25 +411,59 @@ void compute_kkt_error(T mu, const OptProblemInfo<T>& info,
     int idx = info.primal_indices[i];
     T x = current.x[idx];
 
-    dual = A2D::max2(dual, std::abs(grad[idx] - current.zl[i] + current.zu[i]));
+    dual = max_nan(dual, std::abs(grad[idx] - current.zl[i] + current.zu[i]));
     if (!std::isinf(info.lbx[i])) {
       T gap = x - info.lbx[i];
-      comp = A2D::max2(comp, std::abs(gap * current.zl[i] - mu));
+      comp = max_nan(comp, std::abs(gap * current.zl[i] - mu));
     }
     if (!std::isinf(info.ubx[i])) {
       T gap = info.ubx[i] - x;
-      comp = A2D::max2(comp, std::abs(gap * current.zu[i] - mu));
+      comp = max_nan(comp, std::abs(gap * current.zu[i] - mu));
     }
   }
 
   for (int j = 0; j < info.num_constraints; j++) {
     int idx = info.constraint_indices[j];
-    primal = A2D::max2(primal, std::abs(grad[idx] - info.lbh[j]));
+    primal = max_nan(primal, std::abs(grad[idx] - info.lbh[j]));
   }
+}
+
+// Squared 2-norms of the dual and primal residuals for the quality function
+template <typename T>
+void compute_kkt_error_squares(const OptProblemInfo<T>& info,
+                               OptState<const T>& current, const T* grad,
+                               T& dual_sq, T& primal_sq) {
+  dual_sq = primal_sq = 0.0;
+  for (int i = 0; i < info.num_primals; i++) {
+    int idx = info.primal_indices[i];
+    T r = grad[idx] - current.zl[i] + current.zu[i];
+    dual_sq += r * r;
+  }
+  for (int j = 0; j < info.num_constraints; j++) {
+    int idx = info.constraint_indices[j];
+    T r = grad[idx] - info.lbh[j];
+    primal_sq += r * r;
+  }
+}
+
+// Largest constraint violation measured in the unscaled problem
+template <typename T>
+T compute_constraint_violation(const OptProblemInfo<T>& info, const T grad[]) {
+  T result = 0.0;
+  for (int j = 0; j < info.num_constraints; j++) {
+    int idx = info.constraint_indices[j];
+    T viol = std::abs(grad[idx] - info.lbh[j]);
+    if (info.con_scale) {
+      viol /= info.con_scale[j];
+    }
+    result = max_nan(result, viol);
+  }
+  return result;
 }
 
 // Barrier log-sum: -mu * sum_i ln(x_i - lb_i) - mu * sum_i ln(ub_i - x_i).
 // Added to the objective f(x) to form the barrier objective phi_mu(x).
+// A point on or outside a bound has an infinite barrier value
 template <typename T>
 T compute_log_barrier(T mu, const OptProblemInfo<T>& info,
                       OptState<const T>& current) {
@@ -421,15 +474,17 @@ T compute_log_barrier(T mu, const OptProblemInfo<T>& info,
 
     if (!std::isinf(info.lbx[i])) {
       T gap = x - info.lbx[i];
-      if (gap > 0) {
-        barrier -= mu * std::log(gap);
+      if (gap <= 0) {
+        return std::numeric_limits<T>::infinity();
       }
+      barrier -= mu * std::log(gap);
     }
     if (!std::isinf(info.ubx[i])) {
       T gap = info.ubx[i] - x;
-      if (gap > 0) {
-        barrier -= mu * std::log(gap);
+      if (gap <= 0) {
+        return std::numeric_limits<T>::infinity();
       }
+      barrier -= mu * std::log(gap);
     }
   }
   return barrier;
@@ -492,6 +547,85 @@ T compute_sum_squared_complementarity(T mu, const OptProblemInfo<T>& info,
     }
   }
   return result;
+}
+
+// Step lengths of the quality function step px0 + sigma * dpx at mu = sigma * mu_nat
+// The lengths match compute_bound_dual_step followed by compute_max_step exactly
+template <typename T>
+void compute_quality_function_steps(T sigma, T mu_nat, T tau,
+                                    const OptProblemInfo<T>& info,
+                                    OptState<const T>& current, const T* px0,
+                                    const T* dpx, T& ax, T& az) {
+  const T mu = sigma * mu_nat;
+  for (int i = 0; i < info.num_primals; i++) {
+    int idx = info.primal_indices[i];
+    T x = current.x[idx];
+    T dx = px0[idx] + sigma * dpx[idx];
+
+    if (!std::isinf(info.lbx[i])) {
+      T gap = x - info.lbx[i];
+      T dzl = -((gap * current.zl[i] - mu) + current.zl[i] * dx) / gap;
+      if (dx < 0.0) {
+        T a = -tau * gap / dx;
+        if (a < ax) {
+          ax = a;
+        }
+      }
+      if (dzl < 0.0) {
+        T a = -tau * current.zl[i] / dzl;
+        if (a < az) {
+          az = a;
+        }
+      }
+    }
+    if (!std::isinf(info.ubx[i])) {
+      T gap = info.ubx[i] - x;
+      T dzu = -((gap * current.zu[i] - mu) - current.zu[i] * dx) / gap;
+      if (dx > 0.0) {
+        T a = tau * gap / dx;
+        if (a < ax) {
+          ax = a;
+        }
+      }
+      if (dzu < 0.0) {
+        T a = -tau * current.zu[i] / dzu;
+        if (a < az) {
+          az = a;
+        }
+      }
+    }
+  }
+}
+
+// Squared complementarity at the quality function trial point for the step lengths ax and az
+// The sum matches apply_step followed by compute_sum_squared_complementarity exactly
+template <typename T>
+T compute_quality_function_complementarity(T sigma, T mu_nat, T ax, T az,
+                                           const OptProblemInfo<T>& info,
+                                           OptState<const T>& current,
+                                           const T* px0, const T* dpx) {
+  const T mu = sigma * mu_nat;
+  T comp_sq = 0.0;
+  for (int i = 0; i < info.num_primals; i++) {
+    int idx = info.primal_indices[i];
+    T x = current.x[idx];
+    T dx = px0[idx] + sigma * dpx[idx];
+    T xt = x + ax * dx;
+
+    if (!std::isinf(info.lbx[i])) {
+      T gap = x - info.lbx[i];
+      T dzl = -((gap * current.zl[i] - mu) + current.zl[i] * dx) / gap;
+      T r = (xt - info.lbx[i]) * (current.zl[i] + az * dzl);
+      comp_sq += r * r;
+    }
+    if (!std::isinf(info.ubx[i])) {
+      T gap = info.ubx[i] - x;
+      T dzu = -((gap * current.zu[i] - mu) - current.zu[i] * dx) / gap;
+      T r = (info.ubx[i] - xt) * (current.zu[i] + az * dzu);
+      comp_sq += r * r;
+    }
+  }
+  return comp_sq;
 }
 
 // Dual residual vector: r_d[i] = grad[i] - zl[i] + zu[i] for primals, 0
@@ -602,6 +736,11 @@ void initialize_bound_duals_warm_cuda(T mu, T zmax,
                                       const T* xlam, T* zl, T* zu,
                                       cudaStream_t stream = 0);
 
+// Device version of push_bound_duals
+template <typename T>
+void push_bound_duals_cuda(T zmin, const OptProblemInfo<T>& info, T* zl, T* zu,
+                           cudaStream_t stream = 0);
+
 // Device version of correct_bound_multipliers
 template <typename T>
 void correct_bound_multipliers_cuda(T mu, T kappa,
@@ -632,6 +771,18 @@ T compute_sum_squared_complementarity_cuda(T mu, const OptProblemInfo<T>& info,
 template <typename T>
 T compute_infeasibility_cuda(const OptProblemInfo<T>& info, const T* grad,
                              cudaStream_t stream = 0);
+
+// Device version of compute_constraint_violation
+template <typename T>
+T compute_constraint_violation_cuda(const OptProblemInfo<T>& info,
+                                    const T* grad, cudaStream_t stream = 0);
+
+// Device version of compute_kkt_error_squares
+template <typename T>
+void compute_kkt_error_squares_cuda(const OptProblemInfo<T>& info,
+                                    OptState<const T>& current, const T* grad,
+                                    T& dual_sq, T& primal_sq,
+                                    cudaStream_t stream = 0);
 
 // Dual residual r_d[idx] = grad[idx] - zl[i] + zu[i].
 template <typename T>

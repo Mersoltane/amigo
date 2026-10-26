@@ -1,7 +1,10 @@
 #ifndef AMIGO_CSR_MATRIX_H
 #define AMIGO_CSR_MATRIX_H
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
+#include <vector>
 
 #include "amigo.h"
 #include "node_owners.h"
@@ -69,6 +72,11 @@ class CSRMat {
         data(nullptr),
         mem_loc(MemoryLocation::HOST_AND_DEVICE),
         sqdef_index(-1) {}
+
+  // The matrix owns its buffers so it is never copied implicitly
+  CSRMat(const CSRMat&) = delete;
+  CSRMat& operator=(const CSRMat&) = delete;
+
   ~CSRMat() {
     if (rowp) {
       delete[] rowp;
@@ -237,7 +245,7 @@ class CSRMat {
                                                int nsubcols,
                                                const int subcols[]) const {
     int* subcolptr = new int[ncols];
-    std::fill(subcolptr, subcolptr + nrows, -1);
+    std::fill(subcolptr, subcolptr + ncols, -1);
     for (int i = 0; i < nsubcols; i++) {
       subcolptr[subcols[i]] = i;
     }
@@ -326,7 +334,7 @@ class CSRMat {
       subcolptr = _subcolptr;
     } else {
       space = new int[ncols];
-      std::fill(space, space + nrows, -1);
+      std::fill(space, space + ncols, -1);
       for (int i = 0; i < nsubcols; i++) {
         space[subcols[i]] = i;
       }
@@ -477,27 +485,6 @@ class CSRMat {
   }
 
   /**
-   * @brief Perform an iteration of Gauss Seidel
-   *
-   * @param y The right-hand-side
-   * @param x The solution vector
-   */
-  void gauss_seidel(const std::shared_ptr<Vector<T>>& y,
-                    std::shared_ptr<Vector<T>>& x) const {
-    const T* y_array = y->get_array();
-    T* x_array = x->get_array();
-
-    for (int i = 0; i < nrows; i++) {
-      T val = y_array[i];
-      for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
-        val -= data[jp] * x_array[cols[jp]];
-      }
-
-      x_array[i] = x_array[i] + val / data[diag[i]];
-    }
-  }
-
-  /**
    * @brief Set the values at the specified matrix indices
    *
    * @tparam policy Execution policy
@@ -558,10 +545,7 @@ class CSRMat {
       for (int row = 0; row < nrows; row++) {
         T m = 0.0;
         for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
-          T a = data[jp] < 0 ? -data[jp] : data[jp];
-          if (a > m) {
-            m = a;
-          }
+          m = std::max(m, std::abs(data[jp]));
         }
         o[row] = m;
       }
@@ -580,15 +564,79 @@ class CSRMat {
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
       const T* dv = d->get_array();
-      for (int row = 0; row < nrows; row++) {
-        T dr = dv[row];
-        for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
-          data[jp] *= dr * dv[cols[jp]];
+      if (!col_owners || col_owners->is_identity()) {
+        for (int row = 0; row < nrows; row++) {
+          T dr = dv[row];
+          for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
+            data[jp] *= dr * dv[cols[jp]];
+          }
+        }
+      } else {
+        // Columns hold global numbers across processors
+        for (int row = 0; row < nrows; row++) {
+          T dr = dv[row];
+          for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
+            data[jp] *= dr * dv[col_owners->global_to_local(cols[jp])];
+          }
         }
       }
     } else if constexpr (policy == ExecPolicy::CUDA) {
       backend.scale_symmetric(d->get_device_array());
     }
+  }
+
+  /**
+   * @brief Symmetric Ruiz equilibration of the host values in place.
+   *
+   * Each sweep scales row and column i by 1 / sqrt(max_j |A[i, j]|), which
+   * drives every row max-abs of the scaled matrix toward one. The pass that
+   * scales a row also finds its new max-abs for the next sweep, so k sweeps
+   * take k + 1 passes over the entries.
+   *
+   * @param sweeps Number of sweeps
+   * @param scale The accumulated scale factor of each row and column
+   * @return False when an entry is not finite, leaving the matrix unscaled
+   */
+  bool equilibrate(int sweeps, std::shared_ptr<Vector<T>> scale) {
+    T* s = scale->get_array();
+    std::fill(s, s + nrows, T(1.0));
+
+    // A zero multiple of an entry is NaN only when the entry is not finite
+    std::vector<T> d(nrows), next(nrows);
+    int finite = 1;
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel for reduction(&& : finite) if (nnz >= min_parallel_entries)
+#endif
+    for (int row = 0; row < nrows; row++) {
+      T m = 0.0, probe = 0.0;
+      for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
+        m = std::max(m, std::abs(data[jp]));
+        probe += T(0.0) * data[jp];
+      }
+      finite = finite && probe == 0.0;
+      d[row] = m > 0.0 ? 1.0 / std::sqrt(m) : 1.0;
+    }
+    if (!finite || sweeps <= 0) {
+      return finite;
+    }
+
+    for (int k = 0; k < sweeps; k++) {
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel for if (nnz >= min_parallel_entries)
+#endif
+      for (int row = 0; row < nrows; row++) {
+        T dr = d[row];
+        T m = 0.0;
+        for (int jp = rowp[row]; jp < rowp[row + 1]; jp++) {
+          data[jp] *= dr * d[cols[jp]];
+          m = std::max(m, std::abs(data[jp]));
+        }
+        s[row] *= dr;
+        next[row] = m > 0.0 ? 1.0 / std::sqrt(m) : 1.0;
+      }
+      std::swap(d, next);
+    }
+    return true;
   }
 
   /**
@@ -660,6 +708,9 @@ class CSRMat {
     const T* x_array = x->get_array();
     T* y_array = y->get_array();
 
+#ifdef AMIGO_USE_OPENMP
+#pragma omp parallel for if (nnz >= min_parallel_entries)
+#endif
     for (int i = 0; i < nrows; i++) {
       y_array[i] = 0.0;
       for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
@@ -829,7 +880,7 @@ class CSRMat {
 
       // Set the diagonal elements of the matrix
       auto* it = std::lower_bound(start, end, row);
-      if (it != end && *it == i) {
+      if (it != end && *it == row) {
         diag[i] = it - cols;
       } else {
         diag[i] = -1;
@@ -853,6 +904,9 @@ class CSRMat {
   }
 
  private:
+  // Smaller matrices are equilibrated serially
+  static constexpr int min_parallel_entries = 1 << 16;
+
   int nrows;               // Number of rows in the matrix
   int ncols;               // Number of columns in the matrix
   int nnz;                 // Number of non-zeros in the matrix
