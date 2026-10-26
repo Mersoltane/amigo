@@ -846,7 +846,11 @@ class Model:
         return MetaView(self, meta_name, vtype=vtype)
 
     def set_meta(
-        self, meta_name: str, name: str, data: List | np.ndarray, vtype: str = "vars"
+        self,
+        meta_name: str,
+        name: str,
+        data: float | List | np.ndarray,
+        vtype: str = "vars",
     ):
         """
         Set meta data into the model.
@@ -1086,6 +1090,12 @@ class Model:
     ):
         """Evaluate the gradient of the model"""
         self.problem.gradient(alpha, x.get_vector(), g.get_vector(), zero_fixed_rows)
+
+    def zero_fixed_entries(self, vec: ModelVector):
+        """Zero vector entries associated with fixed variables"""
+        if vec.kind == "state":
+            self.problem.zero_fixed_entries(vec.get_vector())
+        return
 
     def eval_hessian(
         self,

@@ -1,6 +1,12 @@
 from .mesh import Mesh
 from .fem import Problem, FiniteElement
-from .fem_space import Space, Conformity, FunctionSpace, SolutionSpace
+from .fem_space import (
+    Space,
+    Conformity,
+    FunctionSpace,
+    SolutionSpace,
+    IntegrandFormulation,
+)
 from .cell_types import CellType
 from .basis import make_basis, ConstValue, H1Value, HdivValue
 from .basis import dot_product, curl_2d, mat_vec, mat_vec_transpose
@@ -36,6 +42,7 @@ __all__ = [
     Conformity,
     FunctionSpace,
     SolutionSpace,
+    IntegrandFormulation,
     ConstValue,
     H1Value,
     HdivValue,

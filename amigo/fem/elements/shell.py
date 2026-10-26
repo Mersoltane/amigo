@@ -1,8 +1,19 @@
 import numpy as np
 import amigo as am
-from ..element import MITCElement, MITCTyingStrain, MITCStrainComponent
+from ..element import (
+    MITCElement,
+    MITCElementOutput,
+    MITCTyingStrain,
+    MITCStrainComponent,
+)
 from ..cell_types import CellType
-from ..fem_space import Space, FunctionSpace, SolutionSpace, Conformity
+from ..fem_space import (
+    Space,
+    FunctionSpace,
+    SolutionSpace,
+    Conformity,
+    IntegrandFormulation,
+)
 from ..basis import make_basis, H1Value, QuadLagrangeBasis, dot_product
 from ..quadrature import make_quadrature
 
@@ -123,10 +134,7 @@ class NaturalShellGeoBasis(QuadLagrangeBasis):
         ]
 
         # To transform derivatives into the local coordinates
-        Jdict = {"Jinv": Jinv, "zJinv": zJinv, "J33": n0_inv, "T": T}
-
-        Jinv = None
-        return detJ, Jdict, Jinv
+        return {"detJ": detJ, "Jinv": Jinv, "zJinv": zJinv, "J33": n0_inv, "T": T}
 
 
 class ShellSolnBasis(QuadLagrangeBasis):
@@ -187,7 +195,7 @@ class ShellSolnBasis(QuadLagrangeBasis):
 
         return soln
 
-    def transform(self, detJ, Jdict, Jinv, orig):
+    def transform(self, Jdict, orig):
         # Get the transformation information
         Jinv = Jdict["Jinv"]
         zJinv = Jdict["zJinv"]
@@ -349,7 +357,7 @@ class MITC4ShellTying(MITCTyingStrain):
             )
             return g13
 
-    def interp_and_transform(self, pt, detJ, Jdict, Jinv, e):
+    def interp_and_transform(self, pt, Jdict, e):
         # Interpolate the tensorial components of the tying strains
         g11 = 0.5 * ((1.0 - pt[1]) * e[0] + (1.0 + pt[1]) * e[1])
         g22 = 0.5 * ((1.0 - pt[0]) * e[2] + (1.0 + pt[0]) * e[3])
@@ -471,6 +479,7 @@ class MITCShell:
         ctype: CellType = CellType.QUADRILATERAL,
         soln_space: SolutionSpace | None = None,
         data_space: SolutionSpace | None = None,
+        formulation: IntegrandFormulation = IntegrandFormulation.POTENTIAL,
         integrand=None,
     ):
 
@@ -489,11 +498,63 @@ class MITCShell:
         data_basis = make_basis(data_space, ctype, kind="data")
         mitc = MITC4ShellTying()
 
+        test_basis = None
+        if formulation == IntegrandFormulation.WEAK:
+            test_basis = make_basis(soln_space, ctype, kind="multiplier")
+
         if integrand is None:
-            integrand = self.potential
+            if formulation == IntegrandFormulation.POTENTIAL:
+                integrand = self.potential
+            else:
+                raise NotImplementedError
 
         shell_obj = MITCElement(
-            name, soln_basis, data_basis, geo_basis, quadrature, mitc, integrand
+            name,
+            soln_basis,
+            data_basis,
+            geo_basis,
+            quadrature,
+            mitc,
+            integrand,
+            test_basis=test_basis,
+        )
+
+        return shell_obj
+
+    def create_element_output(
+        self,
+        name: str = "Shell",
+        ctype: CellType = CellType.QUADRILATERAL,
+        soln_space: SolutionSpace | None = None,
+        data_space: SolutionSpace | None = None,
+        output_names: list[str] | None = None,
+        output_function=None,
+    ):
+
+        soln, _, data, _ = MITCShell.get_default_spaces()
+        if soln_space is None:
+            soln_space = soln
+        if data_space is None:
+            data_space = data
+
+        func_space = FunctionSpace(func_space=Space.H1, degree=1)
+        soln_basis = ShellSolnBasis(kind="input")
+        geo_basis = NaturalShellGeoBasis(
+            ["x", "y", "z", "nx", "ny", "nz"], func_space, kind="data"
+        )
+        quadrature = make_quadrature(soln_space, ctype)
+        data_basis = make_basis(data_space, ctype, kind="data")
+        mitc = MITC4ShellTying()
+
+        shell_obj = MITCElementOutput(
+            name,
+            soln_basis,
+            data_basis,
+            geo_basis,
+            quadrature,
+            mitc,
+            output_names,
+            output_function,
         )
 
         return shell_obj

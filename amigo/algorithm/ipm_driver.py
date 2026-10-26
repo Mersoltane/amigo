@@ -474,6 +474,7 @@ class Optimizer:
             for i in range(len(of_indices)):
                 idx = of_indices[i]
                 res.get_array()[:] = -out_wrt_input[idx, :].toarray()
+                self.problem.zero_fixed_entries(res)
                 self.solver.solve(res, psi)
                 adjx = grad_wrt_data.T @ psi.get_array()
                 dfdx[i, :] = out_wrt_data[idx, wrt_indices] + adjx[wrt_indices]
@@ -482,6 +483,7 @@ class Optimizer:
             for i in range(len(wrt_indices)):
                 idx = wrt_indices[i]
                 res.get_array()[:] = -grad_wrt_data[:, idx].toarray().flatten()
+                self.problem.zero_fixed_entries(res)
                 self.solver.solve(res, psi)
                 dirx = out_wrt_input @ psi.get_array()
                 dfdx[:, i] = out_wrt_data[of_indices, idx] + dirx[of_indices]
