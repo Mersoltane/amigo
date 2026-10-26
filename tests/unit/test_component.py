@@ -20,12 +20,7 @@ import pytest
 from amigo.component import Meta, InputSet, ConstantSet, DataSet
 from amigo.expressions import VarNode, ConstNode, Expr
 
-# ---------------------------------------------------------------------------
-# Meta — construction validation
-#
-# Meta stores name, var_type, bounds, value, type, scale, units, and label
-# for a component variable. It validates inputs at construction time.
-# ---------------------------------------------------------------------------
+# Meta validates its fields at construction
 
 
 class TestMetaValidation:
@@ -63,12 +58,7 @@ class TestMetaValidation:
                 assert data[name] == data2[name]
 
 
-# ---------------------------------------------------------------------------
-# InputSet — named active-variable container
-#
-# InputSet holds named Expr objects backed by active VarNodes. It is used
-# to declare the design variables of a Component.
-# ---------------------------------------------------------------------------
+# InputSet holds the named active variables of a component
 
 
 class TestInputSet:
@@ -94,10 +84,7 @@ class TestInputSet:
             _ = inputs["missing"]
 
 
-# ---------------------------------------------------------------------------
-# ConstantSet — named scalar constant container
-# DataSet — named passive (non-differentiable) data container
-# ---------------------------------------------------------------------------
+# ConstantSet and DataSet hold the named constants and the passive data
 
 
 class TestConstantSet:

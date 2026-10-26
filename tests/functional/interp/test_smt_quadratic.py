@@ -85,10 +85,7 @@ def opt_result(request, trained_krg):
     lower["src.y"] = 0.25
     upper["src.y"] = float("inf")
 
-    # Build and initialize — always run build_module from the test file's
-    # own directory so generate_cpp() writes the .cpp there and CMake finds
-    # it. Then ensure that directory is on sys.path so importlib can find
-    # the compiled .so regardless of where pytest is invoked from.
+    # Build from the test directory and put it on sys.path for the import
     _test_dir = os.path.dirname(os.path.abspath(__file__))
     _orig_dir = os.getcwd()
     os.chdir(_test_dir)

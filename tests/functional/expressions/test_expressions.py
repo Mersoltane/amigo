@@ -56,11 +56,8 @@ def test_expressions(tmp_path):
     expr = Expressions()
     model.add_component("expr", 1, expr)
 
-    # build_module() generates expr_test.cpp/.h and a CMakeLists.txt in the
-    # current working directory. Build in a temporary directory so that
-    # running pytest from the repository root does not overwrite the
-    # project's own CMakeLists.txt, then put that directory on sys.path so
-    # initialize() can import the compiled module.
+    # Build in a scratch directory so the project CMakeLists.txt stays untouched
+    # The directory goes on sys.path for the compiled module import
     orig_dir = os.getcwd()
     os.chdir(tmp_path)
     try:

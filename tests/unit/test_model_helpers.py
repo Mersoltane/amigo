@@ -20,13 +20,7 @@ import numpy as np
 
 from amigo.model import GlobalIndexPool, _parse_var_expr, _parse_attribute_path
 
-# ---------------------------------------------------------------------------
-# GlobalIndexPool — contiguous, non-overlapping index allocation
-#
-# Each call to allocate(shape) returns a numpy array of the requested shape
-# filled with the next available integer indices. The pool's counter advances
-# by the total number of elements allocated.
-# ---------------------------------------------------------------------------
+# GlobalIndexPool allocates contiguous index arrays
 
 
 class TestGlobalIndexPool:
@@ -63,14 +57,7 @@ class TestGlobalIndexPool:
         assert pool.counter == 9  # 3 + 6
 
 
-# ---------------------------------------------------------------------------
-# _parse_var_expr / _parse_attribute_path — expression string parsing
-#
-# _parse_var_expr converts strings like "model.group.var" or
-# "model.group.var[:, 0]" into a (path_list, indices_tuple) pair.
-# _parse_attribute_path converts an AST Attribute node into an ordered
-# list of name segments (e.g. "a.b" → ["a", "b"]).
-# ---------------------------------------------------------------------------
+# The parsers turn variable strings and attribute paths into path and index pairs
 
 
 class TestParseVarExpr:

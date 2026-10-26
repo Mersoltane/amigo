@@ -27,9 +27,7 @@ from amigo.expressions import (
     BinaryNode,
 )
 
-# ---------------------------------------------------------------------------
-# is_zero() — zero-value detection on each node type
-# ---------------------------------------------------------------------------
+# is_zero on each node type
 
 
 class TestIsZero:
@@ -68,9 +66,7 @@ class TestUnsupportedUnary:
             UnaryNode("erf", Expr(VarNode("x")))
 
 
-# ---------------------------------------------------------------------------
-# is_active() — active/passive flag for each node type
-# ---------------------------------------------------------------------------
+# is_active on each node type
 
 
 class TestIsActive:
@@ -97,9 +93,7 @@ class TestIsActive:
         assert node.is_active() is False
 
 
-# ---------------------------------------------------------------------------
-# compute_cost() — operation cost increments for each node type
-# ---------------------------------------------------------------------------
+# compute_cost on each node type
 
 
 class TestComputeCost:
@@ -155,9 +149,7 @@ class TestComputeCost:
         assert log_node.compute_cost() == 220
 
 
-# ---------------------------------------------------------------------------
-# to_cpp() — C++ code generation strings for each node type
-# ---------------------------------------------------------------------------
+# to_cpp strings for each node type
 
 
 class TestToCpp:
@@ -224,18 +216,7 @@ class TestToCpp:
         assert node.to_cpp() == "A2D::max2(a, b)"
 
 
-# ---------------------------------------------------------------------------
-# Expr arithmetic operators — zero-propagation shortcuts and operator overloads
-#
-# The Expr class short-circuits several operations when one operand is zero:
-#   zero + e  →  e          (no BinaryNode created)
-#   e + zero  →  e
-#   zero * e  →  zero const
-#   e * zero  →  zero const
-#   e - zero  →  e
-#   zero / d  →  zero const
-# All other combinations produce the expected BinaryNode or UnaryNode tree.
-# ---------------------------------------------------------------------------
+# Zero propagation in the Expr operators
 
 
 class TestExprArithmetic:
@@ -365,13 +346,7 @@ class TestExprArithmetic:
         assert result.is_zero() is True
 
 
-# ---------------------------------------------------------------------------
-# Expr.serialize() / Expr.deserialize() — round-trip fidelity
-#
-# Serialization converts an expression tree to a nested tuple structure.
-# Deserialization reconstructs the tree. The round-trip property requires
-# that deserialize(serialize(e)).serialize() == serialize(e) for any Expr e.
-# ---------------------------------------------------------------------------
+# Serialize and deserialize round trip
 
 
 class TestExprRoundTrip:
@@ -417,13 +392,7 @@ class TestExprRoundTrip:
         assert isinstance(result, ValueError)
 
 
-# ---------------------------------------------------------------------------
-# _normalize_shape() — shape normalisation and validation
-#
-# Converts None, int, list, or tuple inputs to a canonical tuple form.
-# Raises TypeError for unsupported input types and ValueError for shapes
-# with more than two dimensions (amigo only supports 1-D and 2-D arrays).
-# ---------------------------------------------------------------------------
+# Shape normalization and validation
 
 from amigo.expressions import _normalize_shape
 
@@ -452,9 +421,7 @@ class TestNormalizeShape:
             _normalize_shape(3.14)
 
 
-# ---------------------------------------------------------------------------
 # Long sums in the generated derivative code are built in chunks
-# ---------------------------------------------------------------------------
 
 from amigo.expressions import ExprBuilder, _SUM_CHUNK, _balanced_sum, _sum_terms
 
@@ -528,9 +495,7 @@ class TestSplitSum:
         assert all("(d * d)" not in line for line in active[:-1])
 
 
-# ---------------------------------------------------------------------------
 # Binary functions with a number, the norm, and table interpolation
-# ---------------------------------------------------------------------------
 
 import pkgutil
 
@@ -708,9 +673,7 @@ class TestFourier:
         assert np.allclose(np.array(basis).T @ coef, samples, atol=1e-12)
 
 
-# ---------------------------------------------------------------------------
 # Long chains inside a term end in shallow temporaries
-# ---------------------------------------------------------------------------
 
 
 def _paren_depth(code):

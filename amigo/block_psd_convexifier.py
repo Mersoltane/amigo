@@ -111,10 +111,8 @@ def _detect_model_chain(model, mult_ind):
                     if idx_int < n and not mult_ind[idx_int]:
                         blocks[k].add(idx_int)
 
-    # Convert to sorted arrays, skip empty blocks.
-    # Deduplicate: cyclic BCs can cause shared variables between blocks
-    # (e.g. q2[N-1,:] = q1[0,:] via linking). Assign each variable to its
-    # first block only, keeping blocks disjoint.
+    # Convert to sorted arrays and skip empty blocks
+    # Cyclic links can share variables between blocks so each goes to its first block only
     chain = []
     all_in_chain = set()
     for bs in blocks:
@@ -334,10 +332,8 @@ class BlockPSDConvexifier:
                 )
             )
 
-        # Validate block-tridiagonal structure for each chain.
-        # Chains with non-adjacent coupling (W or constraint-mediated) cannot
-        # use Schur propagation correctly. Try to fix periodic coupling by
-        # moving endpoint levels to hub, otherwise demote to small blocks.
+        # Chains with non adjacent coupling cannot use the Schur propagation
+        # Periodic endpoints move to the hub and otherwise the chain demotes to small blocks
         validated_chains = []
         for chain_i in self.bfs_chains:
             valid, viol_levels = _validate_chain_tridiagonal(
@@ -471,12 +467,8 @@ class BlockPSDConvexifier:
             self._chain_diag_maps.append(diag_maps)
             self._chain_coupling_maps.append(coupling_maps)
 
-        # CONVEXIFY: pre-compute local/coupled variable partition per chain level.
-        # In backward sweep, "coupled" vars at level k = those with nonzero columns
-        # in C_{k-1} (coupling from level k-1 to k). These participate in Gamma
-        # propagation, so their curvature redistributes without projection.
-        # "Local" vars are zero columns in C_{k-1}, and their Schur complement
-        # is projected.
+        # Partition each chain level into coupled and local variables
+        # Coupled columns ride the Gamma propagation and only the local Schur complement is projected
         self._chain_local_idx = []
         self._chain_coupled_idx = []
         for ci, chain_i in enumerate(self.bfs_chains):
@@ -509,9 +501,7 @@ class BlockPSDConvexifier:
                 if pos < len(row_cols) and row_cols[pos] == hub_j:
                     self._hub_csr_map[i, j] = rs + pos
 
-        # Pre-compute hub-to-chain coupling CSR indices (bordered structure).
-        # _hub_chain_coupling[ci][h_idx][k] = CSR index array for hub h
-        # coupling to each variable in chain ci, level k.
+        # Precompute the CSR indices coupling each hub to each chain level
         self._hub_chain_coupling = []
         for chain_i in self.bfs_chains:
             hub_maps = []
@@ -545,14 +535,8 @@ class BlockPSDConvexifier:
                 hub_maps.append(csri)
             self._hub_small_coupling.append(hub_maps)
 
-        # Pre-compute constraint-to-block maps for J^T |D^{-1}| J (Schur complement).
-        # For each chain, for each level k:
-        #   _schur_block_data[ci][k] = list of (c_row, local_pos, csr_idx)
-        #     Constraints touching primal vars in block k.
-        #   _schur_coupling_data[ci][k] = list of (c_row, lp_k, lp_k1, ci_k, ci_k1)
-        #     Constraints touching primal vars in both block k and block k+1.
-        # Also _schur_hub_data[ci][h_idx][k] = list of (c_row, lp_k, ci_k, hub_ci)
-        #   Constraints touching both hub h and block k.
+        # Precompute the constraint maps of the Schur complement per chain level
+        # Block entries hold the rows touching one block and coupling entries the rows touching two
         var_to_block = {}
         for ci, chain_i in enumerate(self.bfs_chains):
             for k, block in enumerate(chain_i):
@@ -751,17 +735,13 @@ class BlockPSDConvexifier:
         diag_arr = diag.get_array()
 
         data = solver.hess.get_data()
-        # Adaptive eps: larger early (stable hub fill-in, less cascade),
-        # shrinks to numerical floor near convergence (pure Newton).
-        # eps = O(mu) ensures asymptotic vanishing under SOSC.
+        # The adaptive eps starts large for stable hub fill in and shrinks near convergence
+        # An eps of order mu vanishes asymptotically under SOSC
         eps = max(self.numerical_eps, 1e-2 * self._barrier)
         ev_mode = self.eigenvalue_mode
 
-        # Build regularized constraint diagonal for Schur weight computation.
-        # diag_base has 0 for equalities, -1/C for inequalities.
-        # eps_z only applied to nonconvex constraints (if configured).
-        # Using diag_reg ensures the Schur complement J^T |D_reg|^{-1} J
-        # matches what PARDISO sees, so the CSR write-back is self-consistent.
+        # Build the regularized constraint diagonal for the Schur weights
+        # The diagonal PARDISO factors keeps the CSR write back self consistent
         diag_reg = diag_base.copy()
         if self._nonconvex_indices is not None and self.eps_z > 0:
             diag_reg[self._nonconvex_indices] -= self.eps_z
@@ -863,9 +843,7 @@ class BlockPSDConvexifier:
             H_proj[np.arange(d), np.arange(d)] -= diag_base[block]
             H_proj -= S_schur_small
             data[csr_map[valid]] = H_proj[valid]
-            # Fill-in compensation (Gershgorin per-row bound): missing
-            # off-diagonal entries cause perturbation E_missing. Per-row
-            # absolute sums give diagonal dominance compensation.
+            # Missing off diagonal entries are compensated by a Gershgorin row bound
             if not np.all(valid):
                 missing = ~valid
                 np.fill_diagonal(missing, False)
@@ -877,11 +855,8 @@ class BlockPSDConvexifier:
                         diag_arr[block] += fill_vals
                         total_fill_comp += np.sum(fill_vals)
 
-        # --- 2. Chain blocks: Null-Space BISC ---
-        # Schur complement propagation on S_p (forward or backward).
-        # S_p[k,k] = W[k,k] + Sigma[k] + sum_c w_c * J_c[k]^T J_c[k]
-        # S_p[k,k+1] = W[k,k+1] + sum_c w_c * J_c[k]^T J_c[k+1]
-        # Pure spectral modification at each level. No coupling floors.
+        # Chain blocks use Schur complement propagation on S_p
+        # S_p[k,k] = W[k,k] + Sigma[k] + sum_c w_c J_c[k]^T J_c[k] with a pure spectral modification per level
         forward = self.sweep_direction == "forward"
 
         self._riccati_chain_factors = []
@@ -991,12 +966,8 @@ class BlockPSDConvexifier:
                 blocks_total += 1
                 min_eig_chain = None  # set below by whichever path runs
 
-                # --- CONVEXIFY-style selective projection ---
-                # In backward sweep, identify "local" variables (not coupled to
-                # adjacent level via C_{k-1}) and "coupled" variables.  Only
-                # project the Schur complement of local vars after eliminating
-                # coupled vars.  Coupled curvature redistributes naturally
-                # through the sweep, reducing total ||E||_F.
+                # The backward sweep eliminates the coupled variables first
+                # Only the Schur complement of the local variables is projected
                 local_idx = self._chain_local_idx[ci][k]
                 coupled_idx = self._chain_coupled_idx[ci][k]
                 used_convexify = False
@@ -1133,10 +1104,8 @@ class BlockPSDConvexifier:
                         max_eig_corr = max(max_eig_corr, block_correction)
                         total_mod_norm_sq += np.sum((use_evals - evals) ** 2)
 
-                    # Write-back: CSR[k,k] = R_k_mod + Gamma - Sigma - S_schur
-                    # Self-consistency: PARDISO adds Sigma (factor_from_host) and
-                    # S_schur (constraint elimination), recovering R_k_mod + Gamma.
-                    # PARDISO subtracts Gamma (chain elimination) -> gets R_k_mod.
+                    # Write back CSR[k,k] = R_k_mod + Gamma - Sigma - S_schur
+                    # PARDISO re adds the subtracted parts and recovers R_k_mod
                     if used_convexify:
                         # S_tilde already modified in-place (Delta_l added)
                         H_new = S_tilde.copy()
@@ -1153,9 +1122,7 @@ class BlockPSDConvexifier:
                         np.fill_diagonal(missing, False)
                         if np.any(missing):
                             if used_convexify:
-                                # CONVEXIFY: modification E = S_tilde_mod - S_tilde_orig
-                                # S_tilde was modified in-place, but H_new = S_tilde + Gamma - ...
-                                # The E_k we need is the modification matrix (only on local sub-block)
+                                # The modification E is S_tilde_mod - S_tilde_orig on the local sub block
                                 E_k = np.zeros((dk, dk))
                                 E_k[np.ix_(local_idx, local_idx)] = Delta_l
                                 E_missing = np.where(missing, E_k, 0.0)
@@ -1185,11 +1152,8 @@ class BlockPSDConvexifier:
             self._riccati_chain_couplings.append(coupling_matrices)
             self._riccati_chain_S_schur.append(all_S_schur)
 
-        # --- 3. Hub writeback: dense bordered Schur complement ---
-        # Full n_hub x n_hub spectral modification (eigendecomp + reflect/clip),
-        # consistent with chain and small block treatment. No uniform diagonal
-        # shift -- each eigenvalue is modified individually, preserving the
-        # eigenvector structure and minimizing direction distortion.
+        # The hub writeback is a dense bordered Schur complement
+        # Each eigenvalue is modified individually to preserve the eigenvector structure
         if n_hubs > 0:
             n_h = n_hubs
 
@@ -1422,20 +1386,14 @@ class BlockPSDConvexifier:
         p_chain : ndarray
             Primal step (full length). Only chain variable entries filled.
         """
-        # Use CSR snapshot from before factor_from_host (which corrupts
-        # CSR data by adding diagonal in-place). The snapshot has pure
-        # BISC write-back: CSR[k,k] = W_mod[k,k] (no Sigma, no eps_z).
+        # The CSR snapshot predates factor_from_host which adds the diagonal in place
         if hasattr(self, "_riccati_csr_snapshot"):
             data = self._riccati_csr_snapshot
         else:
             data = solver.hess.get_data()
 
-        # Use diag snapshot (saved at factorization time) for consistent
-        # weights. self.eps_z may have changed since factorization (QF
-        # updates barrier_param, which updates eps_z). The snap_diag
-        # has the exact diagonal that PARDISO factored with:
-        #   primals: Sigma + fill_compensation
-        #   constraints: D_base - eps_z_at_factorization
+        # The diagonal snapshot from factorization time keeps the weights consistent
+        # eps_z may have moved with the barrier since the factorization
         if hasattr(self, "_riccati_diag_snapshot"):
             diag_snap = self._riccati_diag_snapshot
         else:
@@ -1449,9 +1407,7 @@ class BlockPSDConvexifier:
             diag_maps = self._chain_diag_maps[ci]
             coupling_maps = self._chain_coupling_maps[ci]
 
-            # --- Phase 1: Build S_p_full diagonal blocks ---
-            # CSR snapshot has W_mod[k,k] (BISC write-back, pre-diagonal).
-            # S_p_full[k,k] = W_mod[k,k] + Sigma[k] + S_schur_full[k,k]
+            # The snapshot holds W_mod so S_p_full[k,k] = W_mod[k,k] + Sigma[k] + S_schur_full[k,k]
             S_p_blocks = []
             for k in range(n_levels):
                 block = chain[k]
@@ -1527,12 +1483,8 @@ class BlockPSDConvexifier:
             if any(f is None for f in factors):
                 continue
 
-            # --- Phase 4: Form condensed RHS ---
-            # b[k] = r_x[k] + sum_c w_c * J_c_k^T * r_d[c]
-            # _schur_block_data[ci][k] already contains ALL constraints
-            # touching block k (including coupling constraints that also
-            # touch k+1). Each entry has the J entries for block k ONLY.
-            # No separate coupling RHS needed (would double-count).
+            # The condensed rhs is b[k] = r_x[k] + sum_c w_c J_c_k^T r_d[c]
+            # The block data already holds every constraint touching block k so coupling rows are not double counted
             b = []
             for k in range(n_levels):
                 block = chain[k]

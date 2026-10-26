@@ -27,9 +27,7 @@ from amigo.block_detection import (
     _build_primal_adjacency,
 )
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def make_linear_chain_csr(n):
@@ -47,13 +45,7 @@ def make_linear_chain_csr(n):
     return np.array(rowp), np.array(cols, dtype=np.int64)
 
 
-# ---------------------------------------------------------------------------
-# _compute_degrees — primal-primal degree per variable
-#
-# Counts the number of primal (non-multiplier) neighbours for each variable.
-# Multiplier rows (dual variables) are excluded from both the count and the
-# neighbour set, so their degree is always 0.
-# ---------------------------------------------------------------------------
+# _compute_degrees counts the primal neighbours and leaves multiplier rows at zero
 
 
 class TestComputeDegrees:
@@ -85,12 +77,7 @@ class TestComputeDegrees:
         assert degree[2] == 2
 
 
-# ---------------------------------------------------------------------------
-# _find_connected_components — BFS connected component detection
-#
-# Operates on the primal adjacency structure produced by _build_primal_adjacency.
-# Returns a list of components, each a list of variable indices.
-# ---------------------------------------------------------------------------
+# _find_connected_components walks the primal adjacency into component lists
 
 
 class TestFindConnectedComponents:
@@ -130,17 +117,7 @@ class TestFindConnectedComponents:
         assert frozenset({2, 3}) in component_sets
 
 
-# ---------------------------------------------------------------------------
-# detect_bfs_level_blocks — top-level block classification
-#
-# Classifies all primal variables into:
-#   small_blocks  — components small enough for direct eigendecomposition
-#   bfs_chains    — large chain-structured components (block-tridiagonal)
-#   hub_indices   — high-degree variables isolated as scalar blocks
-#
-# The function accepts max_eigendecomp_size and max_block_size thresholds
-# that control when a component is treated as a chain vs. small blocks.
-# ---------------------------------------------------------------------------
+# detect_bfs_level_blocks sorts the primal variables into small blocks, chains, and hubs
 
 
 class TestDetectBfsLevelBlocks:
