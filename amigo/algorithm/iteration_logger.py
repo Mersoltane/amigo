@@ -4,16 +4,16 @@ Builds the per-iteration record (objective, NLP error, step sizes,
 step norm, filter size, etc.) and prints the IPM progress table.
 """
 
+import math
 import sys
 import time
 
 from .convergence_check import (
-    CONTINUE,
     CONVERGED,
     CONVERGED_ACCEPTABLE,
-    PRECISION_FLOOR,
-    DIVERGED,
+    STATUS_MESSAGES,
 )
+from .regime import RegimeMonitor
 
 
 class OptimizationLogger:
@@ -29,9 +29,8 @@ class OptimizationLogger:
         # Store the optimization data
         self.opt_data = {"options": self.options, "converged": False, "iterations": []}
 
-        # Counter of steps whose dual infeasibility left its linear model
-        self._prev_inf_du = None
-        self._dual_viol_count = 0
+        # The regime of the solve, read from the diagnostics of each iteration
+        self.regime = RegimeMonitor()
         return
 
     def get_data(self):
@@ -53,47 +52,45 @@ class OptimizationLogger:
         for obj in self.log_objs:
             obj.add_log_info(iter_data)
 
-        # NLP-level quantities (mu=0) for display
-        iter_data["inf_pr"] = state.primal_infeas
+        # The unscaled objective and violation with the scaled dual and compl errors
+        iter_data["inf_pr"] = state.constr_viol
         iter_data["inf_du"] = state.dual_infeas
         iter_data["compl"] = state.complementarity
         iter_data["nlp_error"] = state.kkt_error
-        iter_data["objective"] = state.barrier_objective
+        iter_data["objective"] = state.objective_value / state.obj_scale
         px = state.step.get_solution()
         iter_data["step_norm"] = self.problem.maxabs(px)
 
-        # Flag steps whose dual infeasibility exceeds the linear model by a slack factor
-        slack = 10.0
-        alpha = iter_data.get("alpha_x", 0.0)
-        if self._prev_inf_du is not None and alpha > 0.0:
-            bound = (1.0 - alpha) * self._prev_inf_du + slack * max(
-                self._prev_inf_du, 1.0
-            )
-            if state.dual_infeas > bound:
-                self._dual_viol_count += 1
-                iter_data["dual_viol"] = True
-        iter_data["dual_viol_total"] = self._dual_viol_count
-        self._prev_inf_du = state.dual_infeas
+        # The breach counts come from the step contract
+        iter_data.setdefault("dual_viol_total", 0)
+        iter_data["regime"] = self.regime.update(iter_data)
 
         # Write out the values
         self._write_log(status, state, iter_data)
 
         # Append the iteration data
         self.opt_data["iterations"].append(iter_data)
-
-        if status == CONVERGED:
-            self.opt_data["converged"] = True
-        elif status == CONVERGED_ACCEPTABLE:
-            self.opt_data["converged"] = True
-            self.opt_data["acceptable"] = True
-        elif status == PRECISION_FLOOR:
-            self.opt_data["converged"] = True
-            self.opt_data["acceptable"] = True
-            self.opt_data["precision_floor"] = True
-        elif status == DIVERGED or status == CONTINUE:
-            self.opt_data["converged"] = False
-
         return
+
+    def finish(self, status, state):
+        """Record the final status in the returned data and print the summary."""
+        self.opt_data["status"] = status
+        self.opt_data["status_message"] = STATUS_MESSAGES[status]
+        self.opt_data["converged"] = status in (CONVERGED, CONVERGED_ACCEPTABLE)
+        self.opt_data["acceptable"] = status == CONVERGED_ACCEPTABLE
+
+        if state.comm_rank != 0 or not self.opt_data["iterations"]:
+            return
+        iter_data = self.opt_data["iterations"][-1]
+        iteration = iter_data["iteration"]
+        if status == CONVERGED:
+            title = f"Amigo converged in {iteration} iterations"
+        elif status == CONVERGED_ACCEPTABLE:
+            title = f"Amigo converged to acceptable point in {iteration} iterations"
+        else:
+            title = f"Amigo stopped after {iteration} iterations: {STATUS_MESSAGES[status]}"
+        self._print_summary(title, state, iter_data)
+        sys.stdout.flush()
 
     def _write_log(self, status, state, iter_data):
         """Print the IPM iteration table row for this iteration."""
@@ -102,9 +99,9 @@ class OptimizationLogger:
             print(
                 f"{'iter':>4s}  {'nlp_error':>9s}  {'objective':>12s}  "
                 f"{'inf_pr':>9s}  {'inf_du':>9s}  {'compl':>9s}  "
-                f"{'mu':>9s}  {'||d||':>9s}  {'delta_w':>8s}  {'ic':>2s}  "
+                f"{'mu':>9s}  {'||d||':>9s}  {'delta_w':>8s}  {'delta_c':>8s}  {'piv':>7s}  {'ic':>2s}  "
                 f"{'alpha_x':>8s}  {'alpha_z':>8s}  "
-                f"{'ls':>2s}  {'filt':>4s}  {'rej':>4s}  {'frej':>4s}  {'dv':>3s}"
+                f"{'ls':>2s}  {'filt':>4s}  {'rej':>4s}  {'frej':>4s}  {'dv':>3s}  {'why':>8s}  {'soc':>4s}  {'regime':>6s}"
             )
 
         mu = iter_data.get("barrier_param", 1.0)
@@ -126,57 +123,49 @@ class OptimizationLogger:
 
         dw_str = f"{delta_w:8.1e}" if delta_w > 0 else f"{'---':>8s}"
 
+        # The applied delta_c and the smallest pivot of the accepted system
+        delta_c = iter_data.get("inertia_delta_c", 0.0)
+        dc_str = f"{delta_c:8.1e}" if delta_c > 0 else f"{'---':>8s}"
+        pivot = iter_data.get("kkt_min_pivot")
+        piv_str = f"{pivot:7.0e}" if pivot is not None and math.isfinite(pivot) else f"{'---':>7s}"
+
         dv = iter_data.get("dual_viol_total", 0)
+        why = iter_data.get("ls_why") or "---"
+        soc = iter_data.get("soc") or "---"
+        regime = iter_data.get("regime", "")
         print(
             f"{iteration:4d}  {nlp_err:9.2e}  {obj:12.5e}  "
             f"{inf_pr:9.2e}  {inf_du:9.2e}  {compl:9.2e}  "
-            f"{mu:9.2e}  {step_norm:9.2e}  {dw_str}  {ic:2d}  "
+            f"{mu:9.2e}  {step_norm:9.2e}  {dw_str}  {dc_str}  {piv_str}  {ic:2d}  "
             f"{ax:8.2e}  {az:8.2e}  "
-            f"{ls:2d}  {fsize:4d}  {rej:4d}  {frej:4d}  {dv:3d}"
+            f"{ls:2d}  {fsize:4d}  {rej:4d}  {frej:4d}  {dv:3d}  {why:>8s}  {soc:>4s}  {regime:>6s}"
         )
-
-        d_inf_nlp = state.dual_infeas
-        p_inf_nlp = state.primal_infeas
-        c_inf_nlp = state.complementarity
-        overall_error = state.kkt_error
-        obj_final = state.objective_value
-
-        if status == CONVERGED:
-            if state.comm_rank == 0:
-                print(f"\n{'='*70}")
-                print(f"  Amigo converged in {iteration} iterations")
-                print(f"{'='*70}")
-                print(f"  Objective value         {obj_final:>20.10e}")
-                print(f"  NLP error               {overall_error:>20.10e}")
-                print(f"  Primal infeasibility    {p_inf_nlp:>20.10e}")
-                print(f"  Dual infeasibility      {d_inf_nlp:>20.10e}")
-                print(f"  Complementarity         {c_inf_nlp:>20.10e}")
-                print(f"  Barrier parameter       {state.mu:>20.10e}")
-                print(f"  Total iterations        {iteration:>20d}")
-                total_rej = iter_data.get("total_rejections")
-                if total_rej is not None:
-                    frej_total = iter_data.get("total_filter_rejections", 0)
-                    print(f"  Trial rejections        {total_rej:>20d}")
-                    print(f"  Filter vetoes           {frej_total:>20d}")
-                print(f"{'='*70}")
-        elif status == CONVERGED_ACCEPTABLE:
-            if state.comm_rank == 0:
-                print(f"\n{'='*70}")
-                print(
-                    f"  Amigo converged to acceptable point in {iteration} iterations"
-                )
-                print(f"{'='*70}")
-                print(f"  Objective value         {obj_final:>20.10e}")
-                print(f"  NLP error               {overall_error:>20.10e}")
-                print(f"  Primal infeasibility    {p_inf_nlp:>20.10e}")
-                print(f"  Dual infeasibility      {d_inf_nlp:>20.10e}")
-                print(f"  Complementarity         {c_inf_nlp:>20.10e}")
-                print(f"  Total iterations        {iteration:>20d}")
-                total_rej = iter_data.get("total_rejections")
-                if total_rej is not None:
-                    frej_total = iter_data.get("total_filter_rejections", 0)
-                    print(f"  Trial rejections        {total_rej:>20d}")
-                    print(f"  Filter vetoes           {frej_total:>20d}")
-                print(f"{'='*70}")
-
         sys.stdout.flush()
+
+    def _print_summary(self, title, state, iter_data):
+        """Print the final summary with the unscaled measures of the solution."""
+        rows = [
+            ("Objective value", state.objective_value / state.obj_scale),
+            ("NLP error", state.kkt_error),
+            ("Constraint violation", state.constr_viol),
+            ("Dual infeasibility", state.dual_infeas / state.obj_scale),
+            ("Complementarity", state.complementarity / state.obj_scale),
+            ("Barrier parameter", state.mu),
+        ]
+        print(f"\n{'='*70}")
+        print(f"  {title}")
+        print(f"{'='*70}")
+        for label, value in rows:
+            print(f"  {label:<24s}{value:>20.10e}")
+        print(f"  {'Total iterations':<24s}{iter_data['iteration']:>20d}")
+        resto_calls = iter_data.get("resto_calls", 0)
+        if resto_calls > 0:
+            resto_iters = iter_data["resto_iterations"]
+            print(f"  {'Restoration iterations':<24s}{resto_iters:>20d}")
+            print(f"  {'Restoration calls':<24s}{resto_calls:>20d}")
+        total_rej = iter_data.get("total_rejections")
+        if total_rej is not None:
+            frej_total = iter_data.get("total_filter_rejections", 0)
+            print(f"  {'Trial rejections':<24s}{total_rej:>20d}")
+            print(f"  {'Filter vetoes':<24s}{frej_total:>20d}")
+        print(f"{'='*70}")

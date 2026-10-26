@@ -6,6 +6,16 @@ on the state.
 """
 
 
+def set_step_lengths(optimizer, state):
+    """Record the fraction to the boundary step lengths of state.step."""
+    alpha_x, _, alpha_z, _ = optimizer.compute_max_step(
+        state.tau, state.current, state.step
+    )
+    state.max_alpha_primal = alpha_x
+    state.max_alpha_dual = alpha_z
+    state.step_current = True
+
+
 class NewtonStep:
     def __init__(self, options, problem, optimizer):
         self.options = options
@@ -21,19 +31,6 @@ class NewtonStep:
         # Solve the linear system to obtain the new step
         solver.solve(state.residual, self.update)
 
-        # Compute the full step
+        # Compute the full step and its lengths
         self.optimizer.compute_update(state.mu, state.current, self.update, state.step)
-
-        # Now, compute the maximum step lengths in the primal and dual directions
-        alpha_x, _, alpha_z, _ = self.optimizer.compute_max_step(
-            state.tau, state.current, state.step
-        )
-
-        # Record the raw primal step norm for the divergence watchdog
-        state.raw_step_norm = self.problem.maxabs(state.step.get_solution())
-
-        state.max_alpha_primal = alpha_x
-        state.max_alpha_dual = alpha_z
-
-        # Indicate that the step has been updated
-        state.step_current = True
+        set_step_lengths(self.optimizer, state)

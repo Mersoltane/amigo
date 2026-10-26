@@ -5,6 +5,11 @@ class Evaluator:
 
         # Create a temporary constraint vector for later usage
         self.temp_con = self.problem.create_constraint_vector()
+        self.temp_primal = self.problem.create_vector()
+
+        # Point without multipliers and its objective gradient for the directional derivative
+        self.objective_point = self.problem.create_vector()
+        self.objective_gradient = self.problem.create_vector()
 
         # Initialize the number of element counts
         self.num_primal, self.num_constraints, self.num_bounds = (
@@ -31,6 +36,7 @@ class Evaluator:
             x = state.current.get_solution()
             self.problem.hessian(state.obj_scale, x, state.hessian)
             state.hessian_current = True
+            state.hessian_version += 1
 
     def evaluate_objective_and_infeasibility(self, state):
         """Evaluate the objective, barrier and infeasibility at the current point"""
@@ -82,24 +88,21 @@ class Evaluator:
         if not state.step_current:
             raise ValueError("Step not current at this point")
 
-        xtmp = self.problem.create_vector()
-        gtmp = self.problem.create_vector()
-
-        # Copy the design variable values
-        xtmp.copy(state.current.get_solution())
-
-        # Zero the multipliers
+        # Copy the design variable values and zero the multipliers
         con_indices = self.problem.get_constraint_indices()
-        xtmp.fill_at(con_indices, 0.0)
+        x = self.objective_point
+        x.copy(state.current.get_solution())
+        x.fill_at(con_indices, 0.0)
 
         # Scaled objective gradient matching the barrier objective
-        self.problem.gradient(state.obj_scale, xtmp, gtmp)
+        g = self.objective_gradient
+        self.problem.gradient(state.obj_scale, x, g)
 
         # Drop the multiplier rows from the dot product
-        gtmp.fill_at(con_indices, 0.0)
+        g.fill_at(con_indices, 0.0)
 
         update = state.step.get_solution()
-        deriv = self.problem.dot(update, gtmp)
+        deriv = self.problem.dot(update, g)
 
         deriv += self.optimizer.compute_log_barrier_derivative(
             state.mu, state.current, state.step
@@ -125,6 +128,13 @@ class Evaluator:
                 self.optimizer.compute_kkt_error(0.0, state.current, state.gradient)
             )
 
+            # The absolute tolerances apply to the unscaled constraint violation
+            state.constr_viol = state.primal_infeas
+            if state.scaled_constraints:
+                state.constr_viol = self.optimizer.compute_constraint_violation(
+                    state.gradient
+                )
+
             # Compute the scaling
             s_d_conv, s_c_conv = self.compute_optimality_scaling(state)
             state.kkt_error = max(
@@ -136,6 +146,14 @@ class Evaluator:
             state.residual_current = True
 
         return
+
+    def barrier_error(self, state, mu):
+        """Scaled optimality error of the barrier subproblem at mu, measuring complementarity against mu."""
+        dual, primal, comp = self.optimizer.compute_kkt_error(
+            mu, state.current, state.gradient
+        )
+        s_d, s_c = self.compute_optimality_scaling(state)
+        return max(dual / s_d, primal, comp / s_c)
 
     def compute_optimality_scaling(self, state, s_max=100.0):
         """Compute optimality error scaling factors (s_d, s_c)."""
@@ -166,6 +184,12 @@ class Evaluator:
             s_d = max(s_max, (y_asum + z_asum) / num_total) / s_max
 
         return s_d, s_c
+
+    def primal_maxabs(self, vec):
+        """Largest magnitude among the primal entries of a solution vector."""
+        self.temp_primal.copy(vec)
+        self.temp_primal.fill_at(self.problem.get_constraint_indices(), 0.0)
+        return self.problem.maxabs(self.temp_primal)
 
     def evaluate_diagonal(self, state):
         """Evaluate the barrier diagonal entries at the current point"""

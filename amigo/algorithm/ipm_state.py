@@ -7,6 +7,8 @@ the currency flags that mark which of them are up to date.
 
 import amigo as am
 
+from .barrier_strategy import fraction_to_boundary
+
 
 class InteriorPointState:
     # Communicator rank
@@ -21,8 +23,9 @@ class InteriorPointState:
     # Fraction to the boundary parameter
     tau: float
 
-    # Objective scaling factor
+    # Objective scaling factor and whether any constraint row is scaled
     obj_scale: float
+    scaled_constraints: bool
 
     # Objective function value (scaled) and log-barrier term
     objective_value: float
@@ -37,10 +40,11 @@ class InteriorPointState:
     gradient: am.Vector
     gradient_current: bool
 
-    # Second-order information
+    # Second-order information with a counter of Hessian evaluations
     diagonal: am.Vector
     hessian: am.CSRMat
     hessian_current: bool
+    hessian_version: int
 
     # Max primal and max dual step lengths
     max_alpha_primal: float
@@ -48,26 +52,29 @@ class InteriorPointState:
     step: am.OptVector
     step_current: bool
 
-    # Unscaled primal step norm, for the divergence watchdog
-    raw_step_norm: float
-
     # Residual and step information
     residual_norm: float
     residual: am.Vector
 
-    # Current error measures
+    # Current error measures in scaled space and the unscaled constraint violation
     primal_infeas: float
     dual_infeas: float
     complementarity: float
     kkt_error: float
+    constr_viol: float
     residual_current: bool
 
     def __init__(self, x, options, problem, optimizer):
         self.comm_rank = 0
         self.iter = 0
-        self.mu = options["initial_barrier_param"]
-        self.tau = options["fraction_to_boundary"]
+        # A warm start begins at a barrier consistent with its near-optimal point
+        if options["warm_start"]:
+            self.mu = options["warm_start_mu_init"]
+        else:
+            self.mu = options["initial_barrier_param"]
+        self.tau = fraction_to_boundary(options, self.mu)
         self.obj_scale = 1.0
+        self.scaled_constraints = False
         self.objective_value = 0.0
         self.log_barrier_value = 0.0
         self.con_infeasibility = 0.0
@@ -77,17 +84,16 @@ class InteriorPointState:
         self.gradient = problem.create_vector()
         self.gradient_current = False
 
-        self.residual = problem.create_vector()
         self.diagonal = problem.create_vector()
         self.diagonal_current = False
         self.hessian = problem.create_matrix()
         self.hessian_current = False
+        self.hessian_version = 0
 
         self.max_alpha_primal = 1.0
         self.max_alpha_dual = 1.0
         self.step = optimizer.create_opt_vector()
         self.step_current = False
-        self.raw_step_norm = 0.0
 
         self.residual_norm = 0.0
         self.residual = problem.create_vector()
@@ -95,6 +101,7 @@ class InteriorPointState:
         self.dual_infeas = 0.0
         self.complementarity = 0.0
         self.kkt_error = 0.0
+        self.constr_viol = 0.0
         self.residual_current = False
 
     @property
@@ -105,10 +112,6 @@ class InteriorPointState:
     def get_current_point(self):
         """Get the current primal-dual vector"""
         return self.current.get_solution()
-
-    def get_trial_point(self):
-        """Get the trial primal-dual vector"""
-        return self.trial.get_solution()
 
     def invalidate(
         self, obj=True, grad=True, hess=True, res=True, step=True, diag=None
