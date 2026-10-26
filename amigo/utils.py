@@ -1,6 +1,4 @@
 import numpy as np
-from scipy.sparse import csr_matrix
-from scipy.interpolate import BSpline
 from .component import Component
 
 try:
@@ -10,6 +8,8 @@ except:
 
 
 def tocsr(mat):
+    from scipy.sparse import csr_matrix
+
     nrows, ncols, nnz, rowp, cols = mat.get_nonzero_structure()
     data = mat.get_data()
     return csr_matrix((data, cols, rowp), shape=(nrows, ncols))

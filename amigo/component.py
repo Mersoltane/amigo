@@ -1,6 +1,7 @@
 import numpy as np
 from .expressions import *
 from .expressions import _normalize_shape, _type_to_str, _str_to_type
+from .hessian_sparsity import HessianSparsity, UnsupportedExpression, compress_hessian
 from .meta import Meta
 
 _cpp_type_map = {int: "int", float: "double", complex: "std::complex<double>"}
@@ -1001,6 +1002,20 @@ class Component:
                     stack_name=stack_name,
                 )
 
+            cpp += self._generate_hessian_entries_cpp(
+                builder,
+                lhs,
+                rhs,
+                inputs,
+                template_name=using_template,
+                data_name=data_name,
+                input_name=input_name,
+                grad_name=grad_name,
+                prod_name=prod_name,
+                hprod_name=hprod_name,
+                stack_name=stack_name,
+            )
+
             # Get any variables that might have been set
             vars = []
 
@@ -1111,6 +1126,115 @@ class Component:
 
         cpp += "  }\n"
 
+        return cpp
+
+    def _generate_hessian_entries_cpp(
+        self,
+        builder,
+        lhs,
+        rhs,
+        inputs,
+        template_name="T__",
+        data_name="data__",
+        input_name="input__",
+        grad_name="boutput__",
+        prod_name="pinput__",
+        hprod_name="houtput__",
+        stack_name="stack__",
+    ):
+        """Compressed Hessian that passes each structurally nonzero entry to a callback.
+
+        The forward and reverse sweeps run once, and each seeded direction
+        adds one second-order sweep. The direction seeds and the entry each
+        direction recovers come from the pattern of the Lagrangian.
+        """
+        seeds, entries = [], []
+        if not self.is_compute_empty() and isinstance(rhs, Expr):
+            sparsity = HessianSparsity(inputs)
+            try:
+                pattern = sparsity.pattern(rhs)
+            except UnsupportedExpression:
+                pattern = sparsity.dense_pattern()
+            seeds, entries = compress_hessian(pattern, sparsity.ncomp)
+
+        def array(name, values):
+            # Empty tables keep one unused entry
+            vals = ", ".join(str(v) for v in (values or [0]))
+            return f"  static constexpr int {name}[] = {{{vals}}};\n"
+
+        def pointer(groups):
+            ptr = [0]
+            for group in groups:
+                ptr.append(ptr[-1] + len(group))
+            return ptr
+
+        flat = [e for group in entries for e in group]
+        cpp = f"  static constexpr int hessian_num_dirs = {len(seeds)};\n"
+        cpp += array("hessian_seed_ptr", pointer(seeds))
+        cpp += array("hessian_seeds", [c for group in seeds for c in group])
+        cpp += array("hessian_entry_ptr", pointer(entries))
+        cpp += array("hessian_entry_row", [e[0] for e in flat])
+        cpp += array("hessian_entry_col", [e[1] for e in flat])
+        cpp += array("hessian_entry_src", [e[2] for e in flat])
+
+        R = template_name
+        cpp += f"  template <typename {R}, class Emit__>\n"
+        cpp += (
+            f"  static void hessian_entries({R} alpha__, Data<{R}>& {data_name}, "
+            + f"Input<{R}>& {input_name}, const Emit__& emit__) "
+            + "{\n"
+        )
+
+        if seeds:
+            decl, passive, active = builder.get_cpp_lines(
+                mode="hprod",
+                template_name=R,
+                data_name=data_name,
+                input_name=input_name,
+                grad_name=grad_name,
+                prod_name=prod_name,
+                hprod_name=hprod_name,
+            )
+            decl += builder.get_declarations(
+                [lhs], reference=False, mode="hprod", template_name=R
+            )
+
+            body = [f"Input<{R}> {grad_name}, {prod_name}, {hprod_name}"]
+            body += [f"{name}.zero()" for name in (grad_name, prod_name, hprod_name)]
+            for line in body + decl + passive:
+                cpp += "    " + line + ";\n"
+
+            cpp += "    " + f"auto {stack_name} = A2D::MakeStack(\n"
+            for index, line in enumerate(active):
+                cpp += "      " + line + (");\n" if index == len(active) - 1 else ",\n")
+
+            cpp += "    " + f"{lhs.to_cpp()}.bvalue() = 1.0;\n"
+            cpp += "    " + f"{stack_name}.reverse();\n"
+            cpp += "    " + "for (int d__ = 0; d__ < hessian_num_dirs; d__++) {\n"
+            cpp += "      " + f"{prod_name}.zero();\n"
+            cpp += "      " + f"{hprod_name}.zero();\n"
+            cpp += "      " + f"{stack_name}.hzero();\n"
+            cpp += (
+                "      "
+                + "for (int k__ = hessian_seed_ptr[d__]; k__ < hessian_seed_ptr[d__ + 1]; k__++) {\n"
+            )
+            cpp += "        " + f"{prod_name}[hessian_seeds[k__]] = 1.0;\n"
+            cpp += "      }\n"
+            cpp += "      " + f"{stack_name}.hforward();\n"
+            cpp += "      " + f"{stack_name}.hreverse();\n"
+            cpp += (
+                "      "
+                + "for (int e__ = hessian_entry_ptr[d__]; e__ < hessian_entry_ptr[d__ + 1]; e__++) {\n"
+            )
+            cpp += (
+                "        "
+                + "emit__(hessian_entry_row[e__], hessian_entry_col[e__], "
+                + f"{hprod_name}[hessian_entry_src[e__]]);\n"
+            )
+            cpp += "      }\n"
+            cpp += "    }\n"
+
+        cpp += "  }\n"
         return cpp
 
     def _generate_output_cpp(

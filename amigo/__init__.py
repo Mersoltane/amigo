@@ -1,6 +1,9 @@
 import sys
 import os
 
+# Let idle OpenMP workers sleep after 1 ms of spinning
+os.environ.setdefault("KMP_BLOCKTIME", "1")
+
 if sys.platform == "win32":
     # Keep MKL from loading a second OpenMP runtime next to the one amigo links
     os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")

@@ -1,16 +1,17 @@
 import numpy as np
 import os
 import ast
+import re
+import shutil
 import sys
 import sysconfig
 import importlib
 import subprocess
 from pathlib import Path
-from scipy.sparse import spmatrix
 import warnings
 import pybind11
-import networkx as nx
 from .amigo import (
+    abi_version,
     OrderingType,
     reorder_model,
     VectorInt,
@@ -38,10 +39,28 @@ if sys.version_info < (3, 11):
 else:
     from typing import Self, List, Dict
 
+# Names of the modules this process has compiled
+_built_modules = set()
+
 
 def _import_class(module_name: str, class_name: str):
     module = importlib.import_module(module_name)
+
+    # A module built against other headers would crash inside the solver
+    built = getattr(module, "amigo_abi_version", None)
+    if built != abi_version:
+        raise ImportError(
+            f"Model module {module_name} was built for amigo ABI {built}, but amigo "
+            f"is at ABI {abi_version}. Rebuild the model with build_module()."
+        )
     return getattr(module, class_name)
+
+
+def _write_if_changed(path, text: str):
+    """Write the text only when it differs from the file so an unchanged model skips the compile."""
+    path = Path(path)
+    if not path.exists() or path.read_text() != text:
+        path.write_text(text)
 
 
 def _parse_var_expr(expr: str):
@@ -365,14 +384,25 @@ class ModelVector:
     their indices using integers, slices or arrays of intgers.
     """
 
-    def __init__(self, model, x, kind=None):
+    def __init__(self, model, x, kind=None, blank=False):
         self._model = model
         self._x = x
         self.kind = kind
 
+        # A blank vector applies only the entries set through it and a wrapped vector applies all
+        self._assigned = np.zeros(x.get_array().shape, dtype=bool) if blank else None
+
     def get_vector(self):
         """Get the underlying c++ vector instance"""
         return self._x
+
+    def get_assigned(self):
+        """Boolean mask of the entries set in a blank vector, or None when every entry counts as set."""
+        return self._assigned
+
+    def _mark_assigned(self, index):
+        if self._assigned is not None:
+            self._assigned[index] = True
 
     def __getitem__(self, expr):
         if isinstance(expr, (str, list)):
@@ -382,17 +412,18 @@ class ModelVector:
             x_array = self._x.get_array()
             return x_array[expr]
         else:
-            raise KeyError("Key type {expr} not accepted")
+            raise KeyError(f"Key type {expr} not accepted")
 
     def __setitem__(self, expr, item):
         if isinstance(expr, (str, list)):
-            x_array = self._x.get_array()
-            x_array[self._model.get_indices(expr)] = item
+            index = self._model.get_indices(expr)
         elif isinstance(expr, (int, np.integer, slice, np.ndarray)):
-            x_array = self._x.get_array()
-            x_array[expr] = item
+            index = expr
         else:
-            raise KeyError("Key type {expr} not accepted")
+            raise KeyError(f"Key type {expr} not accepted")
+        x_array = self._x.get_array()
+        x_array[index] = item
+        self._mark_assigned(index)
 
     def copy_host_to_device(self):
         self._x.copy_host_to_device()
@@ -444,6 +475,7 @@ class ModelVector:
 
     def copy(self, src: Self):
         self._x.copy(src._x)
+        self._mark_assigned(slice(None))
 
 
 class MetaView:
@@ -472,7 +504,6 @@ class Model:
                 f"module_name '{module_name}' is not a valid identifier. "
                 f"Use only letters, digits, and underscores, starting with a letter or underscore."
             )
-        self._built = False
         self.comp = {}
         self.external_comp = {}
         self.index_pool = GlobalIndexPool()
@@ -888,7 +919,7 @@ class Model:
         resulting KKT system is a 2x2 augmented system (eq. 13).
         """
 
-        if self.module_name is not None and not self._built:
+        if self.module_name is not None and self.module_name not in _built_modules:
             warnings.warn(
                 f"Call model.build_module() before model.initialize(). "
                 f"Module '{self.module_name}' has not been compiled in this session."
@@ -1062,8 +1093,8 @@ class Model:
         return ModelVector(self, self.problem.get_data_vector(), kind="data")
 
     def create_vector(self):
-        """Create a new solution vector"""
-        return ModelVector(self, self.problem.create_vector(), kind="state")
+        """Create a new blank solution vector"""
+        return ModelVector(self, self.problem.create_vector(), kind="state", blank=True)
 
     def create_output_vector(self):
         """Create a new output vector"""
@@ -1105,10 +1136,11 @@ class Model:
         """Retrieve the optimization problem"""
         return self.problem
 
-    def extract_submatrix(self, A: CSRMat | spmatrix, of: List[str], wrt: List[str]):
+    def extract_submatrix(self, A: "CSRMat | spmatrix", of: List[str], wrt: List[str]):
         """
         Given the matrix A, find the sub-matrix A[indices[of], indices[wrt]]
         """
+        from scipy.sparse import spmatrix
 
         of_indices, of_dict = self.get_indices_and_map(of)
         wrt_indices, wrt_dict = self.get_indices_and_map(wrt)
@@ -1185,7 +1217,7 @@ class Model:
         if comm is not None:
             comm.Barrier()
 
-        self._built = True
+        _built_modules.add(self.module_name)
         return
 
     def generate_cpp(self):
@@ -1203,19 +1235,19 @@ class Model:
 
         # C++ file contents
         cpp = '#include "amigo.h"\n'
-        cpp += '#include "a2dcore.h"\n'
+        cpp += '#include "scalar_ad.h"\n'
         cpp += "namespace amigo {"
 
-        # pybind11 file contents
-        py11 = "#include <pybind11/numpy.h>\n"
+        # pybind11 file contents, stamped so an ABI change always recompiles
+        py11 = f"// Generated for amigo ABI {abi_version}\n"
         py11 += "#include <pybind11/pybind11.h>\n"
-        py11 += "#include <pybind11/stl.h>\n"
         py11 += '#include "component_group.h"\n'
         py11 += f'#include "{self.module_name}.h"\n'
         py11 += "namespace py = pybind11;\n"
 
         mod_ident = "mod"
         py11 += f"PYBIND11_MODULE({self.module_name}, {mod_ident}) " + "{\n"
+        py11 += f'  {mod_ident}.attr("amigo_abi_version") = amigo::abi_version;\n'
         py11 += "#ifdef AMIGO_USE_CUDA\n"
         py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::CUDA;\n"
         py11 += "#elif defined(AMIGO_USE_OPENMP)\n"
@@ -1248,13 +1280,8 @@ class Model:
         cpp += "}\n"
         py11 += "}\n"
 
-        filename = self.module_name + ".h"
-        with open(filename, "w") as fp:
-            fp.write(cpp)
-
-        filename = self.module_name + ".cpp"
-        with open(filename, "w") as fp:
-            fp.write(py11)
+        _write_if_changed(self.module_name + ".h", cpp)
+        _write_if_changed(self.module_name + ".cpp", py11)
 
         return
 
@@ -1283,6 +1310,20 @@ class Model:
             build_dir = source_dir / f"_amigo_build{suffix}"
 
         build_dir = build_dir.resolve()
+
+        # CMake refuses a build directory whose cache was written somewhere else
+        cache = build_dir / "CMakeCache.txt"
+        if cache.exists():
+            found = re.search(
+                r"^CMAKE_CACHEFILE_DIR:INTERNAL=(.*)$",
+                cache.read_text(errors="ignore"),
+                re.MULTILINE,
+            )
+            if found and os.path.normcase(os.path.abspath(found.group(1))) != (
+                os.path.normcase(str(build_dir))
+            ):
+                shutil.rmtree(build_dir)
+
         build_dir.mkdir(parents=True, exist_ok=True)
         cmake_pybind11_dir = pybind11.get_cmake_dir()
 
@@ -1303,7 +1344,7 @@ amigo_add_python_module(
     SOURCES {self.module_name}.cpp
 )
 """
-        cmakelists.write_text(cfg_str)
+        _write_if_changed(cmakelists, cfg_str)
 
         # Locate the installed Amigo CMake package inside the Python package
         amigo_cmake_dir = get_cmake_dir()
@@ -1319,16 +1360,13 @@ amigo_add_python_module(
             "-B",
             str(build_dir),
             f"-DCMAKE_PREFIX_PATH={amigo_cmake_dir}",
+            # A cached amigo_DIR from an earlier install would otherwise take precedence
+            f"-Damigo_DIR={amigo_cmake_dir}",
             f"-DPython3_EXECUTABLE={sys.executable}",
             f"-DPython3_INCLUDE_DIR={python_include_dir}",
             f"-Dpybind11_DIR={cmake_pybind11_dir}",
             f"-DCMAKE_BUILD_TYPE={build_type}",
         ]
-
-        # Link the single MKL runtime so the module shares the OpenMP runtime of amigo
-        mkl_rt = Path(sys.prefix) / "Library" / "lib" / "mkl_rt.lib"
-        if sys.platform == "win32" and mkl_rt.exists():
-            cmake_cmd.append("-DBLA_VENDOR=Intel10_64_dyn")
 
         build_cmd = ["cmake", "--build", str(build_dir), "--config", build_type]
 
@@ -1486,6 +1524,7 @@ amigo_add_python_module(
         """
         Create a networkx instance of the model structure
         """
+        import networkx as nx
 
         if not self._initialized:
             raise RuntimeError(

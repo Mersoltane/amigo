@@ -146,30 +146,32 @@ class PassiveNode(ExprNode):
 
 
 class UnaryNode(ExprNode):
+    # Operations that A2D differentiates to second order
     unary_ops = [
         "-",
         "fabs",
         "sqrt",
+        "norm_sqrt",
         "sin",
         "cos",
-        "tan",
         "asin",
         "acos",
         "atan",
         "exp",
-        "sinh",
-        "cosh",
-        "tanh",
-        "asinh",
-        "acosh",
-        "atanh",
         "log",
     ]
 
+    # Operations with no A2D derivatives that would fail when the module compiles
+    unsupported_ops = ["tan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh"]
+
     def __init__(self, op, expr):
         super().__init__()
+        if op in UnaryNode.unsupported_ops:
+            raise NotImplementedError(
+                f"A2D has no derivatives for {op}, write it with exp, log, sin, or cos"
+            )
         if not op in UnaryNode.unary_ops:
-            raise ValueError("Unrecognized unary operation f{}", op)
+            raise ValueError(f"Unrecognized unary operation {op}")
         self.op = op
         self.expr = expr
         self.shape = expr.shape
@@ -199,7 +201,7 @@ class UnaryNode(ExprNode):
 
         if self.op == "-" or self.op == "fabs":
             cost += 1
-        elif self.op == "sqrt":
+        elif self.op in ("sqrt", "norm_sqrt"):
             cost += 20
         elif self.op in trig:
             cost += 100
@@ -266,6 +268,125 @@ class BinaryNode(ExprNode):
             cost += 1
 
         return cost
+
+
+class InterpNode(ExprNode):
+    """Linear interpolation of a data table at a scalar expression on a uniform grid."""
+
+    def __init__(self, table, expr, column=None, x0=0.0, dx=1.0, periodic=False):
+        super().__init__()
+        node = table.node if isinstance(table, Expr) else None
+        if not isinstance(node, VarNode) or node.active:
+            raise TypeError("interp1d reads its table from component data")
+        if node.shape is None or node.shape[0] < 2:
+            raise ValueError("An interpolation table needs at least two samples")
+        if len(node.shape) == 2:
+            if column is None or not 0 <= int(column) < node.shape[1]:
+                raise ValueError(
+                    f"A table of shape {node.shape} needs a column below {node.shape[1]}"
+                )
+            column = int(column)
+        elif column is not None:
+            raise ValueError("Only a 2D table takes a column")
+        if not float(dx) > 0.0:
+            raise ValueError("The grid spacing dx must be positive")
+        if expr.shape is not None:
+            raise ValueError("interp1d takes a scalar argument")
+
+        self.table = table
+        self.expr = expr
+        self.column = column
+        self.x0 = float(x0)
+        self.dx = float(dx)
+        self.periodic = bool(periodic)
+        self.shape = None
+
+    def is_zero(self):
+        return False
+
+    def serialize(self):
+        return (
+            "interp",
+            self.table.serialize(),
+            self.expr.serialize(),
+            self.column,
+            self.x0,
+            self.dx,
+            self.periodic,
+        )
+
+    def to_cpp(self):
+        args = [self.table.to_cpp()]
+        if self.column is not None:
+            args.append(str(self.column))
+        args += [
+            self.expr.to_cpp(),
+            repr(self.x0),
+            repr(self.dx),
+            "true" if self.periodic else "false",
+        ]
+        return f"A2D::interp({', '.join(args)})"
+
+    def is_active(self):
+        return self.expr.is_active()
+
+    def compute_cost(self):
+        return self.expr.compute_cost() + 10
+
+
+class FourierNode(ExprNode):
+    """Real Fourier series with coefficients from a data table at a scalar expression."""
+
+    def __init__(self, table, expr, column=None, period=1.0):
+        super().__init__()
+        node = table.node if isinstance(table, Expr) else None
+        if not isinstance(node, VarNode) or node.active:
+            raise TypeError("fourier reads its coefficients from component data")
+        if node.shape is None:
+            raise ValueError("Fourier coefficients come in an array")
+        if len(node.shape) == 2:
+            if column is None or not 0 <= int(column) < node.shape[1]:
+                raise ValueError(
+                    f"A table of shape {node.shape} needs a column below {node.shape[1]}"
+                )
+            column = int(column)
+        elif column is not None:
+            raise ValueError("Only a 2D table takes a column")
+        if not float(period) > 0.0:
+            raise ValueError("The period must be positive")
+        if expr.shape is not None:
+            raise ValueError("fourier takes a scalar argument")
+
+        self.table = table
+        self.expr = expr
+        self.column = column
+        self.period = float(period)
+        self.shape = None
+
+    def is_zero(self):
+        return False
+
+    def serialize(self):
+        return (
+            "fourier",
+            self.table.serialize(),
+            self.expr.serialize(),
+            self.column,
+            self.period,
+        )
+
+    def to_cpp(self):
+        args = [self.table.to_cpp()]
+        if self.column is not None:
+            args.append(str(self.column))
+        args += [self.expr.to_cpp(), repr(self.period)]
+        return f"A2D::fourier({', '.join(args)})"
+
+    def is_active(self):
+        return self.expr.is_active()
+
+    def compute_cost(self):
+        return self.expr.compute_cost() + 20
 
 
 def _to_expr(val):
@@ -413,6 +534,16 @@ class Expr:
             return cls(UnaryNode(d[1], cls.deserialize(d[2])))
         elif d[0] == "binary":
             return cls(BinaryNode(d[1], cls.deserialize(d[2]), cls.deserialize(d[3])))
+        elif d[0] == "interp":
+            return cls(
+                InterpNode(
+                    cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4], d[5], d[6]
+                )
+            )
+        elif d[0] == "fourier":
+            return cls(
+                FourierNode(cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4])
+            )
         else:
             return ValueError("Unrecognized operation type in deserialize")
 
@@ -430,6 +561,47 @@ class Expr:
 
     def compute_cost(self):
         return self.node.compute_cost()
+
+
+# Number of terms of a long sum that are built together in one stack frame
+_SUM_CHUNK = 8
+
+# Deepest expression the generated code builds in one piece
+_MAX_DEPTH = 24
+
+# Active temporaries deeper than this are built in their own stack frame
+_FRAME_DEPTH = 12
+
+
+def _node_children(node):
+    """Expressions a node is built from, in the order they are serialized."""
+    if isinstance(node, (IndexNode, PassiveNode, UnaryNode)):
+        return [node.expr]
+    if isinstance(node, BinaryNode):
+        return [node.left, node.right]
+    if isinstance(node, (InterpNode, FourierNode)):
+        return [node.table, node.expr]
+    return []
+
+
+def _sum_terms(expr):
+    """Return the terms of the top level sum of an expression in order."""
+    terms, stack = [], [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e.node, BinaryNode) and e.node.op == "+":
+            stack.extend([e.node.right, e.node.left])
+        else:
+            terms.append(e)
+    return terms
+
+
+def _balanced_sum(terms):
+    """Add the terms pairwise to keep the sum shallow."""
+    while len(terms) > 1:
+        pairs = [terms[i] + terms[i + 1] for i in range(0, len(terms) - 1, 2)]
+        terms = pairs + terms[2 * len(pairs) :]
+    return terms[0]
 
 
 class ExprBuilder:
@@ -490,21 +662,18 @@ class ExprBuilder:
 
         # Count up the references to each node, locating temporaries
         for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node["type"] == "unary":
-                self.counts[node["expr"]] += 1
-            elif node["type"] == "binary":
-                self.counts[node["left"]] += 1
-                self.counts[node["right"]] += 1
+            for child in self._operands(self.nodes[i]):
+                self.counts[child] += 1
 
         # Add the temporaries to the list
         for idx in range(len(self.counts)):
-            node = self.nodes[idx]
-            if node["type"] == "unary" or node["type"] == "binary":
-                if self.counts[idx] > 1:
-                    self.temp_list.append(idx)
-                    name = make_temp_name(idx)
-                    self.node_exprs[idx] = Expr(VarNode(name, type=float))
+            if self._operands(self.nodes[idx]) and self.counts[idx] > 1:
+                self.temp_list.append(idx)
+                name = make_temp_name(idx)
+                self.node_exprs[idx] = Expr(VarNode(name, type=float))
+
+        # Long chains end in temporaries so no generated expression grows past _MAX_DEPTH
+        self._limit_depth(make_temp_name)
 
         # Build the expressions
         for idx in self.temp_list:
@@ -512,10 +681,12 @@ class ExprBuilder:
 
         # Set it up so that the temp expressions are in order
         self.temp_exprs = []
+        self.temp_frames = []
         for idx in sorted(set(self.temp_list)):
             # Set whether the temporaries are active or not
             self.node_exprs[idx].set_active_flag(temp_var_exprs[idx].is_active())
             self.temp_exprs.append([self.node_exprs[idx], temp_var_exprs[idx]])
+            self.temp_frames.append(self.depth[idx] > _FRAME_DEPTH)
 
         # Set the new expressions
         self.new_rhs = []
@@ -525,11 +696,26 @@ class ExprBuilder:
         return
 
     def _serialize_expr(self, e: Expr):
-        # Fast path: same Expr object already seen
-        eid = id(e)
-        if eid in self.expr_to_id:
-            return self.expr_to_id[eid]
+        """Number every node of an expression, each after the nodes it is built from.
 
+        An explicit stack walks the expression, so a deep chain built by a long
+        loop of additions does not reach the Python recursion limit.
+        """
+        stack = [(e, False)]
+        while stack:
+            item, ready = stack.pop()
+            if id(item) in self.expr_to_id:
+                continue
+            children = _node_children(item.node)
+            if ready:
+                self._register(item, [self.expr_to_id[id(c)] for c in children])
+            else:
+                stack.append((item, True))
+                stack.extend((c, False) for c in reversed(children))
+        return self.expr_to_id[id(e)]
+
+    def _register(self, e: Expr, child_ids):
+        """Give the node of e an id, shared with any node of identical structure."""
         node = e.node
         if isinstance(node, ConstNode):
             key = ("const", node.name, node.value, node.type)
@@ -549,46 +735,59 @@ class ExprBuilder:
                 "active": node.active,
             }
         elif isinstance(node, IndexNode):
-            expr_id = self._serialize_expr(node.expr)
-            key = ("index", expr_id, node.index)
+            key = ("index", child_ids[0], node.index)
             info = {
                 "type": "index",
-                "expr": expr_id,
+                "expr": child_ids[0],
                 "index": node.index,
             }
         elif isinstance(node, PassiveNode):
-            expr_id = self._serialize_expr(node.expr)
-            key = ("passive", expr_id)
+            key = ("passive", child_ids[0])
             info = {
                 "type": "passive",
-                "expr": expr_id,
+                "expr": child_ids[0],
             }
         elif isinstance(node, UnaryNode):
-            expr_id = self._serialize_expr(node.expr)
-            key = ("unary", node.op, expr_id)
+            key = ("unary", node.op, child_ids[0])
             info = {
                 "type": "unary",
                 "op": node.op,
-                "expr": expr_id,
+                "expr": child_ids[0],
             }
         elif isinstance(node, BinaryNode):
-            left_id = self._serialize_expr(node.left)
-            right_id = self._serialize_expr(node.right)
-            key = ("binary", node.op, left_id, right_id)
+            key = ("binary", node.op, child_ids[0], child_ids[1])
             info = {
                 "type": "binary",
                 "op": node.op,
-                "left": left_id,
-                "right": right_id,
+                "left": child_ids[0],
+                "right": child_ids[1],
+            }
+        elif isinstance(node, InterpNode):
+            options = (node.column, node.x0, node.dx, node.periodic)
+            key = ("interp", child_ids[0], child_ids[1]) + options
+            info = {
+                "type": "interp",
+                "table": child_ids[0],
+                "expr": child_ids[1],
+                "options": options,
+            }
+        elif isinstance(node, FourierNode):
+            options = (node.column, node.period)
+            key = ("fourier", child_ids[0], child_ids[1]) + options
+            info = {
+                "type": "fourier",
+                "table": child_ids[0],
+                "expr": child_ids[1],
+                "options": options,
             }
         else:
             raise TypeError(type(node))
 
         # Structural CSE: catches distinct Expr objects with identical structure
+        eid = id(e)
         if key in self.key_to_id:
-            count = self.key_to_id[key]
-            self.expr_to_id[eid] = count
-            return count
+            self.expr_to_id[eid] = self.key_to_id[key]
+            return
 
         count = self.counter
         self.counter += 1
@@ -597,7 +796,47 @@ class ExprBuilder:
         self.expr_to_id[eid] = count
         self.nodes[count] = info
 
-        return count
+    @staticmethod
+    def _operands(node):
+        """Ids of the operands of an operation node, empty for a leaf."""
+        if node["type"] in ("unary", "interp", "fourier"):
+            return [node["expr"]]
+        if node["type"] == "binary":
+            return [node["left"], node["right"]]
+        return []
+
+    def _sum_spine(self):
+        """Nodes of the top level sum of each right-hand side that _split_sum rebuilds."""
+        spine, stack = set(), list(self.rhs_list)
+        while stack:
+            idx = stack.pop()
+            node = self.nodes[idx]
+            if node["type"] == "binary" and node["op"] == "+" and idx not in spine:
+                spine.add(idx)
+                stack.extend([node["left"], node["right"]])
+        return spine
+
+    def _limit_depth(self, make_temp_name):
+        """Turn each node where a chain grows past _MAX_DEPTH into a temporary.
+
+        A temporary reads as a leaf in the expressions built from it, so each
+        cut bounds the depth of the expression above it. The stack an A2D
+        expression needs grows with the square of its depth, since each level
+        copies the levels below it while the expression is built.
+        """
+        spine = self._sum_spine()
+        temps = set(self.temp_list)
+        self.depth = [0] * len(self.nodes)
+        for idx in range(len(self.nodes)):
+            operands = self._operands(self.nodes[idx])
+            if not operands:
+                continue
+            depth = 1 + max(0 if c in temps else self.depth[c] for c in operands)
+            if depth > _MAX_DEPTH and idx not in spine and idx not in temps:
+                temps.add(idx)
+                self.temp_list.append(idx)
+                self.node_exprs[idx] = Expr(VarNode(make_temp_name(idx), type=float))
+            self.depth[idx] = depth
 
     def _build_expr(self, idx):
         node = self.nodes[idx]
@@ -630,6 +869,22 @@ class ExprBuilder:
                     node["op"],
                     self._build_expr_index(node["left"]),
                     self._build_expr_index(node["right"]),
+                )
+            )
+        elif node["type"] == "interp":
+            expr = Expr(
+                InterpNode(
+                    self._build_expr_index(node["table"]),
+                    self._build_expr_index(node["expr"]),
+                    *node["options"],
+                )
+            )
+        elif node["type"] == "fourier":
+            expr = Expr(
+                FourierNode(
+                    self._build_expr_index(node["table"]),
+                    self._build_expr_index(node["expr"]),
+                    *node["options"],
                 )
             )
 
@@ -766,13 +1021,50 @@ class ExprBuilder:
             if not var.is_active():
                 passive.append(make_passive(var.to_cpp(), rhs.to_cpp()))
 
-        # Add the active lines to the code
-        for var, rhs in self.temp_exprs:
+        # Add the active lines with the deep ones built in their own frame
+        for (var, rhs), own_frame in zip(self.temp_exprs, self.temp_frames):
             if var.is_active():
-                active.append(make_active(var.to_cpp(), rhs.to_cpp()))
+                line = make_active(var.to_cpp(), rhs.to_cpp())
+                if own_frame and mode != "eval":
+                    line = f"amigo::call_noinline([&]() {{ return {line}; }})"
+                active.append(line)
 
         # Add the new expressions
         for lhs, rhs in zip(self.lhs, self.new_rhs):
-            active.append(make_active(lhs.to_cpp(), rhs.to_cpp()))
+            if mode == "eval":
+                active.append(make_active(lhs.to_cpp(), rhs.to_cpp()))
+                continue
+
+            parts, lines = self._split_sum(lhs, rhs, make_active)
+            decl.extend(
+                self.get_declarations(
+                    parts, reference=False, mode=mode, template_name=template_name
+                )
+            )
+            active.extend(lines)
 
         return decl, passive, active
+
+    def _split_sum(self, lhs, rhs, make_active):
+        """Evaluate a long sum in chunks built in separate stack frames."""
+        terms = _sum_terms(rhs)
+        active_terms = [t for t in terms if t.is_active()]
+        if len(active_terms) <= _SUM_CHUNK:
+            return [], [make_active(lhs.to_cpp(), rhs.to_cpp())]
+
+        # One long A2D expression needs stack that grows with the square of its terms
+        name = lhs.to_cpp()
+        base = name[:-2] if name.endswith("__") else name
+        parts, lines = [], []
+        for start in range(0, len(active_terms), _SUM_CHUNK):
+            part = Expr(VarNode(f"{base}{len(parts)}__"))
+            chunk = _balanced_sum(active_terms[start : start + _SUM_CHUNK])
+            line = make_active(part.to_cpp(), chunk.to_cpp())
+            lines.append(f"amigo::call_noinline([&]() {{ return {line}; }})")
+            parts.append(part)
+
+        passive_terms = [t for t in terms if not t.is_active()]
+        total = _balanced_sum(parts + passive_terms)
+        lines.append(make_active(name, total.to_cpp()))
+
+        return parts, lines
