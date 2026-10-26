@@ -341,6 +341,45 @@ install(EXPORT amigoTargets
     DESTINATION "${AMIGO_PY_PACKAGE_DIR}/cmake/amigo"
 )
 
+# Record the dependency targets so models recreate them without the slow find modules
+set(AMIGO_DEPENDENCIES_RECORDED TRUE)
+set(AMIGO_DEPENDENCY_FILES "")
+set(AMIGO_DEPENDENCY_TARGETS "")
+foreach(dep IN ITEMS Threads::Threads MPI::MPI_CXX OpenMP::OpenMP_CXX BLAS::BLAS LAPACK::LAPACK)
+  if(NOT TARGET ${dep})
+    continue()
+  endif()
+
+  # Only interface targets are fully described by their interface properties
+  get_target_property(dep_type ${dep} TYPE)
+  if(NOT dep_type STREQUAL "INTERFACE_LIBRARY")
+    set(AMIGO_DEPENDENCIES_RECORDED FALSE)
+  endif()
+
+  string(APPEND AMIGO_DEPENDENCY_TARGETS
+    "  if(NOT TARGET ${dep})\n"
+    "    add_library(${dep} INTERFACE IMPORTED)\n")
+  foreach(prop IN ITEMS COMPILE_DEFINITIONS COMPILE_OPTIONS INCLUDE_DIRECTORIES
+                        LINK_DIRECTORIES LINK_LIBRARIES LINK_OPTIONS)
+    get_target_property(value ${dep} INTERFACE_${prop})
+    if(NOT value)
+      continue()
+    endif()
+    string(APPEND AMIGO_DEPENDENCY_TARGETS
+      "    set_property(TARGET ${dep} PROPERTY INTERFACE_${prop} [==[${value}]==])\n")
+
+    # The files a target names must still exist when a model recreates it
+    if(prop MATCHES "DIRECTORIES|LIBRARIES")
+      foreach(item IN LISTS value)
+        if(IS_ABSOLUTE "${item}")
+          list(APPEND AMIGO_DEPENDENCY_FILES "${item}")
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+  string(APPEND AMIGO_DEPENDENCY_TARGETS "  endif()\n")
+endforeach()
+
 configure_package_config_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/cmake/amigoConfig.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/amigoConfig.cmake

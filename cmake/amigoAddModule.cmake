@@ -1,6 +1,6 @@
 # Creates a Python extension module that uses the Amigo optimization framework.
+# Run find_package(amigo) first to provide the dependencies.
 # This function handles all the necessary setup including:
-#   - Windows-specific dependency detection (MKL, MS-MPI)
 #   - MSVC compiler configuration for C++17 conformance
 #   - Output directory configuration for multi-config generators
 #   - Linking to Amigo headers and optional CUDA backend
@@ -24,14 +24,6 @@ function(amigo_add_python_module)
     message(FATAL_ERROR "amigo_add_python_module: SOURCES is required")
   endif()
 
-  # ------------------------------------------------------------
-  # Dependencies needed to build a pybind11 module in the consumer
-  # project. We do not call find_package(amigo) here because the
-  # function is only available after the package is already found.
-  # ------------------------------------------------------------
-  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
-  find_package(pybind11 REQUIRED CONFIG)
-
   # CUDA support, if the installed Amigo package was built with CUDA
   if(AMIGO_ENABLE_CUDA)
     if(DEFINED AMIGO_CUDA_ARCHITECTURES AND NOT "${AMIGO_CUDA_ARCHITECTURES}" STREQUAL "")
@@ -40,21 +32,6 @@ function(amigo_add_python_module)
 
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
-  endif()
-
-  # Optional OpenMP if Amigo was built with it
-  if(AMIGO_ENABLE_OPENMP)
-    find_package(OpenMP)
-  endif()
-
-  # These are already required transitively by amigo::headers, but
-  # finding them explicitly here tends to make downstream diagnostics
-  # clearer and keeps imported targets available in the consumer scope.
-  find_package(BLAS REQUIRED)
-  find_package(LAPACK REQUIRED)
-  find_package(MPI REQUIRED COMPONENTS CXX)
-
-  if(AMIGO_ENABLE_CUDA)
     set_source_files_properties(${AMIGO_SOURCES} PROPERTIES LANGUAGE CUDA)
   endif()
 
@@ -97,5 +74,11 @@ function(amigo_add_python_module)
   # transitively by amigo::headers, but linking again here is harmless.
   if(AMIGO_ENABLE_OPENMP AND TARGET OpenMP::OpenMP_CXX)
     target_link_libraries(${AMIGO_NAME} PRIVATE OpenMP::OpenMP_CXX)
+
+    # MSVC models share the LLVM OpenMP runtime of the amigo module
+    if(MSVC)
+      target_compile_options(${AMIGO_NAME} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-openmp:llvm>)
+    endif()
   endif()
 endfunction()

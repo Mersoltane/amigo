@@ -26,14 +26,27 @@ endif()
 # --------------------------------------------------------------------
 # Core dependencies required by exported targets
 # --------------------------------------------------------------------
-find_dependency(Python3 REQUIRED COMPONENTS Development.Module)
+find_dependency(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 find_dependency(pybind11 REQUIRED CONFIG)
-find_dependency(BLAS REQUIRED)
-find_dependency(LAPACK REQUIRED)
-find_dependency(MPI REQUIRED COMPONENTS CXX)
 
-if(AMIGO_ENABLE_OPENMP)
-  find_dependency(OpenMP)
+# Recorded dependency targets are recreated only while every file they name exists
+set(_amigo_recorded @AMIGO_DEPENDENCIES_RECORDED@)
+set(_amigo_recorded_files [==[@AMIGO_DEPENDENCY_FILES@]==])
+foreach(_amigo_file IN LISTS _amigo_recorded_files)
+  if(NOT EXISTS "${_amigo_file}")
+    set(_amigo_recorded FALSE)
+  endif()
+endforeach()
+
+if(_amigo_recorded)
+@AMIGO_DEPENDENCY_TARGETS@
+else()
+  find_dependency(BLAS REQUIRED)
+  find_dependency(LAPACK REQUIRED)
+  find_dependency(MPI REQUIRED COMPONENTS CXX)
+  if(AMIGO_ENABLE_OPENMP)
+    find_dependency(OpenMP)
+  endif()
 endif()
 
 if(AMIGO_ENABLE_CUDA)
