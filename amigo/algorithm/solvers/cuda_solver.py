@@ -1,9 +1,8 @@
 """Full-KKT GPU direct solver using the cuDSS symmetric-indefinite LDL^T.
 
-The augmented KKT system is factorized as-is on device, with no
-condensation. cuDSS pivots statically, so reliability rests on
-quasi-definite regularization, the perturbed-pivot count, the reported
-inertia, and a per-solve residual trust check. Single GPU and in-core.
+The augmented KKT system is factored on device with no condensation.
+Static pivoting rests on quasi-definite regularization and a residual check.
+The solver runs on a single GPU and in core.
 """
 
 from . import LinearSolver

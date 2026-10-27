@@ -6,7 +6,10 @@ from .mesh import RadauMesh
 
 
 def switch_signs(sigma, noise=0.0):
-    """Sign of a switching function at every collocation point, where a value within noise times its largest magnitude takes the sign before it."""
+    """Sign of a switching function at every collocation point.
+
+    A value within noise times its largest magnitude takes the sign before it.
+    """
     sigma = np.asarray(sigma, dtype=float)
     sign = np.where(np.abs(sigma) > noise * np.abs(sigma).max(), np.sign(sigma), 0.0)
     nonzero = np.flatnonzero(sign)
@@ -47,15 +50,9 @@ def split_at_switches(mesh, sigma, parts=4, noise=0.0):
 def switch_estimates(mesh, sigma, control, noise=0.0):
     """Switches of one control-linear component on a mesh from its switching function, Eqs. 25 and 26.
 
-    A sign change of sigma between two collocation points of one interval puts
-    a switch at the average of the midpoint of those points and the midpoint of
-    the two neighboring collocation points with the largest jump in the
-    control in that interval, or at the first midpoint alone when the control
-    does not jump there. A sign change between two intervals puts the switch
-    at their common mesh point. Values of sigma within noise times its largest
-    magnitude count as zero. The switches come back in mesh coordinates with
-    the sign of sigma on each domain they bound, where a negative sign puts the
-    control at its upper limit.
+    A switch inside an interval averages the sigma sign change midpoint and the largest control jump midpoint.
+    The switches come back in mesh coordinates with the sign of sigma on each domain they bound.
+    A negative sign puts the control at its upper limit.
     """
     sigma = np.asarray(sigma, dtype=float)
     control = np.asarray(control, dtype=float)

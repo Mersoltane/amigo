@@ -127,14 +127,9 @@ class FilterLineSearch(FilterAcceptance, LineSearch):
     ):
         """Second-order correction on the first rejection.
 
-        Reuses the current KKT factorization: the rhs keeps the Newton
-        residual's gradient rows but replaces the constraint rows with the
-        corrected violation c_soc = alpha*c_k + c(trial). Iterates while
-        the violation shrinks by kappa_soc per round, and the corrected
-        trial must pass the ordinary acceptance test. A correction step far
-        larger than the Newton step is abandoned, since the linearization no
-        longer describes the trial. Returns the accepted trial tuple or None,
-        leaving the state untouched for the normal backtracking.
+        Each round reuses the factorization with constraint rows c_soc = alpha * c_k + c(trial).
+        A round that fails to shrink the violation by kappa_soc ends the correction.
+        Returns the accepted trial tuple or None with the state untouched.
         """
         max_soc = self.options["filter_max_soc"]
         kappa_soc = self.options["filter_kappa_soc"]

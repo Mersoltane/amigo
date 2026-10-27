@@ -74,10 +74,8 @@ class FunnelLineSearch(FilterLineSearch):
     def compute_alpha_min(self, base):
         """Smallest step length tried before restoration.
 
-        Outside the funnel it is the step at which the linear violation model
-        (1 - alpha) theta re-enters beta times the width. Inside it is the
-        smallest step at which an h-type or f-type acceptance is still
-        possible under the linear models of theta and phi.
+        Outside the funnel the linear model (1 - alpha) theta must re-enter beta times the width.
+        Inside it is the smallest step where an h-type or f-type acceptance is still possible.
         """
         alpha_min_frac = 0.05
         theta = base.ref_theta

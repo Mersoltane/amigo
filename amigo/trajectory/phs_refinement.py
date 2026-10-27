@@ -1,10 +1,8 @@
 """The phs mesh refinement of Haman and Rao for Radau collocation.
 
-G. V. Haman III and A. V. Rao, Adaptive mesh refinement and error estimation
-method for optimal control using direct collocation, arXiv 2410.07488, 2024.
-Equation numbers and lines below refer to that paper and its Algorithm 1. The
-paper collocates at the standard Radau points, and the flipped points use the
-same definitions.
+The reference is G. V. Haman III and A. V. Rao, arXiv 2410.07488, 2024.
+Equation numbers and lines below refer to that paper and its Algorithm 1.
+The flipped points use the same definitions as its standard Radau points.
 """
 
 import math
@@ -99,14 +97,11 @@ def _gap(polynomial, t, y, gamma):
 
 
 def _fly(solution, k, dynamics, start, span, options, direction, limit=None):
-    """Times and states of a flight under the control polynomial of interval k, Eqs. 21 to 23, 31, and 32.
+    """Times and states flown under the control polynomial of interval k, Eqs. 21 to 23, 31, and 32.
 
-    The control is the Lagrange polynomial through the collocation controls of
-    interval k and is carried past the interval when the span leaves it. The
-    states are taken at the solver steps and at evenly spaced points of every
-    interval that the span crosses. A limit holds the state polynomial and the
-    tolerance of a merge test, and the flight then stops at the first solver
-    step whose scaled gap exceeds the tolerance and returns None.
+    The control carries past the interval when the span leaves it.
+    States are taken at the solver steps and at evenly spaced points of every crossed interval.
+    A limit holds a merge test, and the flight returns None at the first step past its tolerance.
     """
     mesh = solution.mesh
     t_mesh = mesh_time(mesh.points, solution.t0, solution.tf)
@@ -194,16 +189,11 @@ def simulated_errors(solution, dynamics, options):
 
 
 def path_violations(solution, constraints, options):
-    """Largest violation of the path constraints between the points of every interval, where it lies, and whether one is active.
+    """Largest path violation between the points of every interval, its place, and whether one is active.
 
-    constraints(states, controls, t) returns values that are feasible at or
-    below zero and scaled so that the tolerance applies to them. The NLP holds
-    them only at the collocation points, so they are evaluated on the state and
-    control polynomials of each interval at its support points and at evenly
-    spaced points. The place of the largest violation is a mesh coordinate, or
-    nan where nothing is violated. A constraint is active on an interval when
-    it lies within the tolerance of its bound at one of its collocation points.
-    These tests go beyond Algorithm 1.
+    constraints(states, controls, t) returns scaled values that are feasible at or below zero.
+    The place of the largest violation is a mesh coordinate and nan where nothing is violated.
+    A constraint is active within the tolerance of its bound at a collocation point.
     """
     mesh = solution.mesh
     violations = np.zeros(mesh.num_intervals)
@@ -236,12 +226,11 @@ def constraint_samples(solution, k, constraints, options):
 
 
 def touch_points(solution, constraints, options, margin=None):
-    """Times inside the phase where a path constraint reaches a local maximum within a margin of its bound, with its column.
+    """Times inside the phase where a path constraint peaks within a margin of its bound, with its column.
 
-    These are the touch points of Jacobson, Lele, and Speyer, where a state
-    constraint meets its boundary at a single time instead of along an arc.
-    The constraints are sampled as in path_violations, so a touch is found to
-    the spacing of the samples, and the margin is the tolerance unless given.
+    A touch point of Jacobson, Lele, and Speyer meets the bound at one time instead of along an arc.
+    A touch is found to the spacing of the constraint samples.
+    The margin is the tolerance unless given.
     """
     margin = options.tolerance if margin is None else margin
     times, values = [], []
@@ -265,11 +254,9 @@ def touch_points(solution, constraints, options, margin=None):
 def pair_error(solution, k, dynamics, options, gamma):
     """Largest relative error of the flights across intervals k and k + 1, Eqs. 30 to 34.
 
-    The forward flight carries the control polynomial of interval k into
-    interval k + 1 and the backward flight carries that of interval k + 1 back
-    into interval k. Only an error within the tolerance matters to the merge,
-    so a flight stops at the first solver step past the tolerance. The error
-    is then infinite, as it is when the ODE solver cannot finish a flight.
+    The forward flight carries the control of interval k and the backward that of interval k + 1.
+    A flight stops at the first solver step past the tolerance.
+    The error is then infinite, as it is when a flight fails.
     """
     polynomial = _polynomial(solution, k, k + 1)
     try:
@@ -282,13 +269,11 @@ def pair_error(solution, k, dynamics, options, gamma):
 
 
 def merge_error(solution, k, options, gamma):
-    """Largest relative error of the one polynomial that would replace intervals k and k + 1, a test beyond Eq. 34.
+    """Largest relative error of one polynomial over intervals k and k + 1, a test beyond Eq. 34.
 
-    The polynomial has the points of Eq. 35 and interpolates the state
-    polynomials of both intervals at its support points. It is compared with
-    them at their own support points and at evenly spaced points of each.
-    Eq. 34 carries only the control across the pair, while this test asks
-    whether one polynomial can follow the state over both.
+    The polynomial has the points of Eq. 35 and interpolates the state polynomials of both intervals.
+    It is compared with them at their support points and at evenly spaced points.
+    Eq. 34 carries only the control across the pair and this test follows the state over both.
     """
     mesh = solution.mesh
     t_mesh = mesh_time(mesh.points, solution.t0, solution.tf)
@@ -332,18 +317,9 @@ def p_reduction(n, error, options):
 def refine(solution, errors, dynamics, options, reduce=True, keep=None, cuts=None):
     """The next mesh and the action on every interval, lines 19 to 36 of Algorithm 1.
 
-    An interval above the tolerance gets the points of Eq. 27, or splits into
-    the equal subintervals of Eq. 28 with the fewest points when that passes
-    the most points. Neighbors within the tolerance merge when their flights
-    across both meet it and one polynomial would follow their state within it,
-    in order of increasing error, each interval at most once, and keep the
-    larger point count by Eq. 35. Every other interval within the tolerance
-    drops points by Eq. 36. Without reduce, intervals within the tolerance keep
-    their points and no neighbors merge. An interval marked in keep, where a
-    path constraint is active, neither merges nor drops points. An interval
-    with a cut inside it, where a path constraint slips most between its
-    points, splits there into two halves with its points, so the NLP holds the
-    constraint at that place on the next mesh.
+    An interval above the tolerance gets the points of Eq. 27 or splits by Eq. 28.
+    With reduce, neighbors within the tolerance merge and other intervals drop points by Eq. 36.
+    An interval in keep never merges or drops points, and an interval with a cut splits there.
     """
     mesh = solution.mesh
     within = errors <= options.tolerance
@@ -426,13 +402,9 @@ def next_mesh(solution, errors, dynamics, options, solved, growing, keep=None, c
 class PHSRefinement(MeshRefinement):
     """The phs mesh refinement of Haman and Rao in the loop of MeshRefinement.
 
-    dynamics(states, controls, t) returns the rates of the states with respect
-    to time at a set of points, and the optional constraints(states, controls,
-    t) the path constraints of path_violations. Beyond Algorithm 1, a phase
-    that gets back a mesh it already solved or violates a path constraint
-    between its points only gains points from then on, an interval with a
-    violation splits where it is largest, and an interval where a constraint
-    is active is never coarsened.
+    dynamics(states, controls, t) returns the state rates and constraints the path constraints.
+    Beyond Algorithm 1, a violated interval splits at the violation and an active one never coarsens.
+    A repeated mesh or a violation makes the phase only gain points from then on.
     """
 
     def __init__(self, options, dynamics, constraints=None):

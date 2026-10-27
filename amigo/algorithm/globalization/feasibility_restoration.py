@@ -1,28 +1,8 @@
 """Feasibility restoration on the l1 violation, as in Waechter and Biegler.
 
-When the main phase fails at a point, the phase solves the restoration
-problem of IPOPT
-
-    min  rho sum(p + n) + (eta / 2) ||D_R (x - x_R)||^2
-    s.t. c(x) - b - p + n = 0,  x_L <= x <= x_U,  p, n >= 0
-
-with eta = sqrt(mu_R) and D_R = min(1, 1 / |x_R|) by a primal-dual barrier
-method, so it minimizes the l1 violation that the main filter measures. The
-elastic variables p and n move with their bound multipliers z_p and z_n
-under the fraction to the boundary rule. Eliminating them leaves the KKT
-matrix of the main problem with the constraint diagonal -(p / z_p + n / z_n),
-so each step factors the same structure. The constraint multipliers start at
-zero and the bound multipliers of x at min(rho, z). A filter line search on
-the barrier objective and the violation of the restoration problem accepts
-the steps, and the barrier follows the monotone rule.
-
-The phase succeeds once the violation falls below resto_required_reduction
-times the violation at the failure point and the main filter accepts the
-point. The main phase then resumes at its own barrier parameter with bound
-duals centered at mu / gap. On failure the failure point comes back, unless
-the restoration problem is solved to the acceptable tolerance while the
-largest violation stays above 100 times the tolerance, which marks the point
-as locally infeasible.
+A primal-dual barrier method solves the IPOPT restoration problem
+    min rho sum(p + n) + (eta / 2) ||D_R (x - x_R)||^2  s.t.  c(x) - b - p + n = 0
+The phase succeeds once the violation meets its target at a point the main filter accepts.
 """
 
 import numpy as np

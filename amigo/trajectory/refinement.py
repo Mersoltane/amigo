@@ -1,12 +1,8 @@
 """The hp mesh refinement of Liu, Hager, and Rao for Radau collocation.
 
-F. Liu, W. W. Hager, and A. V. Rao, An hp mesh refinement method for optimal
-control using discontinuity detection and mesh size reduction, 53rd IEEE
-Conference on Decision and Control, 2014. Equation and section numbers below
-refer to that paper unless they name Ref. 8, which is M. A. Patterson,
-W. W. Hager, and A. V. Rao, A ph mesh refinement method for optimal control,
-Optimal Control Applications and Methods 36, 2015, the source of its error
-estimate.
+The reference is Liu, Hager, and Rao, 53rd IEEE Conference on Decision and Control, 2014.
+Equation and section numbers below refer to that paper unless they name Ref. 8.
+Ref. 8 is Patterson, Hager, and Rao, Optimal Control Applications and Methods 36, 2015, the source of its error estimate.
 """
 
 import math
@@ -63,11 +59,9 @@ class RefinementOptions:
 def integrated_states(solution, k, dynamics):
     """States of interval k integrated to the support points of N_k + 1 Radau points, Eq. 28 of Ref. 8.
 
-    The state and control polynomials of the solution are evaluated at the
-    M_k = N_k + 1 Radau points, the dynamics are evaluated there, and the
-    M_k by M_k Radau integration matrix carries the state from the interval
-    start to every later support point. The first value is the state at the
-    interval start.
+    The polynomials and the dynamics are evaluated at the M_k = N_k + 1 Radau points.
+    The Radau integration matrix carries the state from the interval start to each later point.
+    The first value is the state at the interval start.
     """
     mesh = solution.mesh
     n = int(mesh.degrees[k])
@@ -91,10 +85,8 @@ def integrated_states(solution, k, dynamics):
 def relative_errors(solution, dynamics):
     """Largest relative state error on every interval, Eqs. 14 and 15.
 
-    On interval k the state polynomial is evaluated on the support points of
-    N_k + 1 Radau points and compared with the state integrated to the same
-    points. Each component of the difference is divided by one plus the
-    largest magnitude of that component there.
+    The state polynomial and the integrated state are compared on the support points of N_k + 1 Radau points.
+    Each component of the difference is divided by one plus its largest magnitude there.
     """
     mesh = solution.mesh
     errors = np.empty(mesh.num_intervals)
@@ -111,10 +103,9 @@ def relative_errors(solution, dynamics):
 def smoothness(previous, current):
     """Number of continuous derivatives q from one interval on two meshes, Eqs. 17 and 18.
 
-    previous holds the width, the collocation points, and the relative error
-    of an interval on mesh j, and current the same of an interval of mesh
-    j + 1 inside it. Taking logarithms of the two equalities and eliminating
-    c leaves q. The result is None when the two meshes do not determine q.
+    previous holds the width, the points, and the error on mesh j and current the same for an interval inside it.
+    Logarithms of the two equalities eliminate c and leave q.
+    The result is None when the two meshes do not determine q.
     """
     (h0, n0, e0), (h1, n1, e1) = previous, current
     if min(h0, h1, e0, e1) <= 0.0:
@@ -161,10 +152,9 @@ def h_refinement(error, q, options):
 def p_refinement(n, error, q, options):
     """Collocation points and number of equal subintervals for an interval with q > Q, Eqs. 24 and 25.
 
-    Eq. 24 raises the error ratio to the power 1/(q - 5/2), so a q just above
-    the threshold asks for many points, and Eq. 25 splits the interval into
-    ceil(N_new/N) subintervals with no cap. Where q is taken as N on a first
-    mesh, a single refinement can grow the mesh by orders of magnitude.
+    Eq. 24 raises the error ratio to the power 1/(q - 5/2) and asks for many points just above Q.
+    Eq. 25 splits the interval into ceil(N_new/N) subintervals with no cap.
+    A first mesh takes q as N and one refinement can then grow the mesh by orders of magnitude.
     """
     points = math.ceil(n * math.exp(math.log(error / options.tolerance) / (q - 2.5)))
     if points > options.max_points:
@@ -214,13 +204,9 @@ def truncated_values(values, flipped, n):
 def merge_bound(left, right, h_left, h_right, flipped):
     """Bound on the gap between two neighbor state polynomials over the smaller interval, Sec. IV-C.4.
 
-    left and right hold the values of the two polynomials on the support
-    points of their common degree, and h_left and h_right are the half
-    widths. Each polynomial is expanded about the shared mesh point and
-    rescaled to the smaller half width hbar, so that over the smaller
-    interval the gap is at most the sum over j of 2**j times the gap between
-    the coefficients of power j. The bound is the largest over the state
-    components.
+    left and right hold values on the support points and h_left and h_right the half widths.
+    Each polynomial expands about the shared mesh point and rescales to the smaller half width.
+    The bound sums 2**j times the gap of the power j coefficients and takes the largest component.
     """
     left = np.asarray(left, dtype=float).reshape(len(left), -1)
     right = np.asarray(right, dtype=float).reshape(len(right), -1)
@@ -247,12 +233,11 @@ class _Piece:
 
 
 def refine(solution, errors, q, options):
-    """The next mesh, the interval of the current mesh that holds each of its intervals, and the action on each current interval.
+    """The next mesh, the parent of each of its intervals, and the action on each current interval.
 
-    An interval above the tolerance is split when q <= Q and gets more
-    collocation points when q > Q. An interval within the tolerance drops its
-    negligible powers, and two neighbors within the tolerance merge when
-    their polynomials agree. A merged interval has the parent -1.
+    An interval above the tolerance splits when q <= Q and gets more points when q > Q.
+    An interval within the tolerance drops its negligible powers.
+    Neighbors within the tolerance merge when their polynomials agree, with the parent -1.
     """
     mesh = solution.mesh
     pieces = []

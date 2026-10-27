@@ -1,11 +1,8 @@
 """Amigo's native LDL direct solver for the KKT system.
 
-Wraps the C++ SparseLDL factorization. The KKT matrix is equilibrated by
-symmetric Ruiz scaling before each factorization, so threshold pivoting and
-the zero-pivot tolerance act on entries of order one. Each solve takes a
-few refinement steps toward the backward error tolerance, and a solve that
-stays inaccurate raises the pivot threshold for the next factorization.
-Scaling is a congruence, so the inertia is that of the original matrix.
+The C++ SparseLDL factors the KKT matrix after symmetric Ruiz equilibration.
+Equilibration lets the pivot tolerances act on entries of order one.
+The scaling is a congruence and keeps the inertia of the original matrix.
 """
 
 import numpy as np

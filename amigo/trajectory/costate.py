@@ -1,9 +1,8 @@
 """Costate estimates from the multipliers of collocated defects, Eq. 22 of Agamawi, Hager, and Rao.
 
-The multipliers of collocated constraints enter the Lagrangian of amigo with
-a plus sign and stand for the continuous costate times the quadrature weight
-of their point, so dividing them by the right weight and flipping the sign
-estimates the costate of the minimum principle at the collocation points.
+The multipliers enter the Lagrangian of amigo with a plus sign.
+Each stands for the costate times the quadrature weight of its point.
+Dividing by the weight and flipping the sign gives the costate of the minimum principle.
 """
 
 import numpy as np
@@ -14,11 +13,9 @@ from .mesh import differentiation_matrix, radau_weights
 def defect_weights(mesh):
     """Radau weight over the row scaling of the derivative defect at every collocation point of a mesh.
 
-    A defect row in the differentiation form is the derivative of the state
-    polynomial minus the rates, scaled by its interval duration and by the
-    row weight one over the largest magnitude of its differentiation row, so
-    the multiplier times the row weight over the Radau weight estimates the
-    costate.
+    A defect row scales by its interval duration and by a row weight.
+    The row weight is one over the largest magnitude of its differentiation row.
+    The multiplier times the row weight over the Radau weight gives the costate.
     """
     weights = []
     for n in mesh.degrees:

@@ -1,12 +1,8 @@
 """The mesh refinement loop that every refinement method runs, and the records it keeps.
 
-Each pass of the loop solves the NLP on the meshes of all phases, assesses
-every interval of every phase, and stops once every interval meets the
-tolerance or the solve fails. Otherwise each phase above the tolerance gets its
-next mesh from the method, while a phase within it keeps its mesh, as Agamawi,
-Hager, and Rao refine only the phases that miss it. A method supplies the
-assessment and the decision, so one loop runs the hp method of Liu, Hager, and
-Rao and the phs method of Haman and Rao.
+Each pass solves the NLP on all phases and assesses every interval.
+Only a phase above the tolerance gets a new mesh, as in Agamawi, Hager, and Rao.
+A method supplies the assessment and the decision.
 """
 
 from dataclasses import dataclass, field
@@ -65,7 +61,11 @@ class Assessment:
 
 
 def best_iteration(history, tolerance):
-    """Position of the entry of a refinement history that stands, the last when it meets the tolerance or else the converged one of least error."""
+    """Position of the entry of a refinement history that stands.
+
+    The last entry stands when it meets the tolerance.
+    Otherwise the converged entry of least error stands.
+    """
     # An entry of a history of phases holds one iteration per phase
     entries = [entry if isinstance(entry, list) else [entry] for entry in history]
     errors = [max(float(np.max(step.errors)) for step in entry) for entry in entries]
@@ -122,16 +122,9 @@ class MeshRefinement:
     def run(self, meshes, solve, first=None, stop=None):
         """Solve on a sequence of meshes until every interval of every phase meets the tolerance.
 
-        meshes is one RadauMesh or a list with one per phase. solve(meshes,
-        previous) returns the MeshSolution of every phase on its mesh, one or
-        a list as given, and may start from the previous solutions, which are
-        None on the first meshes. first holds solutions already solved on the
-        first meshes, one or a list as given, which the loop assesses without
-        solving them again. stop(solutions) ends the loop after a mesh whose
-        NLP converged when it returns True. The loop stops at the first mesh
-        whose NLP did not converge and gives it no error estimate, since it
-        describes no solution. The history holds one iteration per mesh for
-        one phase and a list of iterations per mesh for several.
+        solve maps the meshes and the previous solutions to one solution per phase.
+        first holds solutions already solved on the first meshes.
+        The loop ends when stop returns True or a solve fails to converge.
         """
         single = isinstance(meshes, RadauMesh)
         meshes = [meshes] if single else list(meshes)

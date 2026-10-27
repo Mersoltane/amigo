@@ -1,15 +1,8 @@
 """Classification of a solve into regimes from the signals of each iteration.
 
-The monitor reads the quantities the logger assembles and labels every
-iteration easy, hard, jam, or stuck, changing its label only after three
-iterations of agreement. An easy iteration takes a nearly full step with no
-Hessian perturbation. A hard iteration needs the perturbation but still
-moves. A jam iteration backtracks to a tiny step along a large direction
-while the error stands still, the signature of a KKT matrix whose inertia
-is correct but whose constraints are nearly singular. A stuck iteration
-leaves the constraint violation in place although the dual error is small,
-which leans toward infeasibility. The monitor only observes, so the label
-is free to read and free to ignore.
+Easy takes a near full step with no perturbation and hard needs the perturbation.
+Jam backtracks to a tiny step with the error flat and stuck keeps its violation.
+The label changes only after three iterations of agreement and steers nothing.
 """
 
 from collections import deque

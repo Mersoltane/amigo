@@ -6,16 +6,9 @@ from scipy.sparse import csr_matrix
 class PardisoSolver(DirectSparseSolver):
     """Sparse LDL^T solver via Intel MKL PARDISO with inertia detection.
 
-    Uses symmetric indefinite factorization (mtype=-2) which provides
-    exact inertia (positive/negative eigenvalue counts) after factorization.
-    This enables inertia correction for nonconvex optimization.
-
-    The upper-triangle sparsity structure is cached at construction time
-    so that factor() only copies data (O(nnz)) without rebuilding the
-    CSR structure. Passing the same matrix object to pypardiso lets it
-    skip symbolic analysis (phase 11) after the first factorization.
-
-    Falls back to DirectScipySolver if pypardiso is not installed.
+    The symmetric indefinite factorization with mtype -2 reports the exact inertia.
+    The upper triangle structure is cached once and factor only copies the data.
+    Reusing one matrix object lets pypardiso skip the symbolic analysis.
     """
 
     supports_inertia = True

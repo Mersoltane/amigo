@@ -1,9 +1,8 @@
-"""Quality-function (adaptive) barrier strategy.
+"""Adaptive barrier strategy based on the quality function.
 
-Picks the next mu from a predictor-corrector estimate or a golden-section
-search on the quality function, falling back to a monotone decrease when
-the picked mu stops making progress. The picked mu never exceeds the
-initial barrier parameter.
+The next mu comes from a predictor-corrector estimate or a golden section search.
+A monotone decrease takes over when the picked mu stops making progress.
+The picked mu never exceeds the initial barrier parameter.
 """
 
 import numpy as np

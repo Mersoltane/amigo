@@ -1,9 +1,8 @@
 """Center the primal-dual iterate for the current barrier parameter.
 
-Cold starts and the presolve project the primals with the standard push and
-set the flat bound duals z = mu. Warm starts keep the supplied multipliers,
-push the primals by a small amount, and keep the bound duals of the previous
-solve when they are available.
+Cold starts and the presolve project the primals with the standard push and set z = mu.
+Warm starts keep the supplied multipliers and push the primals by a small amount.
+Warm starts also keep the bound duals of the previous solve when they are available.
 """
 
 

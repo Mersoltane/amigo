@@ -81,14 +81,9 @@ class MultiplierInitializer:
     def compute_least_squares_multipliers(self, evaluator, solver, state):
         """Replace the multipliers by their least-squares estimate when that lowers the dual infeasibility.
 
-        Solves the normal-equation system
-
-            [ I  A^T ] [ w      ]   [ -(grad_f - zl + zu) ]
-            [ A   0  ] [ lambda ] = [         0           ]
-
-        whose (1,1) block is the identity, so lambda minimizes the dual
-        infeasibility norm and w is discarded. An estimate above
-        constr_mult_init_max is discarded. Returns True when taken.
+        The normal equations give the lambda that minimizes the dual residual norm
+            || grad_f - zl + zu + A^T lambda ||
+        Returns True when the estimate stays under constr_mult_init_max and is taken.
         """
         x = state.get_current_point()
         primal_indices = self.problem.get_primal_indices()

@@ -1,23 +1,8 @@
-"""The solve of a bang-bang problem at each value of a parameter, trying the cheapest way first and escalating only when it fails.
+"""The solve of a bang-bang problem at each value of a parameter, cheapest way first.
 
-A step carries the arcs of a near value first, with a budget of iterations
-on each solve. When they do not serve, the jump of Agamawi, Hager, and Rao
-solves the single phase straight to the objective and reads its arcs from
-the switching function, again with a budget. When that fails too, the
-quadratic homotopy of Bertrand and Epenoy carries the single phase from
-energy toward the objective, its arcs are read on its own mesh, and the
-smoothed problem is refined for a second reading only when they do not
-stand. Last, the single phase of the objective is refined on a few meshes,
-as Agamawi, Hager, and Rao do when no arcs serve. Every solve of arcs refines them with the phs method and
-changes their layout where they ask for it. Arcs that touch a path constraint
-split there at a contact event, an arc that shrinks to its floor goes to its
-neighbors, and wherever the switching function disagrees with an arc, as the
-check of Maurer, Buskens, Kim, and Kaya finds, an arc of the other kind goes
-in while that lowers the objective as Shamsi requires. Each new layout starts
-from the arcs it came from on their own meshes. A family follows its values
-with Homotopy, so a value that fails gets a value halfway to it before the
-family stops. Every stage is recorded with its outcome and the iterations it
-took.
+A step tries carried arcs and then the jump of Agamawi, Hager, and Rao.
+The homotopy of Bertrand and Epenoy and a refined single phase follow.
+Arcs refine with the phs method and relay where the check of Maurer, Buskens, Kim, and Kaya asks.
 """
 
 from dataclasses import dataclass, field
@@ -291,19 +276,11 @@ class BangBangSolver:
         return kept
 
     def solve_arcs(self, source, sigma, given=None, carry=None, noise=0.0, budget=None, effort=None, search=False):
-        """The arcs read from the switching function of a source or given or carried, solved with free switch times, with the size of every mesh.
+        """Solved arcs from a source or given or carried, with free switch times and every mesh size.
 
-        The refinement of a layout stops at the first mesh where its arcs
-        touch a path constraint, which splits the arc there into two of its
-        kind joined by a contact event, or where an arc shrinks to its floor,
-        which its neighbors then take over. Arcs whose switching function asks
-        for arcs of the other kind get them, each new layout starting from the
-        arcs it came from on their own meshes. A solve that probes refines
-        every layout to the mesh tolerance, while a solve that searches lets
-        its layouts settle at the layout tolerance and refines the one that
-        stands. New arcs stand while they lower the objective, a layout the
-        switching function asked for before is never asked twice, and a solve
-        that spends the effort given to its stage returns what it holds.
+        A layout relays at contact events, at collapsed arcs, and where the switching function disagrees.
+        New arcs stand only when they lower the objective, as Shamsi requires, and no layout is tried twice.
+        A search settles each layout at the layout tolerance and refines the one that stands.
         """
         problem, options = self.problem, self.options
         rough_tolerance = max(options.layout_tolerance, options.tolerance) if search else options.tolerance
@@ -591,12 +568,11 @@ class BangBangSolver:
         return out
 
     def family(self, values, start, on_step=None, previous=None):
-        """Steps along the values of the parameter from a start, each from the last that converged, with a value that fails halved toward it.
+        """Steps along the values of the parameter from a start, each from the last that converged.
 
-        Values lie at most max_step apart, so that each step can carry the
-        arcs of the last. on_step(step) sees every step as it ends, also those
-        at values put between. A family resumes from the step of an earlier
-        value given as previous, which then replaces the start.
+        A value that fails gets a value halfway to it before the family stops.
+        on_step(step) sees every step as it ends, also those at values put between.
+        Given previous, the family resumes from that step instead of the start.
         """
         def solve(value, prior):
             step = self.step(value, prior, start if prior is None and previous is None else None)

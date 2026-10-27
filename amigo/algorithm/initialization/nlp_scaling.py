@@ -1,10 +1,8 @@
 """Gradient-based NLP scaling, computed once at the start point.
 
-Scales the objective through state.obj_scale and each constraint at the
-problem boundary, so the derivatives run in scaled space. The solver works
-with scaled multipliers lambda_s = obj_scale * lambda / dc and scaled bound
-duals z_s = obj_scale * z, while every point passed in or returned holds the
-unscaled values.
+The objective scales through state.obj_scale and each constraint at the problem boundary.
+The solver works with lambda_s = obj_scale * lambda / dc and z_s = obj_scale * z.
+Every point passed in or returned holds the unscaled values.
 """
 
 import numpy as np

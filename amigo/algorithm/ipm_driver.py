@@ -1,10 +1,8 @@
 """Primal-dual interior-point optimizer.
 
-The Optimizer class composes the algorithmic pieces from the sibling modules
-and runs the main iteration loop.  Each iteration evaluates the KKT
-residual, checks convergence, updates the barrier parameter, computes
-a Newton direction, runs a line search, and handles step acceptance
-or feasibility restoration.
+The Optimizer class composes the sibling modules into the main loop.
+Each iteration checks convergence, updates the barrier, and takes a Newton step.
+A line search accepts the step or hands the iterate to restoration.
 """
 
 import time
@@ -108,13 +106,9 @@ class Optimizer:
     ):
         """Initialize the optimizer.
 
-        Every call to optimize starts from the model initial point and writes
-        the solution into x. The values in x, lower, and upper are written into
-        the model initial point and bounds, except that a blank vector from
-        model.create_vector() contributes only the entries set in it, so an
-        unset blank vector changes nothing. A warm start replaces the whole
-        initial point and the bound duals before x applies its entries, and
-        every solve then begins with the warm start initialization.
+        Every solve starts from the model initial point and writes the solution into x.
+        The entries set in x, lower, and upper write into the model start and bounds.
+        A warm start replaces the model start and the bound duals before x goes on top.
 
         Parameters
         ----------

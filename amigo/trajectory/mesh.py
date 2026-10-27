@@ -93,11 +93,9 @@ def integration_matrix(n, flipped=False):
 class RadauMesh:
     """Mesh intervals on [-1, 1] with the number of Radau collocation points in each.
 
-    The number of collocation points in an interval is also the degree of the
-    state polynomial there. The state is stored on the support points of every
-    interval, and two neighbors share the support point at their common mesh
-    point, so interval k holds states offsets[k] to offsets[k + 1] and controls
-    offsets[k] to offsets[k + 1] - 1.
+    The number of collocation points in an interval is also its state polynomial degree.
+    The state lives on the support points and two neighbors share their common mesh point.
+    Interval k holds states offsets[k] to offsets[k + 1] and controls offsets[k] to offsets[k + 1] - 1.
     """
 
     def __init__(self, points, degrees, flipped=False):
@@ -222,11 +220,9 @@ def mesh_time(tau, t0, tf):
 def carry_densities(old_mesh, new_mesh, values, old_weights, new_weights):
     """Values at the collocation points of one mesh moved to another as densities over the given weights.
 
-    Each value is divided by the weight of its point, the quotients are carried
-    by the polynomial through the collocation points of each interval of the
-    old mesh, and the results at the new collocation points are multiplied by
-    their weights. Multipliers of collocated constraints behave like a weight
-    times a smooth density, so this moves them between meshes for a warm start.
+    Each value is divided by the weight of its point and carried by the interval polynomials.
+    The results at the new collocation points are multiplied by their weights.
+    Multipliers behave like a weight times a smooth density and move this way for a warm start.
     """
     values = np.asarray(values, dtype=float)
     shape = (-1,) + (1,) * (values.ndim - 1)

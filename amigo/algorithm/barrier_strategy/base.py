@@ -87,9 +87,8 @@ class BarrierStrategy(ABC):
         pass
 
     def update_after_line_search(self, info, evaluator, state):
-        """
-        Update any internal state required after the results of a line search
+        """Update internal state after the results of a line search.
 
-        Default behavior is to adjust the barrier parameter if small steps are taken
+        The default adjusts the barrier parameter after small steps.
         """
         pass

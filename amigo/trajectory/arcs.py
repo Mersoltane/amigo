@@ -1,4 +1,7 @@
-"""Solutions held as consecutive arcs that meet at switches, as the bang-bang method of Agamawi, Hager, and Rao solves them."""
+"""Solutions held as consecutive arcs that meet at switches.
+
+The arcs follow the bang-bang method of Agamawi, Hager, and Rao.
+"""
 
 import numpy as np
 
@@ -28,7 +31,10 @@ def combine_arcs(solutions):
 
 
 def split_arcs(solution, edges):
-    """Solutions of the arcs between consecutive edge times on their own meshes, from one solution with a mesh point at every edge."""
+    """Solutions of the arcs between consecutive edge times on their own meshes.
+
+    The given solution must have a mesh point at every edge time.
+    """
     mesh = solution.mesh
     times = mesh_time(mesh.points, solution.t0, solution.tf)
     index = []
@@ -77,8 +83,9 @@ def stretch_arcs(solutions, tf):
 
 
 def switching_arcs(solution, sigma, control, noise=0.0):
-    """Edge times of the arcs a switching function bounds on a solution and its sign on each arc, Section 5.2 of Agamawi, Hager, and Rao.
+    """Edge times and arc signs of a switching function on a solution.
 
+    This follows Section 5.2 of Agamawi, Hager, and Rao.
     Values of sigma within noise times its largest magnitude count as zero.
     """
     switches, signs = switch_estimates(solution.mesh, sigma, control, noise)
@@ -87,7 +94,11 @@ def switching_arcs(solution, sigma, control, noise=0.0):
 
 
 def switch_brackets(edges):
-    """Bounds on every switch between two arcs, halfway to the switches on either side and open beyond the first and last."""
+    """Bounds on every switch between two arcs.
+
+    The bounds sit halfway to the switches on either side.
+    The bounds beyond the first and last switch stay open.
+    """
     edges = np.asarray(edges, dtype=float)
     last = len(edges) - 2
     brackets = []
@@ -155,14 +166,11 @@ def sigma_zero(t1, s1, t2, s2):
 
 
 def insert_arcs(kinds, solutions, sigma, signs, other, noise=0.0, floor=0.0):
-    """Kinds and edges of solved arcs with an arc of the other kind over every region where the switching function has the wrong sign.
+    """Arc kinds and edges with the other kind inserted where the switching function has the wrong sign.
 
-    sigma holds the switching function at the collocation points of the arcs
-    in order and signs its sign on each arc. A value within noise times its
-    largest magnitude has no sign, and a region shorter than twice the floor
-    stays out. A region ends where sigma crosses zero or at the edge of its
-    arc. Arcs of one kind that come to meet join, while two arcs of one kind
-    that met at a contact event stay apart.
+    sigma holds the switching function at the collocation points in arc order.
+    Values within noise of the largest magnitude carry no sign.
+    Touching arcs of one kind join unless a contact event keeps them apart.
     """
     sigma = np.asarray(sigma, dtype=float)
     level = noise * np.abs(sigma).max()
@@ -196,7 +204,11 @@ def insert_arcs(kinds, solutions, sigma, signs, other, noise=0.0, floor=0.0):
 
 
 def uniform_arc_meshes(edges, intervals=40, degree=5, min_intervals=2, flipped=True):
-    """Uniform meshes of the arcs between consecutive edge times with about a given number of intervals over all of them."""
+    """Uniform meshes of the arcs between consecutive edge times.
+
+    The arcs share about the given number of intervals in proportion to length.
+    Every arc gets at least min_intervals intervals.
+    """
     edges = np.asarray(edges, dtype=float)
     total = edges[-1] - edges[0]
     return [
@@ -206,7 +218,10 @@ def uniform_arc_meshes(edges, intervals=40, degree=5, min_intervals=2, flipped=T
 
 
 def sign_agreement(signs, solutions, sigma):
-    """Share of the collocation points of consecutive arcs where the switching function has the sign of its arc, and its largest disagreement over its largest magnitude."""
+    """Share of the collocation points where sigma has the sign of its arc.
+
+    The worst disagreement over the largest magnitude comes back too.
+    """
     sigma = np.asarray(sigma, dtype=float)
     expected = np.concatenate([np.full(s.mesh.num_collocation, np.sign(sign)) for sign, s in zip(signs, solutions)])
     if len(expected) != len(sigma):

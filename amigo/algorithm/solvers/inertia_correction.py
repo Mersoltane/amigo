@@ -11,9 +11,9 @@ from .linear_solver import SINGULAR_MATRIX
 
 
 class InertiaCorrector:
-    """Grows primal and constraint regularization until the factorized
-    KKT matrix has the correct inertia, tracking structural degeneracy
-    across iterations.
+    """Grows the primal and constraint regularization until the inertia is correct.
+
+    A state machine tracks structural degeneracy across iterations.
     """
 
     # Degeneracy status
