@@ -1,4 +1,7 @@
-"""Figure 1 of Liu, Hager, and Rao redrawn from the results of lunar_landing.py."""
+"""
+Plots of the lunar landing solution
+-----------------------------------
+"""
 
 import argparse
 import json

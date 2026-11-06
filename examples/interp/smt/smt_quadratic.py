@@ -115,7 +115,6 @@ opt.optimize(
         "initial_barrier_param": 1.0,
         "convergence_tolerance": 1e-10,
         "max_line_search_iterations": 10,
-        "init_affine_step_multipliers": False,
         "init_least_squares_multipliers": False,
     }
 )

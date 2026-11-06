@@ -1,11 +1,21 @@
+"""
+Cart pole swing up
+------------------
+
+    minimize    integral of u^2 from 0 to 2
+    subject to  (m1 + m2 s^2) d'' = u + m2 L s theta'^2 + m2 g c s
+                L (m1 + m2 s^2) theta'' = -u c - m2 L c s theta'^2 - (m1 + m2) g s
+                s = sin theta,  c = cos theta,  -50 <= u <= 50
+                (d, theta, d', theta') = 0 at t = 0 and (2, pi, 0, 0) at t = 2
+"""
+
 import argparse
 import json
 import amigo as am
 import numpy as np
-import cart_plots
-import matplotlib.pylab as plt
 
 final_time = 2.0
+num_time_steps = 100
 
 
 class TrapezoidRule(am.Component):
@@ -218,37 +228,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--build", dest="build", action="store_true", default=False, help="Enable building"
 )
-parser.add_argument(
-    "--show-sparsity",
-    dest="show_sparsity",
-    action="store_true",
-    default=False,
-    help="Show the sparsity pattern",
-)
-parser.add_argument(
-    "--num-time-steps",
-    dest="num_time_steps",
-    type=int,
-    default=100,
-    help="Number of time steps",
-)
-parser.add_argument(
-    "--opt-filename",
-    dest="opt_filename",
-    type=str,
-    default="cart_opt_data.json",
-    help="Number of time steps",
-)
-parser.add_argument(
-    "--solver",
-    dest="solver",
-    choices=["amigo", "mumps", "cuda"],
-    default="amigo",
-    help="Solver type",
-)
 args = parser.parse_args()
 
-model = create_cart_model(num_time_steps=args.num_time_steps)
+model = create_cart_model(num_time_steps=num_time_steps)
 
 if args.build:
     model.build_module()
@@ -259,12 +241,10 @@ print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
 
 opt_options = {
-    "solver": args.solver,
     "initial_barrier_param": 0.1,
     "convergence_tolerance": 5e-7,
     "max_line_search_iterations": 30,
     "max_iterations": 500,
-    "filter_line_search": True,
 }
 
 # Get the design variables
@@ -280,7 +260,7 @@ opt = am.Optimizer(model, x=x)
 # Optimize
 opt_data = opt.optimize(opt_options)
 
-opt_data["num_time_steps"] = args.num_time_steps
+opt_data["num_time_steps"] = num_time_steps
 opt_data["num_variables"] = model.num_variables
 opt_data["num_constraints"] = model.num_constraints
 
@@ -291,33 +271,25 @@ x.copy_device_to_host()
 # Print objective value
 u = x["cart.x[:]"]  # control force at each timestep
 obj_value = 0.0
-dt = final_time / args.num_time_steps
-for i in range(args.num_time_steps):
+dt = final_time / num_time_steps
+for i in range(num_time_steps):
     obj_value += 0.5 * (u[i] ** 2 + u[i + 1] ** 2) * dt
 
 print("Objective value: ", obj_value)
 
-with open(args.opt_filename, "w") as fp:
+with open("cart_opt_data.json", "w") as fp:
     json.dump(opt_data, fp, indent=2)
 
-d = x["cart.q[:, 0]"]
-theta = x["cart.q[:, 1]"]
-xctrl = x["cart.x"]
+q = x["cart.q"]
 
 norms = []
 for iter_data in opt_data["iterations"]:
     norms.append(iter_data["residual"])
 
-cart_plots.plot_solution(d, theta, xctrl, num_time_steps=args.num_time_steps)
-cart_plots.plot_convergence(norms)
-cart_plots.visualize(d, theta)
+# Save the solution and the residual norms for plot_cart_pole.py
+t = np.linspace(0.0, final_time, num_time_steps + 1)
 
-# Generate documentation-style plots
-cart_plots.plot_for_documentation(x, final_time, args.num_time_steps)
-
-if args.show_sparsity:
-    H = am.tocsr(opt.solver.hess)
-    plt.figure(figsize=(6, 6))
-    plt.spy(H, markersize=0.2)
-    plt.title("Sparsity pattern of matrix A")
-    plt.show()
+with open("cart_pole_solution.json", "w") as fp:
+    json.dump(
+        {"t": t.tolist(), "q": q.tolist(), "u": u.tolist(), "residual": norms}, fp
+    )

@@ -1,3 +1,8 @@
+"""
+Cart pole swing up from a serialized model
+------------------------------------------
+"""
+
 import json
 import amigo as am
 
@@ -28,7 +33,6 @@ opt_options = {
     "quality_function_predictor_corrector": False,
     "quality_function_balancing_term": "cubic",
     "adaptive_mu_safeguard_factor": 1e-1,
-    "filter_line_search": True,
     "second_order_correction": False,
     "verbose_barrier": False,
 }

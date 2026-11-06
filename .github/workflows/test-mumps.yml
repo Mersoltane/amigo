@@ -46,7 +46,7 @@ jobs:
 
   #     - name: Run rosenbrock example
   #       run: |
-  #         cd examples/rosenbrock
+  #         cd examples/basics/rosenbrock
   #         python rosenbrock.py --build
   #         python rosenbrock.py
 
@@ -87,6 +87,6 @@ jobs:
 
       - name: Run rosenbrock example
         run: |
-          cd examples/rosenbrock
+          cd examples/basics/rosenbrock
           python rosenbrock.py --build
           python rosenbrock.py
