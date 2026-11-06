@@ -1,6 +1,13 @@
-"""Compiled checks of the norm, table interpolation, Fourier series, the inverse tangents, binary functions with a number, a long chain, and their Jacobians."""
+"""
+Operations
+----------
 
-import os
+- Compiled checks of the norm, table interpolation, Fourier series, the inverse tangents, and binary functions with a number
+- A long chain that the code generator cuts into temporaries
+- The gradient, the Hessian, and the output and data Jacobians against finite differences
+"""
+
+import contextlib
 import sys
 
 import numpy as np
@@ -12,6 +19,7 @@ import amigo as am
 N_CHAIN = 60
 
 TABLE = np.array([0.3, -1.2, 0.8, 2.5, -0.4, 1.1])
+
 TABLE2 = np.array([[0.5, -0.3], [1.5, 0.7], [-0.2, 2.0], [0.9, -1.1], [0.1, 0.4]])
 
 PIECES = [
@@ -30,23 +38,40 @@ PIECES = [
 
 
 class Operations(am.Component):
+    """Every operation as an output, with their sum as the objective"""
+
     def __init__(self):
         super().__init__()
+
         self.add_data("table", shape=len(TABLE))
         self.add_data("table2", shape=TABLE2.shape)
+
         self.add_input("x", shape=3)
         self.add_input("s")
         self.add_input("y")
+
         self.add_objective("obj")
+
         for name in PIECES:
             self.add_output(name)
 
+        return
+
     def pieces(self):
-        x, s, y = self.inputs["x"], self.inputs["s"], self.inputs["y"]
-        table, table2 = self.data["table"], self.data["table2"]
+        """Every operation by name"""
+        table = self.data["table"]
+        table2 = self.data["table2"]
+
+        x = self.inputs["x"]
+        s = self.inputs["s"]
+        y = self.inputs["y"]
+
+        # A long chain of products
         chain = x[0] * s
+
         for k in range(1, N_CHAIN):
             chain = chain + (0.01 * k) * x[k % 3] * s
+
         return {
             "norm": am.norm(x),
             "max": am.max2(0.0, y) * s,
@@ -63,43 +88,67 @@ class Operations(am.Component):
 
     def compute(self):
         pieces = self.pieces()
+
         total = pieces[PIECES[0]]
+
         for name in PIECES[1:]:
             total = total + pieces[name]
+
         self.objective["obj"] = total
 
+        return
+
     def compute_output(self):
-        for name, value in self.pieces().items():
-            self.outputs[name] = value
+        pieces = self.pieces()
+
+        for name in PIECES:
+            self.outputs[name] = pieces[name]
+
+        return
 
 
 def linear(table, u, periodic):
-    """Linear interpolation at grid coordinate u, wrapped or extended past the ends."""
+    """Linear interpolation at grid coordinate u, wrapped or extended past the ends"""
     n = len(table)
     k = np.floor(u)
+
     if periodic:
         lo = int(k) % n
         hi = (lo + 1) % n
     else:
         k = min(max(k, 0), n - 2)
-        lo, hi = int(k), int(k) + 1
+        lo = int(k)
+        hi = int(k) + 1
+
     return table[lo] + (u - k) * (table[hi] - table[lo])
 
 
 def series(coef, x, period):
-    """Fourier series with an even count of coefficients ending at the Nyquist cosine."""
+    """Fourier series with an even count of coefficients ending at the Nyquist cosine"""
     w = 2.0 * np.pi / period
     n = len(coef)
+
     value = coef[0]
+
     for k in range(1, (n + 1) // 2):
         value += coef[2 * k - 1] * np.cos(k * w * x) + coef[2 * k] * np.sin(k * w * x)
+
     if n % 2 == 0:
         value += coef[n - 1] * np.cos(n // 2 * w * x)
+
     return value
 
 
 def reference(x, s, y):
-    chain = x[0] * s + sum(0.01 * k * x[k % 3] * s for k in range(1, N_CHAIN))
+    """Every operation by name from numpy"""
+    # The tail of the chain summed from zero
+    tail = 0
+
+    for k in range(1, N_CHAIN):
+        tail = tail + 0.01 * k * x[k % 3] * s
+
+    chain = x[0] * s + tail
+
     return {
         "norm": np.linalg.norm(x),
         "max": max(0.0, y) * s,
@@ -117,69 +166,104 @@ def reference(x, s, y):
 
 @pytest.fixture(scope="module")
 def model(tmp_path_factory):
+    """The model built with data derivatives in a temporary directory with its tables set"""
     tmp_path = tmp_path_factory.mktemp("operations")
+
     model = am.Model("operations_test")
     model.add_component("ops", 1, Operations())
 
     # Build in a temporary directory so the repository CMakeLists.txt stays untouched
-    orig_dir = os.getcwd()
-    os.chdir(tmp_path)
-    try:
+    with contextlib.chdir(tmp_path):
         model.build_module(data_derivatives=True)
-    finally:
-        os.chdir(orig_dir)
+
     if str(tmp_path) not in sys.path:
         sys.path.insert(0, str(tmp_path))
 
     model.initialize()
+
+    # The tables
     data = model.get_data_vector()
+
     data["ops.table"] = TABLE
     data["ops.table2"] = TABLE2
+
     data.get_vector().copy_host_to_device()
+
     return model
 
 
 def point(model, x, s, y):
+    """Design vector at x, s, and y"""
     vec = model.create_vector()
+
     vec["ops.x"] = x
     vec["ops.s"] = s
     vec["ops.y"] = y
+
     return vec
 
 
 def gradient(model, x, s, y):
+    """Gradient of the objective with respect to x, s, and y"""
     g = model.create_vector()
     model.eval_gradient(point(model, x, s, y), g)
+
     return np.concatenate([g["ops.x"].ravel(), g["ops.s"].ravel(), g["ops.y"].ravel()])
 
 
 def state_indices(model):
-    names = ["ops.x", "ops.s", "ops.y"]
-    return np.concatenate([np.asarray(model.get_indices(n)).ravel() for n in names])
+    """Global indices of x, s, and y in order"""
+    indices = []
+
+    for name in ["ops.x", "ops.s", "ops.y"]:
+        indices.append(np.asarray(model.get_indices(name)).ravel())
+
+    return np.concatenate(indices)
 
 
 def hessian(model, x, s, y):
+    """Hessian of the objective with respect to x, s, and y"""
     mat = model.create_matrix()
     model.eval_hessian(point(model, x, s, y), mat)
+
     idx = state_indices(model)
+
     return am.tocsr(mat).toarray()[np.ix_(idx, idx)]
 
 
 def outputs(model, v):
+    """Every output in order at the point v of x, s, and y"""
     out = model.create_output_vector()
-    model.compute_output(point(model, *np.split(v, [3, 4])), out)
-    return np.concatenate([np.ravel(out[f"ops.{name}"]) for name in PIECES])
+    model.compute_output(point(model, v[:3], v[3], v[4]), out)
+
+    values = []
+
+    for name in PIECES:
+        values.append(np.ravel(out[f"ops.{name}"]))
+
+    return np.concatenate(values)
 
 
 def set_tables(model, flat):
+    """Set both tables from one flat array"""
     data = model.get_data_vector()
+
     data["ops.table"] = flat[: TABLE.size]
     data["ops.table2"] = flat[TABLE.size :].reshape(TABLE2.shape)
+
     data.get_vector().copy_host_to_device()
 
 
 def total(v):
-    return sum(reference(v[:3], v[3], v[4]).values())
+    """Sum of every reference operation at the point v of x, s, and y"""
+    pieces = reference(v[:3], v[3], v[4])
+
+    value = 0
+
+    for name in PIECES:
+        value = value + pieces[name]
+
+    return value
 
 
 @pytest.mark.parametrize(
@@ -194,7 +278,9 @@ def total(v):
 def test_values_match_numpy(model, x, s, y):
     out = model.create_output_vector()
     model.compute_output(point(model, x, s, y), out)
+
     expected = reference(np.array(x), s, y)
+
     for name in PIECES:
         assert abs(out[f"ops.{name}"] - expected[name]) < 1e-12, name
 
@@ -202,67 +288,114 @@ def test_values_match_numpy(model, x, s, y):
 def test_gradient_matches_differences(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
     h = 1e-6
-    fd = np.array([(total(v + h * e) - total(v - h * e)) / (2 * h) for e in np.eye(5)])
+
+    # Central differences of the reference total along every coordinate
+    fd = np.zeros(5)
+
+    for j in range(5):
+        e = np.eye(5)[j]
+        fd[j] = (total(v + h * e) - total(v - h * e)) / (2 * h)
+
     assert np.allclose(gradient(model, v[:3], v[3], v[4]), fd, rtol=1e-7, atol=1e-8)
 
 
 def test_hessian_matches_differences_of_the_gradient(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
     h = 1e-6
+
     H = hessian(model, v[:3], v[3], v[4])
-    for j, e in enumerate(np.eye(5)):
-        plus = gradient(model, *np.split(v + h * e, [3, 4]))
-        minus = gradient(model, *np.split(v - h * e, [3, 4]))
+
+    # Central differences of the compiled gradient along every coordinate
+    for j in range(5):
+        e = np.eye(5)[j]
+
+        up = v + h * e
+        down = v - h * e
+
+        plus = gradient(model, up[:3], up[3], up[4])
+        minus = gradient(model, down[:3], down[3], down[4])
         column = (plus - minus) / (2 * h)
+
         assert np.allclose(H[:, j], column.ravel(), rtol=1e-6, atol=1e-6), j
 
 
 def test_output_jacobian_matches_differences(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
+
     problem = model.get_problem()
     jac = problem.create_output_jacobian_wrt_input()
-    problem.output_jacobian_wrt_input(point(model, *np.split(v, [3, 4])).get_vector(), jac)
-    rows = np.concatenate([np.ravel(model.get_indices(f"ops.{name}")) for name in PIECES])
+    problem.output_jacobian_wrt_input(point(model, v[:3], v[3], v[4]).get_vector(), jac)
+
+    # The rows of the outputs and the columns of x, s, and y
+    rows = []
+
+    for name in PIECES:
+        rows.append(np.ravel(model.get_indices(f"ops.{name}")))
+
+    rows = np.concatenate(rows)
     J = am.tocsr(jac).toarray()[np.ix_(rows, state_indices(model))]
 
+    # Central differences of the outputs along every coordinate
     h = 1e-6
-    fd = [(outputs(model, v + h * e) - outputs(model, v - h * e)) / (2 * h) for e in np.eye(5)]
+    fd = []
+
+    for j in range(5):
+        e = np.eye(5)[j]
+        fd.append((outputs(model, v + h * e) - outputs(model, v - h * e)) / (2 * h))
+
     assert np.allclose(J, np.column_stack(fd), rtol=1e-7, atol=1e-8)
 
 
 def test_gradient_jacobian_wrt_data_matches_differences(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
+
     problem = model.get_problem()
     jac = problem.create_gradient_jacobian_wrt_data()
-    problem.gradient_jacobian_wrt_data(point(model, *np.split(v, [3, 4])).get_vector(), jac)
-    cols = np.concatenate([np.ravel(model.get_indices(n)) for n in ["ops.table", "ops.table2"]])
+    problem.gradient_jacobian_wrt_data(point(model, v[:3], v[3], v[4]).get_vector(), jac)
+
+    # The rows of x, s, and y and the columns of both tables
+    cols = []
+
+    for name in ["ops.table", "ops.table2"]:
+        cols.append(np.ravel(model.get_indices(name)))
+
+    cols = np.concatenate(cols)
     J = am.tocsr(jac).toarray()[np.ix_(state_indices(model), cols)]
 
     # The gradient is linear in the table entries so central differences are exact
     h = 1e-3
     base = np.concatenate([TABLE, TABLE2.ravel()])
     fd = []
+
+    # The tables are set back even when a difference fails
     try:
         for e in np.eye(base.size):
             set_tables(model, base + h * e)
             plus = gradient(model, v[:3], v[3], v[4])
+
             set_tables(model, base - h * e)
             minus = gradient(model, v[:3], v[3], v[4])
+
             fd.append((plus - minus) / (2 * h))
     finally:
         set_tables(model, base)
+
     assert np.allclose(J, np.column_stack(fd), rtol=1e-8, atol=1e-8)
 
 
 def test_norm_at_the_origin_has_finite_zero_derivatives(model):
     zero = np.zeros(3)
+
     g = gradient(model, zero, 0.37, 0.62)
     H = hessian(model, zero, 0.37, 0.62)
+
     assert np.all(np.isfinite(g)) and np.all(np.isfinite(H))
 
     # At the origin only the chain depends on x
     weights = np.zeros(3)
     weights[0] = 1.0
+
     for k in range(1, N_CHAIN):
         weights[k % 3] += 0.01 * k
+
     assert np.allclose(g[:3], 0.62 * 0.37 * weights, rtol=1e-12, atol=1e-14)

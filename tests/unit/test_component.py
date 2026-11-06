@@ -1,58 +1,52 @@
 """
-Unit tests for amigo/component.py.
+Component metadata and sets
+---------------------------
 
-Covers the Meta metadata class and the InputSet, ConstantSet, and DataSet
-container classes.
-
-Test areas:
-  - Meta construction validation: rejects names with double underscores,
-    inverted bounds, out-of-range values, wrong value types, and unknown
-    keyword arguments; accepts valid inputs with correct defaults.
-  - Meta.serialize() / Meta.deserialize(): round-trip fidelity for all fields.
-  - InputSet: add() grows the collection, __getitem__ returns an active VarNode
-    Expr, and missing keys raise KeyError.
-  - ConstantSet: add() stores a ConstNode with the correct value; non-scalar
-    shapes are rejected.
-  - DataSet: add() stores an inactive VarNode Expr with the correct shape.
+- The Meta validation and its serialize and deserialize round trip
+- The InputSet, ConstantSet, and DataSet containers of a component
 """
 
 import pytest
-from amigo.component import Meta, InputSet, ConstantSet, DataSet
-from amigo.expressions import VarNode, ConstNode, Expr
+
+from amigo.modeling.component import ConstantSet, DataSet, InputSet, Meta
+from amigo.modeling.expressions import ConstNode, Expr, VarNode
+
 
 # Meta validates its fields at construction
 
 
 class TestMetaValidation:
-    """Meta construction: validation rules and serialize/deserialize round-trip."""
+    """Meta construction rules and the serialize and deserialize round trip"""
 
-    # Names containing "__" are reserved for internal amigo identifiers
     def test_name_with_double_underscore_raises(self):
+        """Names with a double underscore are reserved for amigo"""
         with pytest.raises(ValueError):
             Meta("bad__name", "input")
 
-    # Bounds must satisfy lower <= upper
     def test_lower_greater_than_upper_raises(self):
+        """The bounds must satisfy lower <= upper"""
         with pytest.raises(ValueError):
             Meta("x", "input", lower=10.0, upper=1.0)
 
-    # For input variables the initial value must lie within [lower, upper]
     def test_input_value_outside_bounds_raises(self):
+        """The initial value of an input must lie within its bounds"""
         with pytest.raises(ValueError):
             Meta("x", "input", value=5.0, lower=0.0, upper=4.0)
 
-    # Unknown keyword arguments are not silently ignored
     def test_unknown_kwarg_raises(self):
+        """An unknown keyword argument is rejected instead of ignored"""
         with pytest.raises(ValueError):
             Meta("x", "input", unknown_kwarg=42)
 
-    # serialize() produces a plain dict; deserialize() reconstructs identical fields
     def test_serialize_deserialize_roundtrip(self):
+        """Deserialize rebuilds every field that serialize wrote"""
         m = Meta("y", "constraint", lower=-1.0, upper=1.0, value=0.0)
         data = m.serialize()
-        # deserialize pops from the dict, so pass a copy
+
+        # Deserialize pops from the dict, so it gets a copy
         m2 = Meta.deserialize(dict(data))
         data2 = m2.serialize()
+
         for name in data:
             if m.is_value_set(name):
                 assert data[name] == data2[name]
@@ -62,57 +56,68 @@ class TestMetaValidation:
 
 
 class TestInputSet:
-    """InputSet: add(), __getitem__, and missing-key error behaviour."""
+    """InputSet add, item access, and the error for a missing key"""
 
     def test_add_increases_len(self):
         inputs = InputSet()
+
         assert len(inputs) == 0
+
         inputs.add("x")
+
         assert len(inputs) == 1
 
     def test_getitem_returns_expr_with_active_varnode(self):
         inputs = InputSet()
         inputs.add("x")
+
         expr = inputs["x"]
+
         assert isinstance(expr, Expr)
         assert isinstance(expr.node, VarNode)
         assert expr.node.active is True
 
     def test_getitem_missing_key_raises_keyerror(self):
         inputs = InputSet()
+
         with pytest.raises(KeyError):
-            _ = inputs["missing"]
+            inputs["missing"]
 
 
 # ConstantSet and DataSet hold the named constants and the passive data
 
 
 class TestConstantSet:
-    """ConstantSet: stores scalar ConstNode values; rejects non-scalar shapes."""
+    """ConstantSet stores scalar constants and rejects other shapes"""
 
     def test_add_stores_constnode_with_correct_value(self):
         consts = ConstantSet()
         consts.add("c", 3.14)
+
         expr = consts["c"]
+
         assert isinstance(expr, Expr)
         assert isinstance(expr.node, ConstNode)
         assert expr.node.value == 3.14
 
     def test_add_non_scalar_shape_raises_valueerror(self):
         consts = ConstantSet()
+
         with pytest.raises(ValueError):
             consts.add("c", 1.0, shape=(3,))
 
 
 class TestDataSet:
-    """DataSet: stores inactive VarNode Exprs with the declared shape."""
+    """DataSet stores inactive variables with the declared shape"""
 
     def test_add_stores_varnode_inactive_with_shape(self):
         data = DataSet()
         data.add("d", shape=(3,))
+
         expr = data["d"]
-        assert isinstance(expr, Expr)
         node = expr.node
+
+        assert isinstance(expr, Expr)
         assert isinstance(node, VarNode)
         assert node.active is False
         assert node.shape == (3,)

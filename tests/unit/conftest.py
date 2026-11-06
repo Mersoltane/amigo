@@ -1,27 +1,18 @@
 """
-Stub out compiled extensions and heavy dependencies before any amigo.model
-import occurs, so that the pure-Python helpers can be imported without a
-C++ build, MUMPS, or SMT installation.
+Unit test stubs
+---------------
 
-Only stubs modules that are not already importable — this preserves the real
-compiled extension for tests like test_ldl.py that require it.
+- A compiled extension or heavy dependency that cannot be imported is stubbed before any amigo import
+- The pure Python helpers then import without a C++ build, MUMPS, or SMT
+- A module that imports for real is never stubbed, so tests like test_ldl.py keep the real extension
 """
 
-import sys
 import importlib
+import sys
 from unittest.mock import MagicMock
 
-
-def _is_importable(name):
-    """Return True if the module can be imported for real."""
-    try:
-        importlib.import_module(name)
-        return True
-    except ImportError:
-        return False
-
-
-for mod in [
+# The modules that may be missing without a build
+OPTIONAL = [
     "amigo.amigo",
     "mpi4py",
     "mpi4py.MPI",
@@ -31,6 +22,19 @@ for mod in [
     "scipy.sparse.linalg",
     "scipy.interpolate",
     "networkx",
-]:
-    if not _is_importable(mod):
-        sys.modules.setdefault(mod, MagicMock())
+]
+
+
+def is_importable(name):
+    """Whether a module imports for real"""
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        return False
+
+    return True
+
+
+for name in OPTIONAL:
+    if not is_importable(name):
+        sys.modules.setdefault(name, MagicMock())

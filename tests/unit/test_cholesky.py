@@ -1,15 +1,18 @@
 """
-Tests for Sparse Cholesky factorization. This tests both the
-SparseCholesky solver and the Cholesky solver in SparseLDL
+Sparse Cholesky
+---------------
+
+- The SparseCholesky solver and the Cholesky solver inside SparseLDL
 """
 
-import amigo as am
-from scipy.sparse import csr_matrix
 import numpy as np
+from scipy.sparse import csr_matrix
+
+import amigo as am
 
 
 def get_matrix(index):
-    """Get some simple matrices to test"""
+    """One of three small symmetric positive definite matrices with a known solution"""
     if index == 0:
         entries = [
             [2, 1, 0, 0, 0],
@@ -18,7 +21,6 @@ def get_matrix(index):
             [0, 0, 1, 2, 1],
             [0, 0, 0, 1, 2],
         ]
-        mat = np.array(entries)
     elif index == 1:
         entries = [
             [2, 0, 1, 0, 0],
@@ -27,7 +29,6 @@ def get_matrix(index):
             [0, 1, 0, 2, 1],
             [0, 0, 1, 1, 2],
         ]
-        mat = np.array(entries)
     elif index == 2:
         entries = [
             [2, 1, 1, 0, 0],
@@ -36,12 +37,17 @@ def get_matrix(index):
             [0, 1, 0, 2, 1],
             [0, 0, 1, 1, 2],
         ]
-        mat = np.array(entries)
 
-    # Now create matrix, the solution and the right-hand-side
-    nrows, ncols = mat.shape
+    mat = np.array(entries)
+
+    # The solution is all ones
+    nrows = mat.shape[0]
+    ncols = mat.shape[1]
+
     x = np.ones(nrows)
     rhs = mat @ x
+
+    # The matrix in the CSR form of amigo
     mat = csr_matrix(np.array(entries))
     csr = am.CSRMat(nrows, ncols, mat.indptr, mat.indices, mat.data)
 
@@ -50,7 +56,10 @@ def get_matrix(index):
 
 def test_sparse_ldl():
     for index in range(3):
-        csr, xsoln, rhs = get_matrix(index)
+        problem = get_matrix(index)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
 
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
@@ -66,7 +75,10 @@ def test_sparse_ldl():
 
 def test_sparse_cholesky():
     for index in range(3):
-        csr, xsoln, rhs = get_matrix(index)
+        problem = get_matrix(index)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
 
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs

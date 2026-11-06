@@ -1,6 +1,12 @@
-﻿"""Compiled checks of the B-spline, its basis functions, and the inverse of a coordinate spline."""
+﻿"""
+B-splines
+---------
 
-import os
+- Compiled checks of the B-spline, its basis functions, and the inverse of a coordinate spline against scipy
+- The gradient and the Hessian against finite differences
+"""
+
+import contextlib
 import sys
 
 import numpy as np
@@ -10,41 +16,73 @@ from scipy.interpolate import BSpline
 import amigo as am
 
 COEF = np.array([0.3, -1.2, 0.8, 2.5, -0.4, 1.1, 0.6, -0.9, 1.7, 0.2])
+
 TABLE = np.array(
-    [[0.5, -0.3, 1.0], [1.5, 0.7, -0.4], [-0.2, 2.0, 0.3], [0.9, -1.1, 0.8],
-     [0.1, 0.4, -0.6], [1.2, -0.8, 0.5], [-0.5, 1.3, 0.9], [0.7, 0.2, -1.4]]
+    [
+        [0.5, -0.3, 1.0],
+        [1.5, 0.7, -0.4],
+        [-0.2, 2.0, 0.3],
+        [0.9, -1.1, 0.8],
+        [0.1, 0.4, -0.6],
+        [1.2, -0.8, 0.5],
+        [-0.5, 1.3, 0.9],
+        [0.7, 0.2, -1.4],
+    ]
 )
+
 CX = np.array([0.0, 0.2, 0.5, 0.9, 1.4, 2.0, 2.4, 2.9, 3.3, 3.6])
+
 CX2 = np.array([[-1.0, 0.1], [-0.4, 0.2], [0.3, 0.35], [0.9, 0.5], [1.2, 0.8], [2.0, 0.9]])
+
 TENSOR = np.array(
-    [[0.4, -0.2, 1.1, 0.3, -0.7], [1.0, 0.6, -0.5, 0.8, 0.2], [-0.3, 1.4, 0.9, -1.0, 0.5],
-     [0.7, -0.9, 0.2, 1.2, -0.4], [0.1, 0.8, -0.6, 0.4, 1.3]]
+    [
+        [0.4, -0.2, 1.1, 0.3, -0.7],
+        [1.0, 0.6, -0.5, 0.8, 0.2],
+        [-0.3, 1.4, 0.9, -1.0, 0.5],
+        [0.7, -0.9, 0.2, 1.2, -0.4],
+        [0.1, 0.8, -0.6, 0.4, 1.3],
+    ]
 )
 
 PIECES = ["spline", "spline_column", "basis", "inverse", "inverse_column", "clamped", "tensor"]
 
 
 class Splines(am.Component):
+    """Every spline piece as an output, with their sum as the objective"""
+
     def __init__(self):
         super().__init__()
+
         self.add_data("coef", shape=len(COEF))
         self.add_data("table", shape=TABLE.shape)
         self.add_data("cx", shape=len(CX))
         self.add_data("cx2", shape=CX2.shape)
         self.add_data("grid", shape=TENSOR.shape)
+
         self.add_input("x", shape=3)
         self.add_input("s")
         self.add_input("y")
+
         self.add_objective("obj")
+
         for name in PIECES:
             self.add_output(name)
 
+        return
+
     def pieces(self):
-        x, s, y = self.inputs["x"], self.inputs["s"], self.inputs["y"]
+        """Every spline piece by name"""
+        x = self.inputs["x"]
+        s = self.inputs["s"]
+        y = self.inputs["y"]
+
+        # A tensor product of a basis in y and the columns of a spline in s
         tensor = 0.0
+
         for j in range(TENSOR.shape[1]):
             column = am.bspline(self.data["grid"], s, 4, column=j)
             tensor = tensor + am.bspline_basis(y, j, TENSOR.shape[1], 4) * column
+
         return {
             "spline": am.bspline(self.data["coef"], s, 4) * y,
             "spline_column": am.bspline(self.data["table"], s * y, 3, column=1),
@@ -58,47 +96,71 @@ class Splines(am.Component):
 
     def compute(self):
         pieces = self.pieces()
+
         total = pieces[PIECES[0]]
+
         for name in PIECES[1:]:
             total = total + pieces[name]
+
         self.objective["obj"] = total
 
+        return
+
     def compute_output(self):
-        for name, value in self.pieces().items():
-            self.outputs[name] = value
+        pieces = self.pieces()
+
+        for name in PIECES:
+            self.outputs[name] = pieces[name]
+
+        return
 
 
 def knots(k, m):
-    """Open uniform knots of m control points of order k on the unit interval."""
-    return np.concatenate([np.zeros(k), np.linspace(0.0, 1.0, m - k + 2)[1:-1], np.ones(k)])
+    """Open uniform knots of m control points of order k on the unit interval"""
+    inner = np.linspace(0.0, 1.0, m - k + 2)[1:-1]
+
+    return np.concatenate([np.zeros(k), inner, np.ones(k)])
 
 
 def spline(coef, k, t):
+    """The scipy spline of order k through the coefficients at t"""
     return float(BSpline(knots(k, len(coef)), coef, k - 1)(t))
 
 
 def basis(index, m, k, t):
+    """One basis function of m control points of order k at t"""
     return spline(np.eye(m)[index], k, t)
 
 
 def inverse(coef, k, x):
-    """Root of the increasing coordinate spline by bisection, held at the ends outside its range."""
+    """Root of the increasing coordinate spline by bisection, held at the ends outside its range"""
     if x <= coef[0]:
         return 0.0
+
     if x >= coef[-1]:
         return 1.0
-    lo, hi = 0.0, 1.0
-    for _ in range(80):
+
+    lo = 0.0
+    hi = 1.0
+
+    for step in range(80):
         mid = 0.5 * (lo + hi)
+
         if spline(coef, k, mid) < x:
             lo = mid
         else:
             hi = mid
+
     return 0.5 * (lo + hi)
 
 
 def reference(x, s, y):
-    tensor = sum(basis(j, 5, 4, y) * spline(TENSOR[:, j], 4, s) for j in range(5))
+    """Every spline piece by name from scipy"""
+    tensor = 0
+
+    for j in range(5):
+        tensor = tensor + basis(j, 5, 4, y) * spline(TENSOR[:, j], 4, s)
+
     return {
         "spline": spline(COEF, 4, s) * y,
         "spline_column": spline(TABLE[:, 1], 3, s * y),
@@ -112,59 +174,84 @@ def reference(x, s, y):
 
 @pytest.fixture(scope="module")
 def model(tmp_path_factory):
+    """The model built in a temporary directory with its spline tables set"""
     tmp_path = tmp_path_factory.mktemp("bspline")
+
     model = am.Model("bspline_test")
     model.add_component("ops", 1, Splines())
 
     # Build in a temporary directory so the repository CMakeLists.txt stays untouched
-    orig_dir = os.getcwd()
-    os.chdir(tmp_path)
-    try:
+    with contextlib.chdir(tmp_path):
         model.build_module()
-    finally:
-        os.chdir(orig_dir)
+
     if str(tmp_path) not in sys.path:
         sys.path.insert(0, str(tmp_path))
 
     model.initialize()
+
+    # The spline tables
     data = model.get_data_vector()
+
     data["ops.coef"] = COEF
     data["ops.table"] = TABLE
     data["ops.cx"] = CX
     data["ops.cx2"] = CX2
     data["ops.grid"] = TENSOR
+
     data.get_vector().copy_host_to_device()
+
     return model
 
 
 def point(model, x, s, y):
+    """Design vector at x, s, and y"""
     vec = model.create_vector()
+
     vec["ops.x"] = x
     vec["ops.s"] = s
     vec["ops.y"] = y
+
     return vec
 
 
 def gradient(model, x, s, y):
+    """Gradient of the objective with respect to x, s, and y"""
     g = model.create_vector()
     model.eval_gradient(point(model, x, s, y), g)
+
     return np.concatenate([g["ops.x"].ravel(), g["ops.s"].ravel(), g["ops.y"].ravel()])
 
 
 def state_indices(model):
-    names = ["ops.x", "ops.s", "ops.y"]
-    return np.concatenate([np.asarray(model.get_indices(n)).ravel() for n in names])
+    """Global indices of x, s, and y in order"""
+    indices = []
+
+    for name in ["ops.x", "ops.s", "ops.y"]:
+        indices.append(np.asarray(model.get_indices(name)).ravel())
+
+    return np.concatenate(indices)
 
 
 def hessian(model, x, s, y):
+    """Hessian of the objective with respect to x, s, and y"""
     mat = model.create_matrix()
     model.eval_hessian(point(model, x, s, y), mat)
+
     idx = state_indices(model)
+
     return am.tocsr(mat).toarray()[np.ix_(idx, idx)]
 
 
 def total(v):
-    return sum(reference(v[:3], v[3], v[4]).values())
+    """Sum of every reference piece at the point v of x, s, and y"""
+    pieces = reference(v[:3], v[3], v[4])
+
+    value = 0
+
+    for name in PIECES:
+        value = value + pieces[name]
+
+    return value
 
 
 @pytest.mark.parametrize(
@@ -179,7 +266,9 @@ def total(v):
 def test_values_match_scipy(model, x, s, y):
     out = model.create_output_vector()
     model.compute_output(point(model, x, s, y), out)
+
     expected = reference(np.array(x), s, y)
+
     for name in PIECES:
         assert abs(out[f"ops.{name}"] - expected[name]) < 1e-12, name
 
@@ -187,23 +276,40 @@ def test_values_match_scipy(model, x, s, y):
 def test_gradient_matches_differences(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
     h = 1e-6
-    fd = np.array([(total(v + h * e) - total(v - h * e)) / (2 * h) for e in np.eye(5)])
+
+    # Central differences of the reference total along every coordinate
+    fd = np.zeros(5)
+
+    for j in range(5):
+        e = np.eye(5)[j]
+        fd[j] = (total(v + h * e) - total(v - h * e)) / (2 * h)
+
     assert np.allclose(gradient(model, v[:3], v[3], v[4]), fd, rtol=1e-7, atol=1e-8)
 
 
 def test_hessian_matches_differences_of_the_gradient(model):
     v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
     h = 1e-6
+
     H = hessian(model, v[:3], v[3], v[4])
-    for j, e in enumerate(np.eye(5)):
-        plus = gradient(model, *np.split(v + h * e, [3, 4]))
-        minus = gradient(model, *np.split(v - h * e, [3, 4]))
+
+    # Central differences of the compiled gradient along every coordinate
+    for j in range(5):
+        e = np.eye(5)[j]
+
+        up = v + h * e
+        down = v - h * e
+
+        plus = gradient(model, up[:3], up[3], up[4])
+        minus = gradient(model, down[:3], down[3], down[4])
         column = (plus - minus) / (2 * h)
+
         assert np.allclose(H[:, j], column.ravel(), rtol=1e-6, atol=1e-6), j
 
 
 def test_clamped_inverse_has_zero_derivatives(model):
     g = gradient(model, np.array([0.3, -0.4, 1.2]), 0.37, 0.62)
     H = hessian(model, np.array([0.3, -0.4, 1.2]), 0.37, 0.62)
+
     assert g[1] == 0.0 and g[2] == 0.0
     assert np.all(H[1, :] == 0.0) and np.all(H[2, :] == 0.0)

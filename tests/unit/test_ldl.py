@@ -1,15 +1,20 @@
 """
-Tests for the SparseLDL solver with solver_type = SolverType.LDL
+Sparse LDL
+----------
+
+- The SparseLDL solver with the LDL and Cholesky factorizations on small and Poisson matrices
 """
 
-import amigo as am
-from scipy.sparse import diags, kron, eye, csr_matrix
 import numpy as np
+from scipy.sparse import csr_matrix, diags, eye, kron
+
+import amigo as am
+from amigo.algorithm.solvers.amigo_solver import FRONT_OVERFLOW
 
 
 def get_inertia(mat, tol=1e-12):
-    """Get the inertia for a small dense matrix. Enforce non-singularity"""
-    eig, _ = np.linalg.eigh(mat)
+    """Inertia of a small dense matrix that must not be singular"""
+    eig = np.linalg.eigh(mat)[0]
 
     if np.min(np.absolute(eig)) < tol:
         raise ValueError("Singular matrix")
@@ -18,7 +23,7 @@ def get_inertia(mat, tol=1e-12):
 
 
 def get_matrix(index):
-    """Get some simple matrices to test"""
+    """One of seven small symmetric matrices with a known solution and inertia"""
     if index == 0:
         entries = [
             [2, 1, 0, 0, 0],
@@ -72,10 +77,14 @@ def get_matrix(index):
         mat = np.array(entries)
         inertia = get_inertia(mat)
 
-    # Now create matrix, the solution and the right-hand-side
-    nrows, ncols = mat.shape
+    # The solution is all ones
+    nrows = mat.shape[0]
+    ncols = mat.shape[1]
+
     x = np.ones(nrows)
     rhs = mat @ x
+
+    # The matrix in the CSR form of amigo
     mat = csr_matrix(np.array(entries))
     csr = am.CSRMat(nrows, ncols, mat.indptr, mat.indices, mat.data)
 
@@ -83,16 +92,16 @@ def get_matrix(index):
 
 
 def get_poisson_2d(n):
-    """
-    Create the sparse CSR matrix for a 2D Poisson problem on a [0,1]x[0,1] domain.
-    """
+    """Sparse matrix of a 2D Poisson problem on the unit square in a random order"""
     if n < 2:
         raise ValueError("n must be at least 2")
 
     h = 1.0 / n
-    m = n - 1  # number of interior points per coordinate direction
 
-    # 1D second-difference operator
+    # Number of interior points in each direction
+    m = n - 1
+
+    # 1D second difference operator
     T = diags(
         diagonals=[-1.0 * np.ones(m - 1), 2.0 * np.ones(m), -1.0 * np.ones(m - 1)],
         offsets=[-1, 0, 1],
@@ -101,17 +110,18 @@ def get_poisson_2d(n):
 
     I = eye(m, format="csr")
 
-    # 2D 5-point Laplacian
+    # 2D five point Laplacian
     A = (kron(I, T) + kron(T, I)) / h**2
     mat = A.tocsr()
 
     perm = np.random.permutation(m**2)
     mat = mat[perm, :][:, perm]
 
-    # Now create matrix, the solution and the right-hand-side
+    # The solution is all ones
     nrows = m**2
     x = np.ones(nrows)
     rhs = mat @ x
+
     csr = am.CSRMat(nrows, nrows, mat.indptr, mat.indices, mat.data)
     inertia = (nrows, 0)
 
@@ -120,7 +130,11 @@ def get_poisson_2d(n):
 
 def test_sparse_ldl():
     for index in range(7):
-        csr, xsoln, rhs, inertia = get_matrix(index)
+        problem = get_matrix(index)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
 
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
@@ -131,7 +145,9 @@ def test_sparse_ldl():
             ustab=0.4,
             order=am.OrderingType.NATURAL,
         )
+
         flag = ldl.factor()
+
         assert flag == 0
 
         ldl_inertia = ldl.get_inertia()
@@ -146,9 +162,7 @@ def test_sparse_ldl():
 
 
 def test_sparse_ldl_front_memory_cap():
-    from amigo.algorithm.solvers.amigo_solver import FRONT_OVERFLOW
-
-    csr, _, _, _ = get_matrix(0)
+    csr = get_matrix(0)[0]
 
     # A cap below one entry fails the first front and names the failure
     ldl = am.SparseLDL(
@@ -158,12 +172,17 @@ def test_sparse_ldl_front_memory_cap():
         order=am.OrderingType.NATURAL,
         max_front_gb=1e-12,
     )
+
     assert ldl.factor() == FRONT_OVERFLOW
 
 
 def test_sparse_ldl_amd():
     for index in range(7):
-        csr, xsoln, rhs, inertia = get_matrix(index)
+        problem = get_matrix(index)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
 
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
@@ -174,7 +193,9 @@ def test_sparse_ldl_amd():
             ustab=0.4,
             order=am.OrderingType.AMD,
         )
+
         flag = ldl.factor()
+
         assert flag == 0
 
         ldl_inertia = ldl.get_inertia()
@@ -191,7 +212,13 @@ def test_sparse_ldl_amd():
 def test_sparse_poisson_natural():
     for n in [10, 20, 50]:
         np.random.seed(0)
-        csr, xsoln, rhs, inertia = get_poisson_2d(n)
+
+        problem = get_poisson_2d(n)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
+
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
 
@@ -201,7 +228,9 @@ def test_sparse_poisson_natural():
             ustab=0.4,
             order=am.OrderingType.NATURAL,
         )
+
         flag = ldl.factor()
+
         assert flag == 0
 
         ldl_inertia = ldl.get_inertia()
@@ -218,7 +247,13 @@ def test_sparse_poisson_natural():
 def test_sparse_poisson_amd():
     for n in [10, 20, 50]:
         np.random.seed(0)
-        csr, xsoln, rhs, inertia = get_poisson_2d(n)
+
+        problem = get_poisson_2d(n)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
+
         xvec = am.Vector(len(xsoln))
         xvec[:] = rhs
 
@@ -229,7 +264,9 @@ def test_sparse_poisson_amd():
             delay_growth=1.0,
             order=am.OrderingType.AMD,
         )
+
         flag = ldl.factor()
+
         assert flag == 0
 
         ldl_inertia = ldl.get_inertia()
@@ -245,12 +282,19 @@ def test_sparse_poisson_amd():
 
 def test_sparse_cholesky_poisson_rhs():
     stype = am.SolverType.CHOLESKY
+
     for n in [10, 20, 50]:
         np.random.seed(0)
-        csr, xsoln, rhs, inertia = get_poisson_2d(n)
 
+        problem = get_poisson_2d(n)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+
+        # Seven copies of the right hand side
         nrhs = 7
         X = np.zeros((len(xsoln), nrhs), order="F")
+
         for k in range(nrhs):
             X[:, k] = rhs
 
@@ -261,7 +305,9 @@ def test_sparse_cholesky_poisson_rhs():
 
         ldl.solve(X)
 
+        # The largest error over the copies
         err = 0.0
+
         for k in range(nrhs):
             err = max(err, np.linalg.norm(X[:, k] - xsoln))
 
@@ -270,30 +316,39 @@ def test_sparse_cholesky_poisson_rhs():
 
 def test_sparse_ldl_poisson_natural_rhs():
     stype = am.SolverType.LDL
+
     for n in [10, 20, 50]:
         np.random.seed(0)
-        csr, xsoln, rhs, inertia = get_poisson_2d(n)
 
+        problem = get_poisson_2d(n)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
+
+        # Seven copies of the right hand side
         nrhs = 7
         X = np.zeros((len(xsoln), nrhs), order="F")
+
         for k in range(nrhs):
             X[:, k] = rhs
 
-        ldl = am.SparseLDL(
-            csr, solver_type=stype, ustab=0.4, order=am.OrderingType.NATURAL
-        )
+        ldl = am.SparseLDL(csr, solver_type=stype, ustab=0.4, order=am.OrderingType.NATURAL)
         flag = ldl.factor()
 
         assert flag == 0
 
         if stype == am.SolverType.LDL:
             ldl_inertia = ldl.get_inertia()
+
             assert ldl_inertia[0] == inertia[0]
             assert ldl_inertia[1] == inertia[1]
 
         ldl.solve(X)
 
+        # The largest error over the copies
         err = 0.0
+
         for k in range(nrhs):
             err = max(err, np.linalg.norm(X[:, k] - xsoln))
 
@@ -302,12 +357,20 @@ def test_sparse_ldl_poisson_natural_rhs():
 
 def test_sparse_ldl_poisson_amd_rhs():
     stype = am.SolverType.LDL
+
     for n in [10, 20, 50]:
         np.random.seed(0)
-        csr, xsoln, rhs, inertia = get_poisson_2d(n)
 
+        problem = get_poisson_2d(n)
+        csr = problem[0]
+        xsoln = problem[1]
+        rhs = problem[2]
+        inertia = problem[3]
+
+        # Seven copies of the right hand side
         nrhs = 7
         X = np.zeros((len(xsoln), nrhs), order="F")
+
         for k in range(nrhs):
             X[:, k] = rhs
 
@@ -318,12 +381,15 @@ def test_sparse_ldl_poisson_amd_rhs():
 
         if stype == am.SolverType.LDL:
             ldl_inertia = ldl.get_inertia()
+
             assert ldl_inertia[0] == inertia[0]
             assert ldl_inertia[1] == inertia[1]
 
         ldl.solve(X)
 
+        # The largest error over the copies
         err = 0.0
+
         for k in range(nrhs):
             err = max(err, np.linalg.norm(X[:, k] - xsoln))
 
