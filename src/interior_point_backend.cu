@@ -513,27 +513,47 @@ void initialize_bound_duals_warm_cuda(T mu, T zmax,
 }
 
 // =========================================================================
-// push_bound_duals_cuda
+// project_primals_warm_cuda
 // =========================================================================
 
 template <typename T>
-AMIGO_KERNEL void push_bound_duals_kernel(T zmin, OptProblemInfo<T> info, T* zl,
-                                          T* zu) {
-  int i = blockDim.x * blockIdx.x + threadIdx.x;
-  if (i >= info.num_primals) {
+AMIGO_KERNEL void project_primals_warm_kernel(
+    int num_primals, const int* __restrict__ primal_indices,
+    const T* __restrict__ lbx, const T* __restrict__ ubx, T gap,
+    T* __restrict__ xlam) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_primals) {
     return;
   }
-  zl[i] = ::isinf(info.lbx[i]) ? T(0) : (zl[i] > zmin ? zl[i] : zmin);
-  zu[i] = ::isinf(info.ubx[i]) ? T(0) : (zu[i] > zmin ? zu[i] : zmin);
+
+  int idx = primal_indices[i];
+  T x = xlam[idx];
+  T lb = lbx[i];
+  T ub = ubx[i];
+  bool has_lb = !::isinf(lb);
+  bool has_ub = !::isinf(ub);
+
+  if (has_lb && has_ub) {
+    T half = T(0.5) * (ub - lb);
+    T pl = A2D::min2(gap * A2D::max2(T(1), A2D::fabs(lb)), half);
+    T pu = A2D::min2(gap * A2D::max2(T(1), A2D::fabs(ub)), half);
+    xlam[idx] = A2D::max2(A2D::min2(x, ub - pu), lb + pl);
+  } else if (has_lb) {
+    xlam[idx] = A2D::max2(x, lb + gap * A2D::max2(T(1), A2D::fabs(lb)));
+  } else if (has_ub) {
+    xlam[idx] = A2D::min2(x, ub - gap * A2D::max2(T(1), A2D::fabs(ub)));
+  }
 }
 
 template <typename T>
-void push_bound_duals_cuda(T zmin, const OptProblemInfo<T>& info, T* zl, T* zu,
-                           cudaStream_t stream) {
-  if (info.num_primals > 0) {
-    int gp = (info.num_primals + IPM_TPB - 1) / IPM_TPB;
-    push_bound_duals_kernel<T><<<gp, IPM_TPB, 0, stream>>>(zmin, info, zl, zu);
+void project_primals_warm_cuda(const OptProblemInfo<T>& info, T* xlam, T gap,
+                               cudaStream_t stream) {
+  if (info.num_primals <= 0) {
+    return;
   }
+  int grid = (info.num_primals + IPM_TPB - 1) / IPM_TPB;
+  project_primals_warm_kernel<T><<<grid, IPM_TPB, 0, stream>>>(
+      info.num_primals, info.primal_indices, info.lbx, info.ubx, gap, xlam);
 }
 
 // =========================================================================
@@ -1293,10 +1313,9 @@ template void initialize_bound_duals_warm_cuda<double>(
     double mu, double zmax, const OptProblemInfo<double>& info,
     const double* xlam, double* zl, double* zu, cudaStream_t stream);
 
-template void push_bound_duals_cuda<double>(double zmin,
-                                            const OptProblemInfo<double>& info,
-                                            double* zl, double* zu,
-                                            cudaStream_t stream);
+template void project_primals_warm_cuda<double>(
+    const OptProblemInfo<double>& info, double* xlam, double gap,
+    cudaStream_t stream);
 
 template void correct_bound_multipliers_cuda<double>(
     double mu, double kappa, const OptProblemInfo<double>& info,
@@ -1387,10 +1406,9 @@ template void initialize_bound_duals_warm_cuda<float>(
     float mu, float zmax, const OptProblemInfo<float>& info, const float* xlam,
     float* zl, float* zu, cudaStream_t stream);
 
-template void push_bound_duals_cuda<float>(float zmin,
-                                           const OptProblemInfo<float>& info,
-                                           float* zl, float* zu,
-                                           cudaStream_t stream);
+template void project_primals_warm_cuda<float>(
+    const OptProblemInfo<float>& info, float* xlam, float gap,
+    cudaStream_t stream);
 
 template void correct_bound_multipliers_cuda<float>(
     float mu, float kappa, const OptProblemInfo<float>& info,

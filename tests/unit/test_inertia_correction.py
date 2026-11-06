@@ -136,7 +136,7 @@ def test_a_failed_factorization_reports_its_reason_and_clears_on_the_next_call(c
 
 def test_the_amigo_solver_names_each_failure():
     assert "NaN or infinite" in AmigoSolver.describe_failure(None, NONFINITE_MATRIX)
-    assert "pivoting broke down" in AmigoSolver.describe_failure(None, FRONT_OVERFLOW)
+    assert "past the memory cap" in AmigoSolver.describe_failure(None, FRONT_OVERFLOW)
     assert "flag 7" in AmigoSolver.describe_failure(None, 7)
 
 

@@ -368,6 +368,51 @@ class OptimizationProblem {
       }
       types[i] = type;
     }
+
+    // A pattern built before the types changed must zero the rows of the new types
+    if (mat) {
+      create_fixed_variables();
+    }
+  }
+
+  /**
+   * @brief Build the object that zeroes the fixed rows and columns of the pattern
+   *
+   * The variables of type FIXED at the call are the fixed ones, so the object
+   * is rebuilt whenever the types change after the pattern exists.
+   */
+  void create_fixed_variables() {
+    // TODO: Need to fix for parallel computations
+    int num_fixed = 0;
+    int* t_array = var_types->get_array();
+    for (int i = 0; i < var_types->get_local_size(); i++) {
+      if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
+        num_fixed++;
+      }
+    }
+
+    fixed = nullptr;
+    if (num_fixed > 0) {
+      // The fixed dof
+      MemoryLocation mem_loc = MemoryLocation::HOST_AND_DEVICE;
+      std::shared_ptr<Vector<int>> fixed_dof =
+          std::make_shared<Vector<int>>(num_fixed, 0, mem_loc);
+      int* dof_array = fixed_dof->get_array();
+      for (int i = 0, n = 0; i < var_types->get_local_size(); i++) {
+        if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
+          dof_array[n] = i;
+          n++;
+        }
+      }
+
+      // The row and column positions of the fixed variables in the pattern
+      fixed = std::make_shared<FixedVariables>(fixed_dof, mat);
+
+      // If policy == CUDA, copy to the device
+      if constexpr (policy == ExecPolicy::CUDA) {
+        fixed->copy_host_to_device();
+      }
+    }
   }
 
   /**
@@ -942,38 +987,8 @@ class OptimizationProblem {
       delete[] rowp;
       delete[] cols;
 
-      // Create the fixed variables object
-      // TODO: Need to fix for parallel computations
-      int num_fixed = 0;
-      int* t_array = var_types->get_array();
-      for (int i = 0; i < var_types->get_local_size(); i++) {
-        if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
-          num_fixed++;
-        }
-      }
-
-      fixed = nullptr;
-      if (num_fixed > 0) {
-        // Initialized the fixed dof
-        MemoryLocation mem_loc = MemoryLocation::HOST_AND_DEVICE;
-        std::shared_ptr<Vector<int>> fixed_dof =
-            std::make_shared<Vector<int>>(num_fixed, 0, mem_loc);
-        int* dof_array = fixed_dof->get_array();
-        for (int i = 0, n = 0; i < var_types->get_local_size(); i++) {
-          if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
-            dof_array[n] = i;
-            n++;
-          }
-        }
-
-        // Set the fixed locations
-        fixed = std::make_shared<FixedVariables>(fixed_dof, mat);
-
-        // If policy == CUDA, copy to the device
-        if constexpr (policy == ExecPolicy::CUDA) {
-          fixed->copy_host_to_device();
-        }
-      }
+      // Mark the fixed rows and columns of the new pattern
+      create_fixed_variables();
 
       // Perform any component group initializations with the Hessian matrix
       for (size_t i = 0; i < components.size(); i++) {

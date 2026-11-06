@@ -1,8 +1,11 @@
 """Center the primal-dual iterate for the current barrier parameter.
 
 Cold starts and the presolve project the primals with the standard push and set z = mu.
-Warm starts keep the supplied multipliers and push the primals by a small amount.
-Warm starts also keep the bound duals of the previous solve when they are available.
+Warm starts keep the supplied point where the barrier admits it, every gap is held at
+least mu over the dual cap times the scale of its bound, so the point moves only where
+its centered dual would pass the cap in the variable's own units. Warm starts also keep
+the bound duals of the previous solve when they are available, clipped into the sigma
+band around mu over the gap that every iterate obeys.
 """
 
 
@@ -59,17 +62,16 @@ class IterateCenterer:
         options = self.options
         if not warm:
             self.optimizer.initialize_duals(state.mu, state.current)
-        elif keep_bound_duals:
-            self.optimizer.initialize_duals_keep(
-                options["warm_start_bound_push"],
-                options["warm_start_mult_bound_push"],
-                state.current,
-            )
+            state.invalidate()
+            return
+
+        # A gap below mu over the dual cap, in the scale of its bound, would need a dual above the cap to be centered
+        zmax = options["warm_start_mult_init_max"]
+        gap = state.mu / zmax
+        if keep_bound_duals:
+            # The band every iterate obeys, open when the safeguard is off
+            kappa = options["kappa_sigma"] if options["kappa_sigma"] > 0.0 else float("inf")
+            self.optimizer.initialize_duals_keep(state.mu, gap, kappa, state.current)
         else:
-            self.optimizer.initialize_duals_warm(
-                state.mu,
-                options["warm_start_bound_push"],
-                options["warm_start_mult_init_max"],
-                state.current,
-            )
+            self.optimizer.initialize_duals_warm(state.mu, gap, zmax, state.current)
         state.invalidate()

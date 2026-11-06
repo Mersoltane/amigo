@@ -11,6 +11,7 @@ import time
 from .convergence_check import (
     CONVERGED,
     CONVERGED_ACCEPTABLE,
+    CONVERGED_OBJECTIVE,
     STATUS_MESSAGES,
 )
 from .regime import RegimeMonitor
@@ -60,6 +61,7 @@ class OptimizationLogger:
         iter_data["objective"] = state.objective_value / state.obj_scale
         px = state.step.get_solution()
         iter_data["step_norm"] = self.problem.maxabs(px)
+        iter_data["pred_obj"] = state.pred_obj
 
         # The breach counts come from the step contract
         iter_data.setdefault("dual_viol_total", 0)
@@ -72,11 +74,16 @@ class OptimizationLogger:
         self.opt_data["iterations"].append(iter_data)
         return
 
+    def mark_status(self, status):
+        """Record a status decided after the row of the iteration was written."""
+        if self.opt_data["iterations"]:
+            self.opt_data["iterations"][-1]["status"] = status
+
     def finish(self, status, state):
         """Record the final status in the returned data and print the summary."""
         self.opt_data["status"] = status
         self.opt_data["status_message"] = STATUS_MESSAGES[status]
-        self.opt_data["converged"] = status in (CONVERGED, CONVERGED_ACCEPTABLE)
+        self.opt_data["converged"] = status in (CONVERGED, CONVERGED_ACCEPTABLE, CONVERGED_OBJECTIVE)
         self.opt_data["acceptable"] = status == CONVERGED_ACCEPTABLE
 
         if state.comm_rank != 0 or not self.opt_data["iterations"]:
@@ -87,6 +94,8 @@ class OptimizationLogger:
             title = f"Amigo converged in {iteration} iterations"
         elif status == CONVERGED_ACCEPTABLE:
             title = f"Amigo converged to acceptable point in {iteration} iterations"
+        elif status == CONVERGED_OBJECTIVE:
+            title = f"Amigo converged in {iteration} iterations at the objective tolerance"
         else:
             title = f"Amigo stopped after {iteration} iterations: {STATUS_MESSAGES[status]}"
         self._print_summary(title, state, iter_data)
@@ -99,7 +108,7 @@ class OptimizationLogger:
             print(
                 f"{'iter':>4s}  {'nlp_error':>9s}  {'objective':>12s}  "
                 f"{'inf_pr':>9s}  {'inf_du':>9s}  {'compl':>9s}  "
-                f"{'mu':>9s}  {'||d||':>9s}  {'delta_w':>8s}  {'delta_c':>8s}  {'piv':>7s}  {'ic':>2s}  "
+                f"{'mu':>9s}  {'||d||':>9s}  {'dobj':>9s}  {'delta_w':>8s}  {'delta_c':>8s}  {'piv':>7s}  {'ic':>2s}  "
                 f"{'alpha_x':>8s}  {'alpha_z':>8s}  "
                 f"{'ls':>2s}  {'filt':>4s}  {'rej':>4s}  {'frej':>4s}  {'dv':>3s}  {'why':>8s}  {'soc':>4s}  {'regime':>6s}"
             )
@@ -112,6 +121,7 @@ class OptimizationLogger:
         inf_du = iter_data.get("inf_du", 0.0)
         compl = iter_data.get("compl", 0.0)
         step_norm = iter_data.get("step_norm", 0.0)
+        pred_obj = iter_data.get("pred_obj", 0.0)
         ax = iter_data.get("alpha_x", 0.0)
         az = iter_data.get("alpha_z", 0.0)
         ls = iter_data.get("line_iters", 0)
@@ -136,7 +146,7 @@ class OptimizationLogger:
         print(
             f"{iteration:4d}  {nlp_err:9.2e}  {obj:12.5e}  "
             f"{inf_pr:9.2e}  {inf_du:9.2e}  {compl:9.2e}  "
-            f"{mu:9.2e}  {step_norm:9.2e}  {dw_str}  {dc_str}  {piv_str}  {ic:2d}  "
+            f"{mu:9.2e}  {step_norm:9.2e}  {pred_obj:9.2e}  {dw_str}  {dc_str}  {piv_str}  {ic:2d}  "
             f"{ax:8.2e}  {az:8.2e}  "
             f"{ls:2d}  {fsize:4d}  {rej:4d}  {frej:4d}  {dv:3d}  {why:>8s}  {soc:>4s}  {regime:>6s}"
         )

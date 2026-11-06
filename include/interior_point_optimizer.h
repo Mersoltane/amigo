@@ -251,16 +251,17 @@ class InteriorPointOptimizer {
   }
 
   /**
-   * @brief Warm-start initialization: project the primals with a small push
-   * and set mu-consistent bound duals z = min(mu/gap, zmax). Multipliers and
-   * slacks in vars are kept as given.
+   * @brief Warm start without duals that holds every gap at least the given
+   * value and sets the centered bound duals z = min(mu/gap, zmax)
+   *
+   * The multipliers and slacks in vars are kept as given.
    *
    * @param mu The initial barrier parameter
-   * @param push The bound push fraction for the interior projection
+   * @param gap The least distance to a bound per unit of its scale, mu over the dual cap
    * @param zmax The bound dual cap
    * @param vars All of the optimization variables
    */
-  void initialize_duals_warm(T mu, T push, T zmax,
+  void initialize_duals_warm(T mu, T gap, T zmax,
                              std::shared_ptr<OptVector<T>> vars) const {
     T* xlam = vars->template get_solution_array<policy>();
     T *zl, *zu;
@@ -268,12 +269,12 @@ class InteriorPointOptimizer {
 
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
-      detail::project_primals_into_interior(info, xlam, push, push);
+      detail::project_primals_warm(info, xlam, gap);
       detail::initialize_bound_duals_warm(mu, zmax, info, xlam, zl, zu);
     }
 #ifdef AMIGO_USE_CUDA
     else {
-      detail::project_primals_into_interior_cuda(info, xlam, push, push);
+      detail::project_primals_warm_cuda(info, xlam, gap);
       AMIGO_CHECK_CUDA(cudaGetLastError());
       AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -296,33 +297,32 @@ class InteriorPointOptimizer {
   }
 
   /**
-   * @brief Warm start that keeps the given bound duals, projecting the
-   * primals with a small push and raising each bound dual to at least zmin
+   * @brief Warm start that keeps the given bound duals, holding every gap at
+   * least the given value and clipping each dual into the sigma band
+   * [mu/(kappa*gap), kappa*mu/gap] that every iterate obeys
    *
-   * @param push The bound push fraction for the interior projection
-   * @param zmin The bound dual floor
+   * @param mu The initial barrier parameter
+   * @param gap The least distance to a bound per unit of its scale, mu over the dual cap
+   * @param kappa The kappa_Sigma safeguard factor
    * @param vars All of the optimization variables
    */
-  void initialize_duals_keep(T push, T zmin,
+  void initialize_duals_keep(T mu, T gap, T kappa,
                              std::shared_ptr<OptVector<T>> vars) const {
     T* xlam = vars->template get_solution_array<policy>();
-    T *zl, *zu;
-    vars->template get_bound_duals<policy>(&zl, &zu);
 
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
-      detail::project_primals_into_interior(info, xlam, push, push);
-      detail::push_bound_duals(zmin, info, zl, zu);
+      detail::project_primals_warm(info, xlam, gap);
     }
 #ifdef AMIGO_USE_CUDA
     else {
-      detail::project_primals_into_interior_cuda(info, xlam, push, push);
-      AMIGO_CHECK_CUDA(cudaGetLastError());
-      detail::push_bound_duals_cuda(zmin, info, zl, zu);
+      detail::project_primals_warm_cuda(info, xlam, gap);
       AMIGO_CHECK_CUDA(cudaGetLastError());
       AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
     }
 #endif
+
+    correct_bound_multipliers(mu, kappa, vars);
   }
 
   /**

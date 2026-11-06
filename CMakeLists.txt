@@ -244,15 +244,33 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
     DESTINATION "${AMIGO_PY_PACKAGE_DIR}/include"
 )
 
+# The a2d headers come from the sibling checkout unless another path is given
+set(AMIGO_A2D_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../a2d/include"
+    CACHE PATH "Directory that holds the a2d headers")
+message(STATUS "Amigo a2d headers: ${AMIGO_A2D_INCLUDE_DIR}")
+
+# Amigo includes the a2d layout with the AD objects at the top level and the table operations
+if(NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/a2dobj.h"
+   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dscalarops.h"
+   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dinterp.h"
+   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dfourier.h"
+   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dbspline.h")
+  message(FATAL_ERROR
+    "The a2d headers in ${AMIGO_A2D_INCLUDE_DIR} lack the layout or the table "
+    "operations amigo includes. Point AMIGO_A2D_INCLUDE_DIR at an a2d checkout "
+    "with a2dobj.h at the top level and ad/a2dinterp.h, ad/a2dfourier.h, and "
+    "ad/a2dbspline.h.")
+endif()
+
 # Install a2d headers alongside (adjust if you want a different layout)
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../a2d/include/
+install(DIRECTORY ${AMIGO_A2D_INCLUDE_DIR}/
     DESTINATION "${AMIGO_PY_PACKAGE_DIR}/a2d/include"
 )
 
 target_include_directories(headers INTERFACE
   # When building this project
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../a2d/include>
+  $<BUILD_INTERFACE:${AMIGO_A2D_INCLUDE_DIR}>
 
   # When consumed via find_package(Amigo)
   $<INSTALL_INTERFACE:amigo/include>

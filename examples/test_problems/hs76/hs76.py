@@ -1,10 +1,10 @@
 """
 HS76: Standard QP test (4 vars, 3 ineq)
-  min  x1^2 + 0.5*x2^2 + x3^2 + 0.5*x4^2 - x1*x3 - x3*x4
+  min  x1^2 + 0.5*x2^2 + x3^2 + 0.5*x4^2 - x1*x3 + x3*x4
        - x1 - 3*x2 + x3 - x4
-  s.t. 5 - x1 - x2 - x3 - x4 >= 0
-       8 + x1 + x2 - x3 - x4 >= 0
-       6 - x1 + x2 - x3 + x4 >= 0
+  s.t. 5 - x1 - 2*x2 - x3 - x4 >= 0
+       4 - 3*x1 - x2 - 2*x3 + x4 >= 0
+       x2 + 4*x3 - 1.5 >= 0
        x1, x2, x3, x4 >= 0
   x0 = (0.5, 0.5, 0.5, 0.5), f* = -4.681818
 """
@@ -36,15 +36,15 @@ class HS76(am.Component):
             + x3**2
             + 0.5 * x4**2
             - x1 * x3
-            - x3 * x4
+            + x3 * x4
             - x1
             - 3 * x2
             + x3
             - x4
         )
-        self.constraints["c1"] = 5 - x1 - x2 - x3 - x4
-        self.constraints["c2"] = 8 + x1 + x2 - x3 - x4
-        self.constraints["c3"] = 6 - x1 + x2 - x3 + x4
+        self.constraints["c1"] = 5 - x1 - 2 * x2 - x3 - x4
+        self.constraints["c2"] = 4 - 3 * x1 - x2 - 2 * x3 + x4
+        self.constraints["c3"] = x2 + 4 * x3 - 1.5
 
 
 parser = argparse.ArgumentParser()

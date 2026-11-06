@@ -646,10 +646,25 @@ class Component:
         else:
             return not self._is_overridden("compute_output")
 
+    def _claim(self, name):
+        """Raise when the name already belongs to another quantity of the component."""
+        groups = (
+            ("a constant", self.constants),
+            ("an input", self.inputs),
+            ("data", self.data),
+            ("a constraint", self.constraints),
+            ("the objective", self.objective),
+            ("an output", self.outputs),
+        )
+        for kind, group in groups:
+            if name in group.meta:
+                raise ValueError(f"The name {name} is already {kind} of the component")
+
     def add_constant(self, name, value, **kwargs):
         """
         Add constant values to the component
         """
+        self._claim(name)
         self.constants.add(name, value=value, **kwargs)
         return
 
@@ -657,6 +672,7 @@ class Component:
         """
         Add inputs to the component.
         """
+        self._claim(name)
         self.inputs.add(name, shape=shape, **kwargs)
         return
 
@@ -664,6 +680,7 @@ class Component:
         """
         Add constraint to the component.
         """
+        self._claim(name)
         self.constraints.add(name, shape=shape, **kwargs)
         return
 
@@ -671,6 +688,7 @@ class Component:
         """
         Add a scalar objective function
         """
+        self._claim(name)
         self.objective.add(name, **kwargs)
         return
 
@@ -678,6 +696,7 @@ class Component:
         """
         Add component data that will be loaded into the problem
         """
+        self._claim(name)
         self.data.add(name, shape=shape, **kwargs)
         return
 
@@ -685,6 +704,7 @@ class Component:
         """
         Add an output quantity of interest computed by compute_output. These must be scalar
         """
+        self._claim(name)
         self.outputs.add(name, shape=None, **kwargs)
         return
 
@@ -1200,7 +1220,7 @@ class Component:
                 hprod_name=hprod_name,
             )
             decl += builder.get_declarations(
-                [lhs], reference=False, mode="hprod", template_name=R
+                [lhs], scalar_reference=False, mode="hprod", template_name=R
             )
 
             body = [f"Input<{R}> {grad_name}, {prod_name}, {hprod_name}"]

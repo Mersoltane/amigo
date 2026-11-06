@@ -22,6 +22,7 @@ from .convergence_check import (
     ConvergenceCheck,
     CONTINUE,
     CONVERGED_ACCEPTABLE,
+    CONVERGED_OBJECTIVE,
     DEGENERATE_DUALS,
     INVALID_NUMBER,
     MAX_ITERATIONS,
@@ -38,6 +39,7 @@ from .initialization import (
     IterateCenterer,
     MultiplierInitializer,
     NLPScaling,
+    hessian_perturbation_rows,
 )
 from .initialization.multiplier_initialization import FUTILE_FRACTION
 from .iteration_logger import OptimizationLogger
@@ -77,17 +79,23 @@ def _same_storage(a, b):
     )
 
 
+# Barrier a warm start resumes at when it carries none and the options name none
+WARM_START_MU = 1e-4
+
+
 class WarmStart:
     """A point with its multipliers and the bound duals that a later solve starts from.
 
-    The three vectors are laid out like the point of the model they belong to,
-    so a warm start serves any model built the same way.
+    The vectors are laid out like the point of the model they belong to, so
+    a warm start serves any model built the same way. The barrier is the one
+    the solve that produced the point ended at, or None when it is unknown.
     """
 
-    def __init__(self, point, zl, zu):
+    def __init__(self, point, zl, zu, mu=None):
         self.point = point
         self.zl = zl
         self.zu = zu
+        self.mu = mu
 
 
 class Optimizer:
@@ -178,13 +186,15 @@ class Optimizer:
         self.state = None
         self.solver = None
 
-        # Unscaled bound duals of the last solve for a warm start
+        # Unscaled bound duals of the last solve and the barrier it ended at, for a warm start
         self.last_duals = None
+        self.last_mu = None
 
-        # A given warm start supplies the bound duals of the first solve
+        # A given warm start supplies the bound duals and the barrier of the first solve
         self.warm = warm_start is not None
         if self.warm:
             self.set_bound_duals(warm_start.zl, warm_start.zu)
+            self.last_mu = warm_start.mu
 
         return
 
@@ -221,14 +231,14 @@ class Optimizer:
         return tuple(duals)
 
     def get_warm_start(self):
-        """Copies of the point with its multipliers and of the bound duals of the last solve."""
+        """Copies of the point with its multipliers, of the bound duals, and the barrier of the last solve."""
         zl, zu = self.get_bound_duals()
         self.x.copy_device_to_host()
         point = self.problem.create_vector()
         point.copy(self.x)
         if self.model is not None:
             point = ModelVector(self.model, x=point)
-        return WarmStart(point, zl, zu)
+        return WarmStart(point, zl, zu, self.last_mu)
 
     def set_bound_duals(self, zl, zu):
         """Bound duals that the next warm start begins from, laid out like the point."""
@@ -271,9 +281,16 @@ class Optimizer:
         # Class for evaluating problem-specific quantities
         self.evaluator = Evaluator(self.problem, self.optimizer)
 
+        # A warm start resumes at the barrier the options name, else the one it carries
+        warm_mu = options["warm_start_mu_init"]
+        if warm_mu is None:
+            warm_mu = WARM_START_MU if self.last_mu is None else self.last_mu
+
         # The interior point state object contains information about the design point, the
         # gradient and the Hessian of the Lagrangian
-        self.state = InteriorPointState(self.x, options, self.problem, self.optimizer)
+        self.state = InteriorPointState(
+            self.x, options, self.problem, self.optimizer, warm_mu=warm_mu
+        )
 
         # The solver keeps its symbolic analysis across solves with the same options
         _t_solver_build = time.perf_counter()
@@ -283,8 +300,16 @@ class Optimizer:
             self.solver = make_solver(options, self.state, self.problem, self.optimizer)
         _solver_build_time = time.perf_counter() - _t_solver_build
 
+        # The free variables of the model carry the inertia shift when the option names them
+        corrector_options = options
+        if isinstance(options["hessian_perturbation_indices"], str):
+            if self.model is None:
+                raise ValueError("The free variables need the model that built the problem")
+            corrector_options = dict(options)
+            corrector_options["hessian_perturbation_indices"] = hessian_perturbation_rows(self.model)
+
         # The inertia correction
-        inertia_corrector = InertiaCorrector(options, self.problem, self.optimizer)
+        inertia_corrector = InertiaCorrector(corrector_options, self.problem, self.optimizer)
 
         # Initialize the line search algorithm
         line_search = make_line_search(options, self.problem, self.optimizer)
@@ -293,7 +318,7 @@ class Optimizer:
         newton_step = NewtonStep(options, self.problem, self.optimizer)
 
         # Feasibility restoration phase algorithm
-        feasible_resto = make_restoration(options, self.problem, self.optimizer)
+        feasible_resto = make_restoration(corrector_options, self.problem, self.optimizer)
 
         # Initialize the barrier strategy correction algorithm
         barrier_strategy = make_barrier_strategy(options, self.problem, self.optimizer)
@@ -413,6 +438,10 @@ class Optimizer:
             # internal objects within the optimizer
             logger.log_iteration(status, self.state)
 
+            # The hook sees every logged iterate with its count
+            if options["iteration_callback"] is not None:
+                point = self.x if self.model is None else self.get_optimized_point()
+                options["iteration_callback"](counter, point)
 
             # Convergence, divergence, and invalid numbers all end the solve
             if status != CONTINUE:
@@ -473,6 +502,18 @@ class Optimizer:
                     )
                 else:
                     newton_step.compute_step(self.solver, self.evaluator, self.state)
+
+                # The objective change the full step predicts, in the objective's own units
+                self.state.pred_obj = (
+                    self.evaluator.objective_directional_derivative(self.state)
+                    / self.state.obj_scale
+                )
+
+                # A feasible centered iterate whose full step cannot move the objective ends the solve
+                if check.objective_converged(self.state):
+                    status = CONVERGED_OBJECTIVE
+                    logger.mark_status(status)
+                    break
 
                 # Perform a line search along the step direction
                 contract.before_step(self.state)
@@ -579,12 +620,13 @@ class Optimizer:
         # The summary and the returned data carry the final status on every exit
         logger.finish(status, self.state)
 
-        # Return the unscaled solution and keep its bound duals for a warm start
+        # Return the unscaled solution and keep its bound duals and barrier for a warm start
         self.nlp_scaling.unscale_point(self.state)
         if self.last_duals is None:
             self.last_duals = self.optimizer.create_opt_vector()
         self.last_duals.get_zl().copy(self.state.current.get_zl())
         self.last_duals.get_zu().copy(self.state.current.get_zu())
+        self.last_mu = self.state.mu
 
         return logger.get_data()
 

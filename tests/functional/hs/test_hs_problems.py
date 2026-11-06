@@ -99,15 +99,20 @@ def test_a_warm_start_from_the_solution_and_its_bound_duals_needs_fewer_iteratio
     # A cold restart from the solution re-centers at the initial barrier and takes as long as the first solve
     options = {"convergence_tolerance": 1e-8, "max_iterations": 100}
     cold = am.Optimizer(model, solved.get_optimized_point()).optimize(options)
-    warm = am.Optimizer(model, warm_start=solved.get_warm_start()).optimize(options)
+    warm_start = solved.get_warm_start()
+    warm = am.Optimizer(model, warm_start=warm_start).optimize(options)
     assert warm["status"] in (CONVERGED, CONVERGED_ACCEPTABLE), warm["status_message"]
     assert len(warm["iterations"]) < len(cold["iterations"])
     assert warm["iterations"][-1]["objective"] == pytest.approx(expected, rel=1e-6, abs=precision + 1e-6)
 
-    # The same duals set by hand give the same warm solve
+    # The solution restarted at the barrier it ended at is already converged
+    assert warm_start.mu < 1e-6
+    assert len(warm["iterations"]) <= 2
+
+    # The same duals and barrier set by hand give the same warm solve
     restart = am.Optimizer(model, solved.get_optimized_point())
     restart.set_bound_duals(zl, zu)
-    by_hand = restart.optimize({**options, "warm_start": True})
+    by_hand = restart.optimize({**options, "warm_start": True, "warm_start_mu_init": warm_start.mu})
     assert len(by_hand["iterations"]) == len(warm["iterations"])
 
 

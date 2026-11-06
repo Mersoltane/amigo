@@ -60,6 +60,11 @@ function(amigo_add_python_module)
   # MSVC conformance flags
   if(MSVC)
     target_compile_options(${AMIGO_NAME} PRIVATE /permissive- /Zc:preprocessor)
+
+    # The translation units of a module compile in parallel and may hold many sections
+    target_compile_options(${AMIGO_NAME} PRIVATE
+      $<$<COMPILE_LANGUAGE:CXX>:/MP>
+      $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
   endif()
 
   # Link the exported Amigo interface target

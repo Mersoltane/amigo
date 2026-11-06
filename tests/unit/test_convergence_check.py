@@ -105,5 +105,33 @@ def test_an_error_that_keeps_halving_never_stalls():
     assert statuses(check, [1.0 / 2**k for k in range(8)]) == [CONTINUE] * 8
 
 
+def objective_state(constr_viol, compl, pred_obj, objective=1000.0):
+    """Iterate at the barrier floor with the given violation, complementarity, and predicted objective change."""
+    return SimpleNamespace(
+        constr_viol=constr_viol,
+        complementarity=compl,
+        obj_scale=1.0,
+        objective_value=objective,
+        pred_obj=pred_obj,
+    )
+
+
+def test_a_feasible_centered_iterate_whose_step_cannot_move_the_objective_is_converged():
+    check = ConvergenceCheck(get_default_options({"objective_tolerance": 1e-6}), None, None)
+    assert check.objective_converged(objective_state(1e-5, 1e-5, 5e-4))
+
+    # The tolerance is relative to the objective, so a change of a thousandth of a unit is not small enough
+    assert not check.objective_converged(objective_state(1e-5, 1e-5, 2e-3))
+
+    # An infeasible or uncentered iterate is never converged this way
+    assert not check.objective_converged(objective_state(1e-3, 1e-5, 1e-9))
+    assert not check.objective_converged(objective_state(1e-5, 1e-3, 1e-9))
+
+
+def test_the_objective_test_is_off_by_default():
+    check = ConvergenceCheck(get_default_options(), None, None)
+    assert not check.objective_converged(objective_state(0.0, 0.0, 0.0))
+
+
 def test_the_stall_test_is_off_by_default():
     assert statuses(make_check(), [0.5] * 20) == [CONTINUE] * 20

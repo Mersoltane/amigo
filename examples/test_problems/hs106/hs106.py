@@ -11,7 +11,9 @@ HS106: Heat exchanger design (8 vars, 6 inequality constraints).
   1000 <= x2, x3 <= 10000
   10 <= x4..x8 <= 1000
   x0 = (5000, 5000, 5000, 200, 350, 150, 225, 425)
-  f* = 7049.3309
+  f* = 7049.2480
+  The optimum is from Schittkowski's 2008 source, since the 1981 value
+  7049.3309 belongs to a feasible but suboptimal point.
 """
 
 import amigo as am
@@ -62,4 +64,4 @@ opt.optimize(
         "max_line_search_iterations": 30,
     }
 )
-# f* = 7049.3309
+# f* = 7049.2480

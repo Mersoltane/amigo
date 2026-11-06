@@ -19,7 +19,7 @@ ESCALATE_ERROR = 1e-6
 # Factorization flag for a matrix with a NaN or infinite entry
 NONFINITE_MATRIX = -1
 
-# Factorization flag of the sparse LDL when delayed pivots overflow a front
+# Factorization flag of the sparse LDL when delayed pivots grow a front past the memory cap
 FRONT_OVERFLOW = -100
 
 
@@ -56,6 +56,7 @@ class AmigoSolver(LinearSolver):
             ustab=self.threshold,
             pivot_tol=self.pivot_tol,
             order=OrderingType.DEFAULT,
+            max_front_gb=options["amigo_max_front_gb"],
         )
 
     def reset(self, options, state):
@@ -112,7 +113,7 @@ class AmigoSolver(LinearSolver):
         if flag == NONFINITE_MATRIX:
             return "the matrix has a NaN or infinite entry"
         if flag == FRONT_OVERFLOW:
-            return "delayed pivots overflowed a front and the pivoting broke down"
+            return "delayed pivots grew a front past the memory cap"
         return f"the LDL factorization returned flag {flag}"
 
     def _solve_scaled(self, rhs):

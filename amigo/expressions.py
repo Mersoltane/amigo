@@ -389,6 +389,100 @@ class FourierNode(ExprNode):
         return self.expr.compute_cost() + 20
 
 
+class BSplineNode(ExprNode):
+    """B-spline of a data table or the inverse of a coordinate spline at a scalar expression."""
+
+    def __init__(self, table, expr, order, column=None, inverse=False):
+        super().__init__()
+        node = table.node if isinstance(table, Expr) else None
+        if not isinstance(node, VarNode) or node.active:
+            raise TypeError("bspline reads its coefficients from component data")
+        if node.shape is None:
+            raise ValueError("B-spline coefficients come in an array")
+        if len(node.shape) == 2:
+            if column is None or not 0 <= int(column) < node.shape[1]:
+                raise ValueError(
+                    f"A table of shape {node.shape} needs a column below {node.shape[1]}"
+                )
+            column = int(column)
+        elif column is not None:
+            raise ValueError("Only a 2D table takes a column")
+        order = int(order)
+        if not 1 <= order <= node.shape[0]:
+            raise ValueError(f"A spline of order {order} needs at least {order} coefficients")
+        if expr.shape is not None:
+            raise ValueError("bspline takes a scalar argument")
+
+        self.table = table
+        self.expr = expr
+        self.order = order
+        self.column = column
+        self.inverse = bool(inverse)
+        self.shape = None
+
+    def is_zero(self):
+        return False
+
+    def serialize(self):
+        return (
+            "bspline",
+            self.table.serialize(),
+            self.expr.serialize(),
+            self.order,
+            self.column,
+            self.inverse,
+        )
+
+    def to_cpp(self):
+        args = [self.table.to_cpp()]
+        if self.column is not None:
+            args.append(str(self.column))
+        args.append(self.expr.to_cpp())
+        name = "bspline_inverse" if self.inverse else "bspline"
+        return f"A2D::{name}<{self.order}>({', '.join(args)})"
+
+    def is_active(self):
+        return self.expr.is_active()
+
+    def compute_cost(self):
+        return self.expr.compute_cost() + (60 if self.inverse else 20)
+
+
+class BSplineBasisNode(ExprNode):
+    """One basis function of a B-spline at a scalar expression."""
+
+    def __init__(self, expr, index, size, order):
+        super().__init__()
+        index, size, order = int(index), int(size), int(order)
+        if not 1 <= order <= size:
+            raise ValueError(f"A spline of order {order} needs at least {order} coefficients")
+        if not 0 <= index < size:
+            raise ValueError(f"Basis index {index} out of range for {size} coefficients")
+        if expr.shape is not None:
+            raise ValueError("bspline_basis takes a scalar argument")
+
+        self.expr = expr
+        self.index = index
+        self.size = size
+        self.order = order
+        self.shape = None
+
+    def is_zero(self):
+        return False
+
+    def serialize(self):
+        return ("bspline_basis", self.expr.serialize(), self.index, self.size, self.order)
+
+    def to_cpp(self):
+        return f"A2D::bspline_basis<{self.order}, {self.size}>({self.index}, {self.expr.to_cpp()})"
+
+    def is_active(self):
+        return self.expr.is_active()
+
+    def compute_cost(self):
+        return self.expr.compute_cost() + 20
+
+
 def _to_expr(val):
     if isinstance(val, Expr):
         return val
@@ -544,6 +638,14 @@ class Expr:
             return cls(
                 FourierNode(cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4])
             )
+        elif d[0] == "bspline":
+            return cls(
+                BSplineNode(
+                    cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4], d[5]
+                )
+            )
+        elif d[0] == "bspline_basis":
+            return cls(BSplineBasisNode(cls.deserialize(d[1]), d[2], d[3], d[4]))
         else:
             return ValueError("Unrecognized operation type in deserialize")
 
@@ -575,11 +677,11 @@ _FRAME_DEPTH = 12
 
 def _node_children(node):
     """Expressions a node is built from, in the order they are serialized."""
-    if isinstance(node, (IndexNode, PassiveNode, UnaryNode)):
+    if isinstance(node, (IndexNode, PassiveNode, UnaryNode, BSplineBasisNode)):
         return [node.expr]
     if isinstance(node, BinaryNode):
         return [node.left, node.right]
-    if isinstance(node, (InterpNode, FourierNode)):
+    if isinstance(node, (InterpNode, FourierNode, BSplineNode)):
         return [node.table, node.expr]
     return []
 
@@ -792,6 +894,23 @@ class ExprBuilder:
                 "expr": child_ids[1],
                 "options": options,
             }
+        elif isinstance(node, BSplineNode):
+            options = (node.order, node.column, node.inverse)
+            key = ("bspline", child_ids[0], child_ids[1]) + options
+            info = {
+                "type": "bspline",
+                "table": child_ids[0],
+                "expr": child_ids[1],
+                "options": options,
+            }
+        elif isinstance(node, BSplineBasisNode):
+            options = (node.index, node.size, node.order)
+            key = ("bspline_basis", child_ids[0]) + options
+            info = {
+                "type": "bspline_basis",
+                "expr": child_ids[0],
+                "options": options,
+            }
         else:
             raise TypeError(type(node))
 
@@ -811,7 +930,7 @@ class ExprBuilder:
     @staticmethod
     def _operands(node):
         """Ids of the operands of an operation node, empty for a leaf."""
-        if node["type"] in ("unary", "interp", "fourier"):
+        if node["type"] in ("unary", "interp", "fourier", "bspline", "bspline_basis"):
             return [node["expr"]]
         if node["type"] == "binary":
             return [node["left"], node["right"]]
@@ -898,6 +1017,18 @@ class ExprBuilder:
                     self._build_expr_index(node["expr"]),
                     *node["options"],
                 )
+            )
+        elif node["type"] == "bspline":
+            expr = Expr(
+                BSplineNode(
+                    self._build_expr_index(node["table"]),
+                    self._build_expr_index(node["expr"]),
+                    *node["options"],
+                )
+            )
+        elif node["type"] == "bspline_basis":
+            expr = Expr(
+                BSplineBasisNode(self._build_expr_index(node["expr"]), *node["options"])
             )
 
         return expr

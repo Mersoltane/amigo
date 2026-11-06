@@ -342,12 +342,28 @@ void initialize_bound_duals_warm(T mu, T zmax, const OptProblemInfo<T>& info,
   }
 }
 
-// Keep the given bound duals but hold them at least zmin on finite bounds
+// Hold every primal at least the gap times the scale of its bound inside the bound for a warm start
+// Bounds closer than two margins meet at their midpoint
 template <typename T>
-void push_bound_duals(T zmin, const OptProblemInfo<T>& info, T* zl, T* zu) {
+void project_primals_warm(const OptProblemInfo<T>& info, T* xlam, T gap) {
   for (int i = 0; i < info.num_primals; i++) {
-    zl[i] = std::isinf(info.lbx[i]) ? T(0) : A2D::max2(zl[i], zmin);
-    zu[i] = std::isinf(info.ubx[i]) ? T(0) : A2D::max2(zu[i], zmin);
+    int idx = info.primal_indices[i];
+    T x = xlam[idx];
+    T lb = info.lbx[i];
+    T ub = info.ubx[i];
+    bool has_lb = !std::isinf(lb);
+    bool has_ub = !std::isinf(ub);
+
+    if (has_lb && has_ub) {
+      T half = T(0.5) * (ub - lb);
+      T pl = A2D::min2(gap * A2D::max2(T(1), std::abs(lb)), half);
+      T pu = A2D::min2(gap * A2D::max2(T(1), std::abs(ub)), half);
+      xlam[idx] = A2D::max2(A2D::min2(x, ub - pu), lb + pl);
+    } else if (has_lb) {
+      xlam[idx] = A2D::max2(x, lb + gap * A2D::max2(T(1), std::abs(lb)));
+    } else if (has_ub) {
+      xlam[idx] = A2D::min2(x, ub - gap * A2D::max2(T(1), std::abs(ub)));
+    }
   }
 }
 
@@ -736,10 +752,10 @@ void initialize_bound_duals_warm_cuda(T mu, T zmax,
                                       const T* xlam, T* zl, T* zu,
                                       cudaStream_t stream = 0);
 
-// Device version of push_bound_duals
+// Device version of project_primals_warm
 template <typename T>
-void push_bound_duals_cuda(T zmin, const OptProblemInfo<T>& info, T* zl, T* zu,
-                           cudaStream_t stream = 0);
+void project_primals_warm_cuda(const OptProblemInfo<T>& info, T* xlam, T gap,
+                               cudaStream_t stream = 0);
 
 // Device version of correct_bound_multipliers
 template <typename T>

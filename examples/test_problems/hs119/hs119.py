@@ -52,7 +52,7 @@ _PAIRS = [
     (9, 13),
     (10, 10),
     (10, 12),
-    (10, 11),
+    (11, 11),
     (11, 13),
     (12, 12),
     (12, 13),
@@ -73,6 +73,9 @@ _A = [
     [0, 0.45, 0.26, -1.10, 0.58, 0, -1.03, 0.10],
 ]
 _C = [2.5, 1.1, -3.1, -3.5, 1.3, 2.1, 2.3, -1.5]
+
+# Constraint entries past the first eight columns as row, column, and coefficient
+_EXTRA = [(6, 8, -0.36)]
 
 
 class HS119(am.Component):
@@ -97,9 +100,11 @@ class HS119(am.Component):
         self.objective["obj"] = obj
 
         # Equality constraints: A*x[0:8] + x[8+k] = c[k]
+        rows = [sum(_A[k][j] * x[j] for j in range(8)) + x[8 + k] for k in range(8)]
+        for k, j, coef in _EXTRA:
+            rows[k] = rows[k] + coef * x[j]
         for k in range(8):
-            s = sum(_A[k][j] * x[j] for j in range(8)) + x[8 + k]
-            self.constraints[f"h{k+1}"] = s - _C[k]
+            self.constraints[f"h{k+1}"] = rows[k] - _C[k]
 
 
 parser = argparse.ArgumentParser()

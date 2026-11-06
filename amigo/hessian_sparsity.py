@@ -10,6 +10,8 @@ import numpy as np
 
 from .expressions import (
     BinaryNode,
+    BSplineBasisNode,
+    BSplineNode,
     ConstNode,
     FourierNode,
     IndexNode,
@@ -69,8 +71,8 @@ class HessianSparsity:
         return _pairs(range(self.ncomp), range(self.ncomp))
 
     def _children(self, node):
-        # The table of an interpolation or a series is data and adds no dependency
-        if isinstance(node, (UnaryNode, InterpNode, FourierNode)):
+        # The table of an interpolation, a series, or a spline is data and adds no dependency
+        if isinstance(node, (UnaryNode, InterpNode, FourierNode, BSplineNode, BSplineBasisNode)):
             return [node.expr]
         if isinstance(node, BinaryNode):
             return [node.left, node.right]
@@ -109,8 +111,8 @@ class HessianSparsity:
         if isinstance(node, InterpNode):
             return results[0]
 
-        # A Fourier series curves in its argument like a nonlinear unary function
-        if isinstance(node, FourierNode):
+        # A Fourier series or a spline curves in its argument like a nonlinear unary function
+        if isinstance(node, (FourierNode, BSplineNode, BSplineBasisNode)):
             deps, hess = results[0]
             return deps, hess | _pairs(deps, deps)
 

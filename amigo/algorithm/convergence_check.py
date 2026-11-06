@@ -17,12 +17,14 @@ TIME_LIMIT = 8
 TINY_STEP = 9
 STALLED = 10
 DEGENERATE_DUALS = 11
+CONVERGED_OBJECTIVE = 12
 
 # Message reported with each final status
 STATUS_MESSAGES = {
     CONTINUE: "Optimization did not finish",
     CONVERGED: "Converged to the requested tolerance",
     CONVERGED_ACCEPTABLE: "Converged to an acceptable point",
+    CONVERGED_OBJECTIVE: "Converged, the step cannot change the objective by more than the tolerance at a feasible point",
     DIVERGED: "Iterates diverging, the problem may be unbounded",
     MAX_ITERATIONS: "Maximum number of iterations reached",
     INVALID_NUMBER: "Invalid number in a function or derivative evaluation",
@@ -102,6 +104,18 @@ class ConvergenceCheck:
         return (
             state.constr_viol <= tol
             and state.complementarity / state.obj_scale <= tol
+        )
+
+    def objective_converged(self, state):
+        """Feasible and centered iterate whose full step cannot change the objective by more than the tolerance."""
+        tol = self.options["objective_tolerance"]
+        if tol <= 0.0:
+            return False
+        scale = max(1.0, abs(state.objective_value) / state.obj_scale)
+        return (
+            state.constr_viol <= self.options["constr_viol_tol"]
+            and state.complementarity / state.obj_scale <= self.options["compl_inf_tol"]
+            and abs(state.pred_obj) <= tol * scale
         )
 
     @staticmethod

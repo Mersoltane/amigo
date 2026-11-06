@@ -81,10 +81,8 @@ class Evaluator:
 
         return fobj, barrier, infeas
 
-    def evaluate_directional_derivative(self, state):
-        """Directional derivative of the barrier objective along the primal step."""
-        if not state.residual_current:
-            self.evaluate_residual(state)
+    def objective_directional_derivative(self, state):
+        """Directional derivative of the scaled objective along the primal step."""
         if not state.step_current:
             raise ValueError("Step not current at this point")
 
@@ -101,9 +99,14 @@ class Evaluator:
         # Drop the multiplier rows from the dot product
         g.fill_at(con_indices, 0.0)
 
-        update = state.step.get_solution()
-        deriv = self.problem.dot(update, g)
+        return self.problem.dot(state.step.get_solution(), g)
 
+    def evaluate_directional_derivative(self, state):
+        """Directional derivative of the barrier objective along the primal step."""
+        if not state.residual_current:
+            self.evaluate_residual(state)
+
+        deriv = self.objective_directional_derivative(state)
         deriv += self.optimizer.compute_log_barrier_derivative(
             state.mu, state.current, state.step
         )

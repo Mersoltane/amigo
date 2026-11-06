@@ -2,7 +2,7 @@
 HS108: Polygon area maximization (9 vars, 13 inequality constraints).
   min  -0.5*(x1*x4 - x2*x3 + x3*x9 - x5*x9 + x5*x8 - x6*x7)
   s.t. 13 nonlinear inequality constraints (see below)
-  No variable bounds (unbounded)
+  x9 >= 0, all other variables free
   x0 = (1, 1, 1, 1, 1, 1, 1, 1, 1)
   f* = -0.8660254038
 
@@ -17,8 +17,9 @@ import argparse
 class HS108(am.Component):
     def __init__(self):
         super().__init__()
-        for i in range(9):
+        for i in range(8):
             self.add_input(f"x{i+1}", value=1.0)
+        self.add_input("x9", value=1.0, lower=0.0)
         self.add_objective("obj")
         for i in range(13):
             self.add_constraint(f"c{i+1}", lower=0.0, upper=float("inf"))

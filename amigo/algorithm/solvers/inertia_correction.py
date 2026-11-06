@@ -83,6 +83,15 @@ class InertiaCorrector:
         self._perturb_always_cd = options["perturb_always_cd"]
         self._warm_start = options["hessian_perturbation_warm_start"]
 
+        # Weights of the rows that carry delta_x when the free variables are named, else every primal row
+        named = options["hessian_perturbation_indices"]
+        self._delta_x_weights = None
+        if named is not None:
+            # One on every named row and zero elsewhere
+            self._delta_x_weights = self.problem.create_vector()
+            self._delta_x_weights.get_array()[np.asarray(named, dtype=int)] = 1.0
+            self._delta_x_weights.copy_host_to_device()
+
         # Curvature test workspace for accepting a wrong inertia
         self._curv_tol = options["neg_curv_test_tol"]
         self.curv_step = self.problem.create_vector()
@@ -322,9 +331,14 @@ class InertiaCorrector:
 
         perturb.copy(diagonal)
 
-        delta_x = self.numerical_eps + self._delta_x_curr
-        if delta_x > 0:
-            perturb.add_scalar_at(primal_indices, delta_x)
+        # The numerical floor on every primal row and delta_x on the rows that carry it
+        if self.numerical_eps > 0:
+            perturb.add_scalar_at(primal_indices, self.numerical_eps)
+        if self._delta_x_curr > 0:
+            if self._delta_x_weights is None:
+                perturb.add_scalar_at(primal_indices, self._delta_x_curr)
+            else:
+                perturb.axpy(self._delta_x_curr, self._delta_x_weights)
 
         delta_c = max(self._delta_c_curr, self._dc_infeas)
         if delta_c > 0:

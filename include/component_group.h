@@ -2,7 +2,13 @@
 #define AMIGO_COMPONENT_GROUP_H
 
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
+
+// The derivatives with respect to the data are compiled only for models that request them
+#ifndef AMIGO_DATA_DERIVATIVES
+#define AMIGO_DATA_DERIVATIVES 0
+#endif
 
 #include "component_group_base.h"
 #include "csr_matrix.h"
@@ -241,13 +247,14 @@ class SerialGroupBackend {
                                     const Vector<T>& vec,
                                     const NodeOwners& owners,
                                     CSRMat<T>& jac) const {
-    using ADtype = A2D::ADScalar<T, 1>;
-    using DataAD =
-        typename __get_collection_data_type<ADtype, Components...>::type;
-    using InputAD =
-        typename __get_collection_input_type<ADtype, Components...>::type;
-
     if constexpr (ncomp > 0 && ndata > 0) {
+#if AMIGO_DATA_DERIVATIVES
+      using ADtype = A2D::ADScalar<T, 1>;
+      using DataAD =
+          typename __get_collection_data_type<ADtype, Components...>::type;
+      using InputAD =
+          typename __get_collection_input_type<ADtype, Components...>::type;
+
       int num_elems = layout.get_num_elements();
 
       for (int i = 0; i < num_elems; i++) {
@@ -284,6 +291,11 @@ class SerialGroupBackend {
                       &jac_elem[ndata * j]);
         }
       }
+#else
+      throw std::runtime_error(
+          "amigo: this module was built without data derivatives, rebuild it "
+          "with build_module(data_derivatives=True)");
+#endif
     }
   }
 };
@@ -394,6 +406,7 @@ class SerialOutputBackend {
       const IndexLayout<noutputs>& output_layout, const Vector<T>& data_vec,
       const Vector<T>& vec, CSRMat<T>& jac) const {
     if constexpr (Component::noutputs > 0 && Component::ndata > 0) {
+#if AMIGO_DATA_DERIVATIVES
       typename Component::template Data<A2D::ADScalar<T, 1>> data;
       typename Component::template Input<A2D::ADScalar<T, 1>> input;
       typename Component::template Output<A2D::ADScalar<T, 1>> output;
@@ -423,6 +436,11 @@ class SerialOutputBackend {
           jac.add_row(output_index[j], ndata, data_index, &jac_elem[ndata * j]);
         }
       }
+#else
+      throw std::runtime_error(
+          "amigo: this module was built without data derivatives, rebuild it "
+          "with build_module(data_derivatives=True)");
+#endif
     }
 
     if constexpr (sizeof...(Remain) > 0) {
@@ -618,13 +636,14 @@ class OmpGroupBackend {
                                     const Vector<T>& vec,
                                     const NodeOwners& owners,
                                     CSRMat<T>& jac) const {
-    using ADtype = A2D::ADScalar<T, 1>;
-    using DataAD =
-        typename __get_collection_data_type<ADtype, Components...>::type;
-    using InputAD =
-        typename __get_collection_input_type<ADtype, Components...>::type;
-
     if constexpr (ncomp > 0 && ndata > 0) {
+#if AMIGO_DATA_DERIVATIVES
+      using ADtype = A2D::ADScalar<T, 1>;
+      using DataAD =
+          typename __get_collection_data_type<ADtype, Components...>::type;
+      using InputAD =
+          typename __get_collection_input_type<ADtype, Components...>::type;
+
       // Element Jacobians are computed in parallel and added serially in element order
       constexpr int per_element = ncomp * ndata;
       const int num_elems = layout.get_num_elements();
@@ -675,6 +694,11 @@ class OmpGroupBackend {
           }
         }
       }
+#else
+      throw std::runtime_error(
+          "amigo: this module was built without data derivatives, rebuild it "
+          "with build_module(data_derivatives=True)");
+#endif
     }
   }
 

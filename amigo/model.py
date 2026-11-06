@@ -63,6 +63,30 @@ def _write_if_changed(path, text: str):
         path.write_text(text)
 
 
+def _run_build_step(cmd, label: str, tail: int = 40):
+    """Run a CMake step with its output streamed, raising with the last lines when it fails."""
+    p = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    lines = []
+    for line in p.stdout:
+        print(line, end="")
+        lines.append(line)
+        if len(lines) > tail:
+            lines.pop(0)
+
+    if p.wait() != 0:
+        raise RuntimeError(
+            f"{label} failed with exit code {p.returncode}. The last output was\n"
+            + "".join(lines)
+        )
+
+
 def _parse_var_expr(expr: str):
     """
     Parse an expression like:
@@ -1189,6 +1213,7 @@ class Model:
         source_dir: str | Path | None = None,
         build_dir: str | Path | None = None,
         debug: bool = False,
+        data_derivatives: bool = False,
     ):
         """
         Generate the model code and build it.
@@ -1211,6 +1236,10 @@ class Model:
                 traces when the module crashes. The debug ``.so`` is placed in a
                 separate ``_amigo_build_debug`` directory so it does not overwrite
                 a Release build.
+            data_derivatives (bool): Compile the derivatives with respect to the
+                data that post-optimality sensitivities and the data Jacobians
+                need. They compile every gradient a second time, so they are off
+                unless a model uses them.
         """
 
         comm_rank = 0
@@ -1221,8 +1250,12 @@ class Model:
             if source_dir is None:
                 source_dir = self._guess_source_dir()
 
-            self.generate_cpp()
-            self._build_module(source_dir=source_dir, build_dir=build_dir, debug=debug)
+            sources = self.generate_cpp(
+                directory=source_dir, data_derivatives=data_derivatives
+            )
+            self._build_module(
+                source_dir=source_dir, build_dir=build_dir, debug=debug, sources=sources
+            )
 
         if comm is not None:
             comm.Barrier()
@@ -1230,76 +1263,104 @@ class Model:
         _built_modules.add(self.module_name)
         return
 
-    def generate_cpp(self):
+    def generate_cpp(self, directory: str | Path | None = None, data_derivatives: bool = False):
         """
-        Generate the C++ header and pybind11 wrapper for the model.
+        Generate the C++ code and pybind11 wrappers for the model.
 
-        This code automatically generates the files module_name.h (containing the C++ Component
-        definitions) and module_name.cpp (containing the pybind11 wrapper).
+        Every component class gets its own header module_name_Class.h and its
+        own translation unit module_name_Class.cpp that registers it, so the
+        classes compile in parallel and an unchanged class is not compiled
+        again. module_name.cpp defines the module and module_name.h includes
+        every class header.
 
-        The wrapper must be compiled before the optimization will run.
+        Args:
+            directory (str | Path | None): Directory of the generated files, the
+                current working directory if None
+            data_derivatives (bool): Compile the derivatives with respect to the data
+
+        Returns:
+            sources (list of str): Translation units of the module
         """
 
         if self.module_name is None:
             raise ValueError("module_name cannot be None when compiling a model")
+        directory = Path(directory) if directory is not None else Path.cwd()
 
-        # C++ file contents
-        cpp = '#include "amigo.h"\n'
-        cpp += '#include "scalar_ad.h"\n'
-        cpp += "namespace amigo {"
+        # Each class header with the C++ component definitions
+        def header(code):
+            return '#include "amigo.h"\n#include "scalar_ad.h"\nnamespace amigo {' + code + "}\n"
 
-        # pybind11 file contents, stamped so an ABI change always recompiles
-        py11 = f"// Generated for amigo ABI {abi_version}\n"
-        py11 += "#include <pybind11/pybind11.h>\n"
-        py11 += '#include "component_group.h"\n'
-        py11 += f'#include "{self.module_name}.h"\n'
-        py11 += "namespace py = pybind11;\n"
-
-        mod_ident = "mod"
-        py11 += f"PYBIND11_MODULE({self.module_name}, {mod_ident}) " + "{\n"
-        py11 += f'  {mod_ident}.attr("amigo_abi_version") = amigo::abi_version;\n'
-        py11 += "#ifdef AMIGO_USE_CUDA\n"
-        py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::CUDA;\n"
-        py11 += "#elif defined(AMIGO_USE_OPENMP)\n"
-        py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::OPENMP;\n"
-        py11 += "#else\n"
-        py11 += "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::SERIAL;\n"
-        py11 += "#endif\n"
-
-        # Write out the classes needed - class names must be unique
-        # so we don't duplicate code
+        # Classes are written once since class names are unique
+        units = []
         class_names = {}
         for name in self.comp:
             class_name = self.comp[name].class_name
             if class_name not in class_names:
-                compute_empty = self.comp[name].comp_obj.is_compute_empty()
-                output_empty = self.comp[name].comp_obj.is_compute_output_empty()
-                if not compute_empty or not output_empty:
+                comp_obj = self.comp[name].comp_obj
+                if not comp_obj.is_compute_empty() or not comp_obj.is_compute_output_empty():
                     class_names[class_name] = True
+                    wrapper = comp_obj.generate_pybind11(mod_ident="mod")
+                    units.append((class_name, comp_obj.generate_cpp(), wrapper))
 
-                    # Generate the C++
-                    cpp += self.comp[name].comp_obj.generate_cpp()
+        # The registration units are stamped so an ABI change always recompiles
+        stamp = f"// Generated for amigo ABI {abi_version}\n"
+        policy = (
+            "#ifdef AMIGO_USE_CUDA\n"
+            "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::CUDA;\n"
+            "#elif defined(AMIGO_USE_OPENMP)\n"
+            "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::OPENMP;\n"
+            "#else\n"
+            "  constexpr amigo::ExecPolicy policy = amigo::ExecPolicy::SERIAL;\n"
+            "#endif\n"
+        )
 
-                # Generate the wrappers
-                if not compute_empty or not output_empty:
-                    py11 += (
-                        self.comp[name].comp_obj.generate_pybind11(mod_ident=mod_ident)
-                        + ";\n"
-                    )
+        sources = [self.module_name + ".cpp"]
+        aggregate = ""
+        declarations = ""
+        calls = ""
+        for class_name, code, wrapper in units:
+            base = f"{self.module_name}_{class_name}"
+            register = f"{self.module_name}_register_{class_name}"
+            _write_if_changed(directory / f"{base}.h", header(code))
 
-        cpp += "}\n"
-        py11 += "}\n"
+            unit = stamp
+            unit += f"#define AMIGO_DATA_DERIVATIVES {1 if data_derivatives else 0}\n"
+            unit += "#include <pybind11/pybind11.h>\n"
+            unit += '#include "component_group.h"\n'
+            unit += f'#include "{base}.h"\n'
+            unit += "namespace py = pybind11;\n"
+            unit += f"void {register}(py::module_& mod) " + "{\n"
+            unit += policy
+            unit += f"  {wrapper};\n"
+            unit += "}\n"
+            _write_if_changed(directory / f"{base}.cpp", unit)
 
-        _write_if_changed(self.module_name + ".h", cpp)
-        _write_if_changed(self.module_name + ".cpp", py11)
+            sources.append(f"{base}.cpp")
+            aggregate += f'#include "{base}.h"\n'
+            declarations += f"void {register}(py::module_& mod);\n"
+            calls += f"  {register}(mod);\n"
 
-        return
+        module = stamp
+        module += "#include <pybind11/pybind11.h>\n"
+        module += '#include "component_group_base.h"\n'
+        module += "namespace py = pybind11;\n"
+        module += declarations
+        module += f"PYBIND11_MODULE({self.module_name}, mod) " + "{\n"
+        module += '  mod.attr("amigo_abi_version") = amigo::abi_version;\n'
+        module += calls
+        module += "}\n"
+
+        _write_if_changed(directory / f"{self.module_name}.h", aggregate)
+        _write_if_changed(directory / f"{self.module_name}.cpp", module)
+
+        return sources
 
     def _build_module(
         self,
         source_dir: str | Path,
         build_dir: str | Path | None = None,
         debug: bool = False,
+        sources: List[str] | None = None,
     ):
         """
         Build an extension module, utilizing the specified source and build directories.
@@ -1310,9 +1371,12 @@ class Model:
             source_dir (str or Path): Location of the source for the module
             build_dir (str, Path or None): Location of the build directory
             debug (bool): Build with CMAKE_BUILD_TYPE=Debug
+            sources (list of str or None): Translation units, the module file if None
         """
 
         build_type = "Debug" if debug else "Release"
+        if sources is None:
+            sources = [f"{self.module_name}.cpp"]
 
         source_dir = Path(source_dir).resolve()
         if build_dir is None:
@@ -1351,7 +1415,7 @@ endif()
 
 amigo_add_python_module(
     NAME {self.module_name}
-    SOURCES {self.module_name}.cpp
+    SOURCES {" ".join(sources)}
 )
 """
         _write_if_changed(cmakelists, cfg_str)
@@ -1378,39 +1442,16 @@ amigo_add_python_module(
             f"-DCMAKE_BUILD_TYPE={build_type}",
         ]
 
+        # The translation units of one module compile in parallel
         build_cmd = ["cmake", "--build", str(build_dir), "--config", build_type]
+        build_cmd += ["--parallel", str(os.cpu_count() or 1)]
 
         print("Running CMake commands from amigo")
         print(" ".join(cmake_cmd))
         print(" ".join(build_cmd))
 
-        # Configure
-        p = subprocess.Popen(
-            cmake_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        for line in p.stdout:
-            print(line, end="")
-
-        p.wait()
-
-        # Build
-        p = subprocess.Popen(
-            build_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        for line in p.stdout:
-            print(line, end="")
-
-        p.wait()
+        _run_build_step(cmake_cmd, f"CMake configure of {self.module_name}")
+        _run_build_step(build_cmd, f"Build of {self.module_name}")
 
         return
 

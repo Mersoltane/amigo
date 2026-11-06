@@ -1,4 +1,4 @@
-"""Compiled checks of the norm, table interpolation, Fourier series, binary functions with a number, and a long chain."""
+"""Compiled checks of the norm, table interpolation, Fourier series, the inverse tangents, binary functions with a number, a long chain, and their Jacobians."""
 
 import os
 import sys
@@ -14,7 +14,19 @@ N_CHAIN = 60
 TABLE = np.array([0.3, -1.2, 0.8, 2.5, -0.4, 1.1])
 TABLE2 = np.array([[0.5, -0.3], [1.5, 0.7], [-0.2, 2.0], [0.9, -1.1], [0.1, 0.4]])
 
-PIECES = ["norm", "max", "min", "atan2", "periodic", "column", "series", "series_column", "chain"]
+PIECES = [
+    "norm",
+    "max",
+    "min",
+    "atan",
+    "atan2",
+    "atan2_vars",
+    "periodic",
+    "column",
+    "series",
+    "series_column",
+    "chain",
+]
 
 
 class Operations(am.Component):
@@ -39,7 +51,9 @@ class Operations(am.Component):
             "norm": am.norm(x),
             "max": am.max2(0.0, y) * s,
             "min": am.min2(y, 0.5),
+            "atan": am.atan(s * y),
             "atan2": am.atan2(0.3, s) + am.atan2(y, 2.0),
+            "atan2_vars": am.atan2(y, s) * s,
             "periodic": am.interp1d(s, table, dx=0.2, periodic=True) * y,
             "column": am.interp1d(y, table2, column=1, x0=-0.5, dx=0.25),
             "series": am.fourier(s, table, period=0.7) * y,
@@ -90,7 +104,9 @@ def reference(x, s, y):
         "norm": np.linalg.norm(x),
         "max": max(0.0, y) * s,
         "min": min(y, 0.5),
+        "atan": np.arctan(s * y),
         "atan2": np.arctan2(0.3, s) + np.arctan2(y, 2.0),
+        "atan2_vars": np.arctan2(y, s) * s,
         "periodic": linear(TABLE, s / 0.2, True) * y,
         "column": linear(TABLE2[:, 1], (y + 0.5) / 0.25, False),
         "series": series(TABLE, s, 0.7) * y,
@@ -109,7 +125,7 @@ def model(tmp_path_factory):
     orig_dir = os.getcwd()
     os.chdir(tmp_path)
     try:
-        model.build_module()
+        model.build_module(data_derivatives=True)
     finally:
         os.chdir(orig_dir)
     if str(tmp_path) not in sys.path:
@@ -137,12 +153,29 @@ def gradient(model, x, s, y):
     return np.concatenate([g["ops.x"].ravel(), g["ops.s"].ravel(), g["ops.y"].ravel()])
 
 
+def state_indices(model):
+    names = ["ops.x", "ops.s", "ops.y"]
+    return np.concatenate([np.asarray(model.get_indices(n)).ravel() for n in names])
+
+
 def hessian(model, x, s, y):
     mat = model.create_matrix()
     model.eval_hessian(point(model, x, s, y), mat)
-    names = ["ops.x", "ops.s", "ops.y"]
-    idx = np.concatenate([np.asarray(model.get_indices(n)).ravel() for n in names])
+    idx = state_indices(model)
     return am.tocsr(mat).toarray()[np.ix_(idx, idx)]
+
+
+def outputs(model, v):
+    out = model.create_output_vector()
+    model.compute_output(point(model, *np.split(v, [3, 4])), out)
+    return np.concatenate([np.ravel(out[f"ops.{name}"]) for name in PIECES])
+
+
+def set_tables(model, flat):
+    data = model.get_data_vector()
+    data["ops.table"] = flat[: TABLE.size]
+    data["ops.table2"] = flat[TABLE.size :].reshape(TABLE2.shape)
+    data.get_vector().copy_host_to_device()
 
 
 def total(v):
@@ -182,6 +215,43 @@ def test_hessian_matches_differences_of_the_gradient(model):
         minus = gradient(model, *np.split(v - h * e, [3, 4]))
         column = (plus - minus) / (2 * h)
         assert np.allclose(H[:, j], column.ravel(), rtol=1e-6, atol=1e-6), j
+
+
+def test_output_jacobian_matches_differences(model):
+    v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
+    problem = model.get_problem()
+    jac = problem.create_output_jacobian_wrt_input()
+    problem.output_jacobian_wrt_input(point(model, *np.split(v, [3, 4])).get_vector(), jac)
+    rows = np.concatenate([np.ravel(model.get_indices(f"ops.{name}")) for name in PIECES])
+    J = am.tocsr(jac).toarray()[np.ix_(rows, state_indices(model))]
+
+    h = 1e-6
+    fd = [(outputs(model, v + h * e) - outputs(model, v - h * e)) / (2 * h) for e in np.eye(5)]
+    assert np.allclose(J, np.column_stack(fd), rtol=1e-7, atol=1e-8)
+
+
+def test_gradient_jacobian_wrt_data_matches_differences(model):
+    v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
+    problem = model.get_problem()
+    jac = problem.create_gradient_jacobian_wrt_data()
+    problem.gradient_jacobian_wrt_data(point(model, *np.split(v, [3, 4])).get_vector(), jac)
+    cols = np.concatenate([np.ravel(model.get_indices(n)) for n in ["ops.table", "ops.table2"]])
+    J = am.tocsr(jac).toarray()[np.ix_(state_indices(model), cols)]
+
+    # The gradient is linear in the table entries so central differences are exact
+    h = 1e-3
+    base = np.concatenate([TABLE, TABLE2.ravel()])
+    fd = []
+    try:
+        for e in np.eye(base.size):
+            set_tables(model, base + h * e)
+            plus = gradient(model, v[:3], v[3], v[4])
+            set_tables(model, base - h * e)
+            minus = gradient(model, v[:3], v[3], v[4])
+            fd.append((plus - minus) / (2 * h))
+    finally:
+        set_tables(model, base)
+    assert np.allclose(J, np.column_stack(fd), rtol=1e-8, atol=1e-8)
 
 
 def test_norm_at_the_origin_has_finite_zero_derivatives(model):

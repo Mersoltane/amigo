@@ -99,7 +99,7 @@ def build(tmp_path_factory, name, component):
     orig_dir = os.getcwd()
     os.chdir(build_dir)
     try:
-        model.build_module()
+        model.build_module(data_derivatives=True)
     finally:
         os.chdir(orig_dir)
     sys.path.insert(0, str(build_dir))

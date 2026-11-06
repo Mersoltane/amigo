@@ -2,10 +2,13 @@
 #define AMIGO_SCALAR_AD_H
 
 // Scalar parts of A2D that components use without the matrix operations and their tests
-#include "ad/a2dobj.h"
+#include "a2dobj.h"
+#include "a2dstack.h"
+#include "a2dvartuple.h"
+#include "ad/a2dbspline.h"
+#include "ad/a2dfourier.h"
+#include "ad/a2dinterp.h"
 #include "ad/a2dscalarops.h"
-#include "ad/a2dstack.h"
-#include "ad/a2dvartuple.h"
 #include "amigo.h"
 
 namespace amigo {

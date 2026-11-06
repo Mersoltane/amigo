@@ -145,6 +145,22 @@ def test_sparse_ldl():
         assert ldl_inertia[1] == inertia[1]
 
 
+def test_sparse_ldl_front_memory_cap():
+    from amigo.algorithm.solvers.amigo_solver import FRONT_OVERFLOW
+
+    csr, _, _, _ = get_matrix(0)
+
+    # A cap below one entry fails the first front and names the failure
+    ldl = am.SparseLDL(
+        csr,
+        solver_type=am.SolverType.LDL,
+        ustab=0.4,
+        order=am.OrderingType.NATURAL,
+        max_front_gb=1e-12,
+    )
+    assert ldl.factor() == FRONT_OVERFLOW
+
+
 def test_sparse_ldl_amd():
     for index in range(7):
         csr, xsoln, rhs, inertia = get_matrix(index)

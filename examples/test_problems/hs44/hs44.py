@@ -1,12 +1,12 @@
 """
 HS44: Many active bounds (4 vars, 6 ineq)
   min  x1 - x2 - x3 - x1*x3 + x1*x4 + x2*x3 - x2*x4
-  s.t. -8 + x1 + 2*x2 >= 0
-       -12 + 4*x1 + x2 >= 0
-       -12 + 3*x1 + 4*x2 >= 0
-       -8 + 2*x3 + x4 >= 0
-       -8 + x3 + 2*x4 >= 0
-       -5 + x3 + x4 >= 0
+  s.t. 8 - x1 - 2*x2 >= 0
+       12 - 4*x1 - x2 >= 0
+       12 - 3*x1 - 4*x2 >= 0
+       8 - 2*x3 - x4 >= 0
+       8 - x3 - 2*x4 >= 0
+       5 - x3 - x4 >= 0
        x1, x2, x3, x4 >= 0
   x0 = (0, 0, 0, 0), f* = -15
 """
@@ -36,12 +36,12 @@ class HS44(am.Component):
         x3 = self.inputs["x3"]
         x4 = self.inputs["x4"]
         self.objective["obj"] = x1 - x2 - x3 - x1 * x3 + x1 * x4 + x2 * x3 - x2 * x4
-        self.constraints["c1"] = -8 + x1 + 2 * x2
-        self.constraints["c2"] = -12 + 4 * x1 + x2
-        self.constraints["c3"] = -12 + 3 * x1 + 4 * x2
-        self.constraints["c4"] = -8 + 2 * x3 + x4
-        self.constraints["c5"] = -8 + x3 + 2 * x4
-        self.constraints["c6"] = -5 + x3 + x4
+        self.constraints["c1"] = 8 - x1 - 2 * x2
+        self.constraints["c2"] = 12 - 4 * x1 - x2
+        self.constraints["c3"] = 12 - 3 * x1 - 4 * x2
+        self.constraints["c4"] = 8 - 2 * x3 - x4
+        self.constraints["c5"] = 8 - x3 - 2 * x4
+        self.constraints["c6"] = 5 - x3 - x4
 
 
 parser = argparse.ArgumentParser()

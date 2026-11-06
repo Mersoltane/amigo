@@ -11,6 +11,8 @@ from .expressions import (
     PassiveNode,
     InterpNode,
     FourierNode,
+    BSplineNode,
+    BSplineBasisNode,
     _balanced_sum,
     _to_expr,
 )
@@ -156,6 +158,33 @@ def fourier(x, coefficients, column=None, period=1.0):
     curve through them. A 2D table is read along one column.
     """
     return Expr(FourierNode(coefficients, _to_expr(x), column, period))
+
+
+def bspline(table, t, order, column=None):
+    """B-spline with the coefficients of a table of component data at the parameter t.
+
+    A spline of order k with m coefficients lives on the open uniform knots of
+    the unit interval that the MBI package uses, the knot 0 repeated k times,
+    the interior knots j / (m - k + 1), and the knot 1 repeated k times. A 2D
+    table is read along one column and the end spans extend the spline outside
+    the unit interval.
+    """
+    return Expr(BSplineNode(table, _to_expr(t), order, column))
+
+
+def bspline_basis(t, index, size, order):
+    """Basis function index of the B-spline of order k with size coefficients at the parameter t."""
+    return Expr(BSplineBasisNode(_to_expr(t), index, size, order))
+
+
+def bspline_inverse(table, x, order, column=None):
+    """Parameter where the coordinate spline with increasing coefficients takes the value x.
+
+    The coefficients come from a table of component data as in bspline. An x
+    below the first or above the last coefficient holds the parameter at 0 or
+    1 with zero derivatives, as the clamped inverse map of MBI does.
+    """
+    return Expr(BSplineNode(table, _to_expr(x), order, column, inverse=True))
 
 
 def fourier_coefficients(samples):

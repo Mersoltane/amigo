@@ -1,8 +1,8 @@
 """
 HS109: Structural mechanics (9 vars, 4 ineq + 6 eq constraints).
   min  3*x1 + 1e-6*x1^3 + 2*x2 + 0.522074e-6*x2^3
-  s.t. 4 nonlinear inequalities, 6 nonlinear equalities (sin/cos)
-  f* = 5362.0681 (approx)
+  s.t. 2 linear and 2 nonlinear inequalities, 6 nonlinear equalities (sin/cos)
+  f* = 5362.0693
 
   Challenging: trig functions, infeasible starting point, highly nonlinear
   equalities with products of variables and sin/cos.
@@ -21,7 +21,7 @@ class HS109(am.Component):
         self._pb = math.sin(0.25)
         self._pc = math.cos(0.25)
 
-        # Bounds and starting points (x0 projected into bounds)
+        # Bounds and starting points with x5 to x7 at the middle of their bounds
         lb = [0.0, 0.0, -0.55, -0.55, 196, 196, 196, -400, -400]
         ub = [1e20, 1e20, 0.55, 0.55, 252, 252, 252, 800, 800]
         x0 = [0.0, 0.0, 0.0, 0.0, 224, 224, 224, 0.0, 0.0]
@@ -91,7 +91,7 @@ class HS109(am.Component):
             x[4] * x[6] * am.cos(x[3] - 0.25)
             + x[5] * x[6] * am.cos(x[3] - x[2] - 0.25)
             - 2 * c * x[6] ** 2
-            + 22.938 * a
+            - 22.938 * a
             + 0.7533e-3 * a * x[6] ** 2
         )
 
@@ -115,4 +115,4 @@ opt.optimize(
         "max_line_search_iterations": 30,
     }
 )
-# f* = 5362.0681
+# f* = 5362.0693

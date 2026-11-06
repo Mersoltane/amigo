@@ -11,8 +11,6 @@ from ..barrier_strategy import fraction_to_boundary
 from ..solvers import InertiaCorrector
 from .filter_acceptance import FilterAcceptance, FilterBasePoint
 
-# Gentle interior push when the main phase resumes
-EXIT_PUSH = 1e-6
 
 # Scale limit of the optimality error, as in the main convergence test
 SCALE_MAX = 100.0
@@ -121,11 +119,9 @@ class FeasibilityRestoration:
             if info.success:
                 # The driver estimates new multipliers from the restored point
                 state.get_current_point().fill_at(self.con_indices, 0.0)
+                zmax = self.options["warm_start_mult_init_max"]
                 self.optimizer.initialize_duals_warm(
-                    mu_store,
-                    EXIT_PUSH,
-                    self.options["warm_start_mult_init_max"],
-                    state.current,
+                    mu_store, mu_store / zmax, zmax, state.current
                 )
             elif not info.infeasible:
                 state.current.copy(self.entry)

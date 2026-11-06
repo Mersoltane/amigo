@@ -64,12 +64,12 @@ class InteriorPointState:
     constr_viol: float
     residual_current: bool
 
-    def __init__(self, x, options, problem, optimizer):
+    def __init__(self, x, options, problem, optimizer, warm_mu=None):
         self.comm_rank = 0
         self.iter = 0
-        # A warm start begins at a barrier consistent with its near-optimal point
+        # A warm start begins at the barrier the driver resolved for its near-optimal point
         if options["warm_start"]:
-            self.mu = options["warm_start_mu_init"]
+            self.mu = warm_mu
         else:
             self.mu = options["initial_barrier_param"]
         self.tau = fraction_to_boundary(options, self.mu)
@@ -103,6 +103,9 @@ class InteriorPointState:
         self.kkt_error = 0.0
         self.constr_viol = 0.0
         self.residual_current = False
+
+        # Change of the unscaled objective that the full Newton step predicts
+        self.pred_obj = 0.0
 
     @property
     def barrier_objective(self):

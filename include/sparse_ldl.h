@@ -69,11 +69,15 @@ class SparseLDL {
    * @param pivot_tol Pivot tolerance below which pivots are treated as zero
    * @param delay_growth Delayed pivot growth factor (used to estimate memory
    * requirements)
+   * @param order The fill reducing ordering
+   * @param max_front_gb Memory in GB that one frontal matrix may take before
+   * the factorization fails
    */
   SparseLDL(std::shared_ptr<CSRMat<T>> mat,
             SolverType solver_type = SolverType::LDL, double ustab = 0.01,
             double pivot_tol = 1e-14, double delay_growth = 2.0,
-            OrderingType order = OrderingType::NATURAL)
+            OrderingType order = OrderingType::NATURAL,
+            double max_front_gb = 4.0)
       : mat(mat),
         solver_type(solver_type),
         pivot_tol(pivot_tol),
@@ -86,6 +90,10 @@ class SparseLDL {
     } else {
       this->delay_growth = std::clamp(delay_growth, 1.0, 10.0);
     }
+
+    // Delayed pivots grow a front without limit up to the memory cap
+    max_front_entries =
+        std::size_t(std::max(max_front_gb, 0.0) * double(1ULL << 30) / sizeof(T));
 
     // Initialize data
     cholesky_int_nnz = 0;
@@ -1034,9 +1042,9 @@ class SparseLDL {
     get_frontal_vars(ks, num_children, children, contrib, front_vars,
                      front_indices, &fully_summed, &front_size);
 
-    // Delayed pivots past the growth budget mean the pivoting has broken down
-    const int delayed = fully_summed - (node_ptr[ks + 1] - node_ptr[ks]);
-    if (delayed > (delay_growth - 1.0) * (front_size - delayed) + block_size) {
+    // A front that outgrows the memory cap ends the factorization
+    const std::size_t front_entries = std::size_t(front_size) * front_size;
+    if (front_entries > max_front_entries) {
       reset_front_vars(fully_summed, front_size, front_vars, front_indices);
       pool.return_node(std::move(node));
       return FRONT_OVERFLOW;
@@ -1045,7 +1053,6 @@ class SparseLDL {
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
     const int min_dim = 16;
-    const std::size_t front_entries = std::size_t(front_size) * front_size;
     if (front_size < min_dim && node.F.size() < min_dim * min_dim) {
       node.F.resize(min_dim * min_dim);
     } else if (node.F.size() < front_entries) {
@@ -3503,6 +3510,9 @@ class SparseLDL {
 
   // Estimated growth factor for delayed pivots
   double delay_growth;
+
+  // Entries one frontal matrix may hold before the factorization fails
+  std::size_t max_front_entries;
 
   // Type of ordering used for the matrix
   OrderingType order;

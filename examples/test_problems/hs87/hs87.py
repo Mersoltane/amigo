@@ -2,6 +2,8 @@
 HS87: Electrical network design (6 vars + 6 aux, 7 eq constraints).
   Piecewise linear cost with nonlinear trig constraints.
   Multiple local minima — stress test for convergence to correct basin.
+  The cost is the continuous one of Vanderbei's model, without the jumps
+  of the HS cost, whose optimum 8927.5977 at the same x* is 100 higher.
   f* = 8827.5977
 
   Ref: Hock & Schittkowski, Test Examples for Nonlinear Programming Codes,
@@ -35,9 +37,9 @@ class HS87(am.Component):
         self.add_input("add1", value=90.0, lower=0.0)  # max(0, x1-300)
         self.add_input("add2", value=900.0, lower=0.0)  # max(0, x2-100)
         self.add_input("add3", value=800.0, lower=0.0)  # max(0, x2-200)
-        self.add_input("slk1", value=0.0)  # slack (free)
-        self.add_input("slk2", value=0.0)  # slack (free)
-        self.add_input("slk3", value=0.0)  # slack (free)
+        self.add_input("slk1", value=0.0, upper=0.0)  # add1 >= x1 - 300
+        self.add_input("slk2", value=0.0, upper=0.0)  # add2 >= x2 - 100
+        self.add_input("slk3", value=0.0, upper=0.0)  # add3 >= x2 - 200
 
         self.add_objective("obj")
         # 7 equality constraints

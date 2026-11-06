@@ -17,6 +17,8 @@ CONVERGENCE = {
     "dual_inf_tol": 1.0,
     "constr_viol_tol": 1e-4,
     "compl_inf_tol": 1e-4,
+    # Relative objective change the full step predicts below which a feasible centered iterate is converged, and 0 disables
+    "objective_tolerance": 0.0,
     # Acceptable convergence, a weaker solution held for several iterations
     "acceptable_tol": 1e-6,
     "acceptable_iter": 15,
@@ -46,10 +48,10 @@ STARTING_POINT = {
     "bound_relax_factor": 0.0,
     # Warm start keeping the supplied multipliers and the previous bound duals
     "warm_start": False,
+    # Cap on the centered bound duals of a warm start, which holds every gap at least mu over the cap
     "warm_start_mult_init_max": 1e3,
-    "warm_start_mu_init": 1e-4,
-    "warm_start_bound_push": 1e-3,
-    "warm_start_mult_bound_push": 1e-3,
+    # Barrier a warm start resumes at, None for the barrier the warm start carries or 1e-4 without one
+    "warm_start_mu_init": None,
     # Gradient based NLP scaling and a user factor on the objective that multiplies it
     "nlp_scaling": True,
     "nlp_scaling_max_gradient": 100.0,
@@ -110,9 +112,13 @@ LINEAR_SOLVER = {
     "amigo_pivot_threshold": 1e-4,
     # Symmetric equilibration sweeps before each factorization and 0 disables
     "amigo_scaling_sweeps": 1,
+    # Memory in GB one frontal matrix may take as delayed pivots grow it
+    "amigo_max_front_gb": 4.0,
     # Iterative refinement until the solve backward error meets the tolerance
     "amigo_refinement_steps": 2,
     "amigo_residual_tol": 1e-10,
+    # MUMPS workspace above its estimate in percent, doubled on a workspace error
+    "mumps_mem_percent": 1000,
     # GPU solver, pivots below the epsilon are statically perturbed
     "cuda_pivot_eps": 1e-8,
     "cuda_ir_steps": 2,
@@ -125,6 +131,8 @@ LINEAR_SOLVER = {
     "perturb_always_cd": False,
     # Resume from the decayed previous delta_x instead of restarting at 0, holding it after a failed decay
     "hessian_perturbation_warm_start": True,
+    # Primal rows that carry delta_x, None for all, "free" for the variables the equalities leave free, or an index list
+    "hessian_perturbation_indices": None,
     # Accept a wrong inertia when the step curvature exceeds this fraction of its norm and 0 disables
     "neg_curv_test_tol": 0.0,
     # Always-on dual regularization delta_c = coeff * max(||c||, mu) and 0 disables
@@ -187,6 +195,11 @@ RESTORATION = {
     "resto_trigger_iters": 5,
 }
 
+# Hook called with the iteration count and the current point after every logged iteration
+OUTPUT = {
+    "iteration_callback": None,
+}
+
 # Legacy options kept so old scripts still run with no effect
 LEGACY = {
     "bound_push": 1e-2,
@@ -207,6 +220,8 @@ LEGACY = {
     "diverging_step_iters": 3,
     "max_restorations": 5,
     "restoration_budget_refresh_iters": 20,
+    "warm_start_bound_push": 1e-3,
+    "warm_start_mult_bound_push": 1e-3,
     "armijo_constant": 1e-4,
     "merit_armijo_constant": 1e-4,
     "mu_max_fact": 1e3,
@@ -219,6 +234,7 @@ GROUPS = (
     LINEAR_SOLVER,
     LINE_SEARCH,
     RESTORATION,
+    OUTPUT,
     LEGACY,
 )
 

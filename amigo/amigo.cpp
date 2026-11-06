@@ -678,12 +678,13 @@ PYBIND11_MODULE(amigo, mod) {
              std::shared_ptr<amigo::SparseLDL<double>>>(mod, "SparseLDL")
       .def(py::init<std::shared_ptr<amigo::CSRMat<double>>,
                     amigo::SparseLDL<double>::SolverType, double, double,
-                    double, amigo::OrderingType>(),
+                    double, amigo::OrderingType, double>(),
            py::arg("mat"),
            py::arg("solver_type") = amigo::SparseLDL<double>::SolverType::LDL,
            py::arg("ustab") = 0.01, py::arg("pivot_tol") = 1e-14,
            py::arg("delay_growth") = 2.0,
-           py::arg("order") = amigo::OrderingType::NATURAL)
+           py::arg("order") = amigo::OrderingType::NATURAL,
+           py::arg("max_front_gb") = 4.0)
       .def("factor", &amigo::SparseLDL<double>::factor,
            py::arg("diagonal") = nullptr)
       .def("set_pivot_threshold",
@@ -841,9 +842,10 @@ PYBIND11_MODULE(amigo, mod) {
       .def("get_num_primals", &IPMOpt::get_num_primals)
       .def("get_num_constraints", &IPMOpt::get_num_constraints)
       .def("initialize_duals", &IPMOpt::initialize_duals)
-      .def("initialize_duals_warm", &IPMOpt::initialize_duals_warm)
+      .def("initialize_duals_warm", &IPMOpt::initialize_duals_warm,
+           py::arg("mu"), py::arg("gap"), py::arg("zmax"), py::arg("vars"))
       .def("initialize_duals_keep", &IPMOpt::initialize_duals_keep,
-           py::arg("push"), py::arg("zmin"), py::arg("vars"))
+           py::arg("mu"), py::arg("gap"), py::arg("kappa"), py::arg("vars"))
       .def("set_fixed_values", &IPMOpt::set_fixed_values, py::arg("x"))
       .def("compute_residual", &IPMOpt::compute_residual)
       .def("compute_update", &IPMOpt::compute_update)

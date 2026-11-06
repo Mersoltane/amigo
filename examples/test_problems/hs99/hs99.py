@@ -39,7 +39,7 @@ class HS99(am.Component):
         #   s[j] = dt*(a[j]*sin(x[j-1]) - b) + s[j-1]
         s_val = 0.0
         q_val = 0.0
-        obj = 0.0
+        r_val = 0.0
 
         for k in range(7):
             dt = _T[k + 1] - _T[k]
@@ -48,9 +48,10 @@ class HS99(am.Component):
             # q uses OLD s_val, so compute q before updating s
             q_val = q_val + 0.5 * dt**2 * (ak * am.sin(x[k]) - _B) + dt * s_val
             s_val = s_val + dt * (ak * am.sin(x[k]) - _B)
-            obj = obj - (ak * dt * am.cos(x[k])) ** 2
+            r_val = r_val + ak * dt * am.cos(x[k])
 
-        self.objective["obj"] = obj
+        # The objective is the negated square of the final r
+        self.objective["obj"] = -(r_val**2)
 
         # Endpoint constraints
         self.constraints["h_q"] = q_val - 1e5
