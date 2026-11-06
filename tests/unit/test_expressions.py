@@ -4,12 +4,11 @@ Expressions
 
 - The zero, activity, cost, and C++ rules of every expression node
 - The zero shortcuts of the Expr operators and the serialize and deserialize round trip
-- The chunked sums, the depth limit, the binary functions with a number, the norm, and the tables
+- The chunked sums, the depth limit, the binary functions with a number, and the norm
 """
 
 import pkgutil
 
-import numpy as np
 import pytest
 
 import amigo as am
@@ -586,7 +585,7 @@ class TestSplitSum:
             assert "(d * d)" not in line
 
 
-# Binary functions with a number, the norm, and table interpolation
+# Binary functions with a number, the norm, and the names of the operations
 
 FUNCTIONS = {"max2": am.max2, "min2": am.min2, "atan2": am.atan2}
 
@@ -657,70 +656,7 @@ class TestNorm:
         )
 
 
-def make_table(shape=5):
-    """A passive table of values"""
-    return Expr(VarNode("tab", shape=shape, active=False))
-
-
-class TestInterp:
-    def test_vector_table(self):
-        s = Expr(VarNode("s"))
-
-        e = am.interp1d(s, make_table(), dx=0.25, periodic=True)
-
-        assert e.to_cpp() == "A2D::interp(tab, s, 0.0, 0.25, true)"
-
-    def test_matrix_column(self):
-        s = Expr(VarNode("s"))
-
-        e = am.interp1d(s, make_table((5, 3)), column=2, x0=-1.0)
-
-        assert e.to_cpp() == "A2D::interp(tab, 2, s, -1.0, 1.0, false)"
-
-    def test_active_table_raises(self):
-        with pytest.raises(TypeError):
-            am.interp1d(Expr(VarNode("s")), Expr(VarNode("tab", shape=5)))
-
-    @pytest.mark.parametrize(
-        "shape, kwargs",
-        [
-            ((5, 3), {}),
-            ((5, 3), {"column": 3}),
-            (5, {"column": 0}),
-            (5, {"dx": 0.0}),
-            (1, {}),
-        ],
-    )
-    def test_invalid_tables_raise(self, shape, kwargs):
-        with pytest.raises(ValueError):
-            am.interp1d(Expr(VarNode("s")), make_table(shape), **kwargs)
-
-    def test_activity_follows_the_argument(self):
-        assert am.interp1d(Expr(VarNode("s")), make_table()).is_active()
-        assert not am.interp1d(Expr(ConstNode(value=0.3)), make_table()).is_active()
-
-    def test_round_trip(self):
-        e = am.interp1d(
-            Expr(VarNode("s")), make_table((5, 2)), column=1, x0=0.5, dx=0.1
-        )
-
-        assert Expr.deserialize(e.serialize()).to_cpp() == e.to_cpp()
-
-    def test_code_generation(self):
-        s = Expr(VarNode("s"))
-        table = make_table()
-        lhs = Expr(VarNode("lagrangian__"))
-
-        rhs = am.interp1d(s, table, dx=0.5) * s
-        builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
-
-        lines = builder.get_cpp_lines(mode="hprod", template_name="R__")
-        decl = lines[0]
-        active = lines[2]
-
-        assert "A2D::VecRef<R__, 5> tab" in decl[0]
-        assert "A2D::interp(tab, s, 0.0, 0.5, false)" in active[-1]
-
+class TestOperationNames:
     def test_no_operation_shares_its_name_with_a_subpackage(self):
         # Importing a subpackage binds its name on amigo over any operation of that name
         shared = []
@@ -730,81 +666,6 @@ class TestInterp:
                 shared.append(module.name)
 
         assert shared == []
-
-
-class TestFourier:
-    def test_vector_table(self):
-        s = Expr(VarNode("s"))
-
-        assert am.fourier(s, make_table()).to_cpp() == "A2D::fourier(tab, s, 1.0)"
-
-    def test_matrix_column(self):
-        s = Expr(VarNode("s"))
-
-        e = am.fourier(s, make_table((5, 3)), column=2, period=0.5)
-
-        assert e.to_cpp() == "A2D::fourier(tab, 2, s, 0.5)"
-
-    def test_active_table_raises(self):
-        with pytest.raises(TypeError):
-            am.fourier(Expr(VarNode("s")), Expr(VarNode("tab", shape=5)))
-
-    @pytest.mark.parametrize(
-        "shape, kwargs",
-        [
-            ((5, 3), {}),
-            ((5, 3), {"column": 3}),
-            (5, {"column": 0}),
-            (5, {"period": 0.0}),
-        ],
-    )
-    def test_invalid_tables_raise(self, shape, kwargs):
-        with pytest.raises(ValueError):
-            am.fourier(Expr(VarNode("s")), make_table(shape), **kwargs)
-
-    def test_activity_follows_the_argument(self):
-        assert am.fourier(Expr(VarNode("s")), make_table()).is_active()
-        assert not am.fourier(Expr(ConstNode(value=0.3)), make_table()).is_active()
-
-    def test_round_trip(self):
-        e = am.fourier(Expr(VarNode("s")), make_table((5, 2)), column=1, period=2.0)
-
-        assert Expr.deserialize(e.serialize()).to_cpp() == e.to_cpp()
-
-    def test_code_generation(self):
-        s = Expr(VarNode("s"))
-        table = make_table()
-        lhs = Expr(VarNode("lagrangian__"))
-
-        rhs = am.fourier(s, table, period=0.5) * s
-        builder = ExprBuilder([], [table], [s], [], rhs=rhs, lhs=lhs)
-
-        lines = builder.get_cpp_lines(mode="hprod", template_name="R__")
-        decl = lines[0]
-        active = lines[2]
-
-        assert "A2D::VecRef<R__, 5> tab" in decl[0]
-        assert "A2D::fourier(tab, s, 0.5)" in active[-1]
-
-    @pytest.mark.parametrize("n", [4, 5, 100])
-    def test_coefficients_give_the_curve_through_the_samples(self, n):
-        rng = np.random.default_rng(n)
-        samples = rng.standard_normal((n, 2))
-
-        coef = am.fourier_coefficients(samples)
-
-        # The cosine and sine basis at the samples
-        s = np.arange(n) / n
-        basis = [np.ones(n)]
-
-        for k in range(1, (n + 1) // 2):
-            basis.append(np.cos(2 * np.pi * k * s))
-            basis.append(np.sin(2 * np.pi * k * s))
-
-        if n % 2 == 0:
-            basis.append(np.cos(np.pi * n * s))
-
-        assert np.allclose(np.array(basis).T @ coef, samples, atol=1e-12)
 
 
 # Long chains inside a term end in shallow temporaries

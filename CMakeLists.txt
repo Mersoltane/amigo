@@ -249,17 +249,14 @@ set(AMIGO_A2D_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../a2d/include"
     CACHE PATH "Directory that holds the a2d headers")
 message(STATUS "Amigo a2d headers: ${AMIGO_A2D_INCLUDE_DIR}")
 
-# Amigo includes the a2d layout with the AD objects at the top level and the table operations
+# Amigo includes the a2d layout with the AD objects at the top level and the B-spline operations
 if(NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/a2dobj.h"
    OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dscalarops.h"
-   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dinterp.h"
-   OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dfourier.h"
    OR NOT EXISTS "${AMIGO_A2D_INCLUDE_DIR}/ad/a2dbspline.h")
   message(FATAL_ERROR
-    "The a2d headers in ${AMIGO_A2D_INCLUDE_DIR} lack the layout or the table "
+    "The a2d headers in ${AMIGO_A2D_INCLUDE_DIR} lack the layout or the B-spline "
     "operations amigo includes. Point AMIGO_A2D_INCLUDE_DIR at an a2d checkout "
-    "with a2dobj.h at the top level and ad/a2dinterp.h, ad/a2dfourier.h, and "
-    "ad/a2dbspline.h.")
+    "with a2dobj.h at the top level and ad/a2dbspline.h.")
 endif()
 
 # Install a2d headers alongside (adjust if you want a different layout)

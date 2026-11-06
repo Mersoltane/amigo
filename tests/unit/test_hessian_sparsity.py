@@ -117,66 +117,6 @@ class Nonlinear(am.Component):
         return
 
 
-class Lookup(am.Component):
-    """Interpolated tables read at an input and at a product"""
-
-    def __init__(self):
-        super().__init__()
-
-        self.add_data("table", shape=4)
-
-        self.add_input("a")
-        self.add_input("b")
-        self.add_input("c")
-
-        self.add_objective("obj")
-
-        return
-
-    def compute(self):
-        table = self.data["table"]
-
-        a = self.inputs["a"]
-        b = self.inputs["b"]
-        c = self.inputs["c"]
-
-        self.objective["obj"] = am.interp1d(a, table) * b + am.interp1d(
-            b * c, table, dx=0.5
-        )
-
-        return
-
-
-class Series(am.Component):
-    """Fourier series read at an input and at a product"""
-
-    def __init__(self):
-        super().__init__()
-
-        self.add_data("coef", shape=4)
-
-        self.add_input("a")
-        self.add_input("b")
-        self.add_input("c")
-
-        self.add_objective("obj")
-
-        return
-
-    def compute(self):
-        coef = self.data["coef"]
-
-        a = self.inputs["a"]
-        b = self.inputs["b"]
-        c = self.inputs["c"]
-
-        self.objective["obj"] = am.fourier(a, coef) * b + am.fourier(
-            b * c, coef, period=0.5
-        )
-
-        return
-
-
 class Magnitude(am.Component):
     """The norm of a vector plus a scalar"""
 
@@ -208,20 +148,6 @@ def upper_pairs(n):
             pairs.add((i, j))
 
     return pairs
-
-
-def test_interpolation_adds_no_curvature_of_its_own():
-    # a is 0, b is 1, and c is 2
-    pattern = lagrangian_pattern(Lookup())[0]
-
-    assert pattern == {(0, 1), (1, 2)}
-
-
-def test_fourier_series_curves_in_its_argument():
-    # a is 0, b is 1, and c is 2
-    pattern = lagrangian_pattern(Series())[0]
-
-    assert pattern == {(0, 0), (0, 1), (1, 1), (1, 2), (2, 2)}
 
 
 def test_norm_couples_every_entry_of_its_vector():

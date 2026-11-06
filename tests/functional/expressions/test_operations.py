@@ -2,9 +2,9 @@
 Operations
 ----------
 
-- Compiled checks of the norm, table interpolation, Fourier series, the inverse tangents, and binary functions with a number
+- Compiled checks of the norm, the inverse tangents, and binary functions with a number
 - A long chain that the code generator cuts into temporaries
-- The gradient, the Hessian, and the output and data Jacobians against finite differences
+- The gradient, the Hessian, and the output Jacobian against finite differences
 """
 
 import contextlib
@@ -18,10 +18,6 @@ import amigo as am
 # A chain this long must be cut into temporaries by the code generator
 N_CHAIN = 60
 
-TABLE = np.array([0.3, -1.2, 0.8, 2.5, -0.4, 1.1])
-
-TABLE2 = np.array([[0.5, -0.3], [1.5, 0.7], [-0.2, 2.0], [0.9, -1.1], [0.1, 0.4]])
-
 PIECES = [
     "norm",
     "max",
@@ -29,10 +25,6 @@ PIECES = [
     "atan",
     "atan2",
     "atan2_vars",
-    "periodic",
-    "column",
-    "series",
-    "series_column",
     "chain",
 ]
 
@@ -42,9 +34,6 @@ class Operations(am.Component):
 
     def __init__(self):
         super().__init__()
-
-        self.add_data("table", shape=len(TABLE))
-        self.add_data("table2", shape=TABLE2.shape)
 
         self.add_input("x", shape=3)
         self.add_input("s")
@@ -59,9 +48,6 @@ class Operations(am.Component):
 
     def pieces(self):
         """Every operation by name"""
-        table = self.data["table"]
-        table2 = self.data["table2"]
-
         x = self.inputs["x"]
         s = self.inputs["s"]
         y = self.inputs["y"]
@@ -79,10 +65,6 @@ class Operations(am.Component):
             "atan": am.atan(s * y),
             "atan2": am.atan2(0.3, s) + am.atan2(y, 2.0),
             "atan2_vars": am.atan2(y, s) * s,
-            "periodic": am.interp1d(s, table, dx=0.2, periodic=True) * y,
-            "column": am.interp1d(y, table2, column=1, x0=-0.5, dx=0.25),
-            "series": am.fourier(s, table, period=0.7) * y,
-            "series_column": am.fourier(s * y, table2, column=0, period=2.0),
             "chain": y * chain,
         }
 
@@ -107,38 +89,6 @@ class Operations(am.Component):
         return
 
 
-def linear(table, u, periodic):
-    """Linear interpolation at grid coordinate u, wrapped or extended past the ends"""
-    n = len(table)
-    k = np.floor(u)
-
-    if periodic:
-        lo = int(k) % n
-        hi = (lo + 1) % n
-    else:
-        k = min(max(k, 0), n - 2)
-        lo = int(k)
-        hi = int(k) + 1
-
-    return table[lo] + (u - k) * (table[hi] - table[lo])
-
-
-def series(coef, x, period):
-    """Fourier series with an even count of coefficients ending at the Nyquist cosine"""
-    w = 2.0 * np.pi / period
-    n = len(coef)
-
-    value = coef[0]
-
-    for k in range(1, (n + 1) // 2):
-        value += coef[2 * k - 1] * np.cos(k * w * x) + coef[2 * k] * np.sin(k * w * x)
-
-    if n % 2 == 0:
-        value += coef[n - 1] * np.cos(n // 2 * w * x)
-
-    return value
-
-
 def reference(x, s, y):
     """Every operation by name from numpy"""
     # The tail of the chain summed from zero
@@ -156,17 +106,13 @@ def reference(x, s, y):
         "atan": np.arctan(s * y),
         "atan2": np.arctan2(0.3, s) + np.arctan2(y, 2.0),
         "atan2_vars": np.arctan2(y, s) * s,
-        "periodic": linear(TABLE, s / 0.2, True) * y,
-        "column": linear(TABLE2[:, 1], (y + 0.5) / 0.25, False),
-        "series": series(TABLE, s, 0.7) * y,
-        "series_column": series(TABLE2[:, 0], s * y, 2.0),
         "chain": y * chain,
     }
 
 
 @pytest.fixture(scope="module")
 def model(tmp_path_factory):
-    """The model built with data derivatives in a temporary directory with its tables set"""
+    """The model built with data derivatives in a temporary directory"""
     tmp_path = tmp_path_factory.mktemp("operations")
 
     model = am.Model("operations_test")
@@ -180,14 +126,6 @@ def model(tmp_path_factory):
         sys.path.insert(0, str(tmp_path))
 
     model.initialize()
-
-    # The tables
-    data = model.get_data_vector()
-
-    data["ops.table"] = TABLE
-    data["ops.table2"] = TABLE2
-
-    data.get_vector().copy_host_to_device()
 
     return model
 
@@ -244,16 +182,6 @@ def outputs(model, v):
     return np.concatenate(values)
 
 
-def set_tables(model, flat):
-    """Set both tables from one flat array"""
-    data = model.get_data_vector()
-
-    data["ops.table"] = flat[: TABLE.size]
-    data["ops.table2"] = flat[TABLE.size :].reshape(TABLE2.shape)
-
-    data.get_vector().copy_host_to_device()
-
-
 def total(v):
     """Sum of every reference operation at the point v of x, s, and y"""
     pieces = reference(v[:3], v[3], v[4])
@@ -269,9 +197,9 @@ def total(v):
 @pytest.mark.parametrize(
     "x, s, y",
     [
-        # Inside the periodic table and past the end of the column table
+        # A positive y, so max2 takes y and min2 takes 0.5
         ([0.3, -0.4, 1.2], 0.37, 0.62),
-        # The periodic argument wrapped past one period
+        # A negative y, so max2 takes 0 and min2 takes y
         ([-0.7, 0.2, 0.5], 1.37, -0.3),
     ],
 )
@@ -344,45 +272,6 @@ def test_output_jacobian_matches_differences(model):
         fd.append((outputs(model, v + h * e) - outputs(model, v - h * e)) / (2 * h))
 
     assert np.allclose(J, np.column_stack(fd), rtol=1e-7, atol=1e-8)
-
-
-def test_gradient_jacobian_wrt_data_matches_differences(model):
-    v = np.array([0.3, -0.4, 1.2, 0.37, 0.62])
-
-    problem = model.get_problem()
-    jac = problem.create_gradient_jacobian_wrt_data()
-    problem.gradient_jacobian_wrt_data(
-        point(model, v[:3], v[3], v[4]).get_vector(), jac
-    )
-
-    # The rows of x, s, and y and the columns of both tables
-    cols = []
-
-    for name in ["ops.table", "ops.table2"]:
-        cols.append(np.ravel(model.get_indices(name)))
-
-    cols = np.concatenate(cols)
-    J = am.tocsr(jac).toarray()[np.ix_(state_indices(model), cols)]
-
-    # The gradient is linear in the table entries so central differences are exact
-    h = 1e-3
-    base = np.concatenate([TABLE, TABLE2.ravel()])
-    fd = []
-
-    # The tables are set back even when a difference fails
-    try:
-        for e in np.eye(base.size):
-            set_tables(model, base + h * e)
-            plus = gradient(model, v[:3], v[3], v[4])
-
-            set_tables(model, base - h * e)
-            minus = gradient(model, v[:3], v[3], v[4])
-
-            fd.append((plus - minus) / (2 * h))
-    finally:
-        set_tables(model, base)
-
-    assert np.allclose(J, np.column_stack(fd), rtol=1e-8, atol=1e-8)
 
 
 def test_norm_at_the_origin_has_finite_zero_derivatives(model):

@@ -1,7 +1,5 @@
 import numbers
 
-import numpy as np
-
 from .expressions import (
     Expr,
     VarNode,
@@ -9,8 +7,6 @@ from .expressions import (
     BinaryNode,
     ConstNode,
     PassiveNode,
-    InterpNode,
-    FourierNode,
     BSplineNode,
     BSplineBasisNode,
     _balanced_sum,
@@ -136,30 +132,6 @@ def norm(*args):
     return Expr(UnaryNode("norm_sqrt", _balanced_sum(squares)))
 
 
-def interp1d(x, table, column=None, x0=0.0, dx=1.0, periodic=False):
-    """Linear interpolation in a table of component data on a uniform grid.
-
-    Sample k sits at x0 + k * dx. A 2D table is read along one column. A
-    periodic table holds one period of samples and wraps the argument with
-    that period, otherwise the end intervals extend the table linearly. The
-    derivative is the slope of the interval that holds x and the second
-    derivative is zero.
-    """
-    return Expr(InterpNode(table, _to_expr(x), column, x0, dx, periodic))
-
-
-def fourier(x, coefficients, column=None, period=1.0):
-    """Real Fourier series with coefficients from a table of component data.
-
-    The coefficients are a0, a1, b1, a2, b2, and so on, where ak multiplies
-    cos(2 pi k x / period) and bk multiplies sin(2 pi k x / period). An even
-    number of coefficients ends with the cosine at the Nyquist frequency, so
-    fourier_coefficients of equally spaced samples gives the smooth periodic
-    curve through them. A 2D table is read along one column.
-    """
-    return Expr(FourierNode(coefficients, _to_expr(x), column, period))
-
-
 def bspline(table, t, order, column=None):
     """B-spline with the coefficients of a table of component data at the parameter t.
 
@@ -185,25 +157,6 @@ def bspline_inverse(table, x, order, column=None):
     1 with zero derivatives, as the clamped inverse map of MBI does.
     """
     return Expr(BSplineNode(table, _to_expr(x), order, column, inverse=True))
-
-
-def fourier_coefficients(samples):
-    """Coefficients of the trigonometric polynomial through samples equally spaced over one period.
-
-    Sample j sits at the fraction j / n of the period. The first axis runs over
-    the samples and every other axis holds a separate function.
-    """
-    samples = np.asarray(samples, dtype=float)
-    n = samples.shape[0]
-    spectrum = np.fft.fft(samples, axis=0) / n
-    coef = np.empty_like(samples)
-    coef[0] = spectrum[0].real
-    for k in range(1, (n + 1) // 2):
-        coef[2 * k - 1] = 2.0 * spectrum[k].real
-        coef[2 * k] = -2.0 * spectrum[k].imag
-    if n % 2 == 0:
-        coef[n - 1] = spectrum[n // 2].real
-    return coef
 
 
 def passive(expr: Expr):

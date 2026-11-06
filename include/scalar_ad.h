@@ -6,8 +6,6 @@
 #include "a2dstack.h"
 #include "a2dvartuple.h"
 #include "ad/a2dbspline.h"
-#include "ad/a2dfourier.h"
-#include "ad/a2dinterp.h"
 #include "ad/a2dscalarops.h"
 #include "amigo.h"
 

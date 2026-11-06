@@ -13,9 +13,7 @@ from .expressions import (
     BSplineBasisNode,
     BSplineNode,
     ConstNode,
-    FourierNode,
     IndexNode,
-    InterpNode,
     PassiveNode,
     UnaryNode,
     VarNode,
@@ -73,10 +71,8 @@ class HessianSparsity:
         return _pairs(range(self.ncomp), range(self.ncomp))
 
     def _children(self, node):
-        # The table of an interpolation, a series, or a spline is data and adds no dependency
-        if isinstance(
-            node, (UnaryNode, InterpNode, FourierNode, BSplineNode, BSplineBasisNode)
-        ):
+        # The table of a spline is data and adds no dependency
+        if isinstance(node, (UnaryNode, BSplineNode, BSplineBasisNode)):
             return [node.expr]
         if isinstance(node, BinaryNode):
             return [node.left, node.right]
@@ -111,12 +107,8 @@ class HessianSparsity:
         if not results:
             return self._leaf(node)
 
-        # Linear interpolation has a zero second derivative
-        if isinstance(node, InterpNode):
-            return results[0]
-
-        # A Fourier series or a spline curves in its argument like a nonlinear unary function
-        if isinstance(node, (FourierNode, BSplineNode, BSplineBasisNode)):
+        # A spline curves in its argument like a nonlinear unary function
+        if isinstance(node, (BSplineNode, BSplineBasisNode)):
             deps, hess = results[0]
             return deps, hess | _pairs(deps, deps)
 

@@ -323,139 +323,6 @@ class BinaryNode(ExprNode):
             return Linearity.NONLINEAR
 
 
-class InterpNode(ExprNode):
-    """Linear interpolation of a data table at a scalar expression on a uniform grid."""
-
-    def __init__(self, table, expr, column=None, x0=0.0, dx=1.0, periodic=False):
-        super().__init__()
-        node = table.node if isinstance(table, Expr) else None
-        if not isinstance(node, VarNode) or node.active:
-            raise TypeError("interp1d reads its table from component data")
-        if node.shape is None or node.shape[0] < 2:
-            raise ValueError("An interpolation table needs at least two samples")
-        if len(node.shape) == 2:
-            if column is None or not 0 <= int(column) < node.shape[1]:
-                raise ValueError(
-                    f"A table of shape {node.shape} needs a column below {node.shape[1]}"
-                )
-            column = int(column)
-        elif column is not None:
-            raise ValueError("Only a 2D table takes a column")
-        if not float(dx) > 0.0:
-            raise ValueError("The grid spacing dx must be positive")
-        if expr.shape is not None:
-            raise ValueError("interp1d takes a scalar argument")
-
-        self.table = table
-        self.expr = expr
-        self.column = column
-        self.x0 = float(x0)
-        self.dx = float(dx)
-        self.periodic = bool(periodic)
-        self.shape = None
-
-    def is_zero(self):
-        return False
-
-    def serialize(self):
-        return (
-            "interp",
-            self.table.serialize(),
-            self.expr.serialize(),
-            self.column,
-            self.x0,
-            self.dx,
-            self.periodic,
-        )
-
-    def to_cpp(self):
-        args = [self.table.to_cpp()]
-        if self.column is not None:
-            args.append(str(self.column))
-        args += [
-            self.expr.to_cpp(),
-            repr(self.x0),
-            repr(self.dx),
-            "true" if self.periodic else "false",
-        ]
-        return f"A2D::interp({', '.join(args)})"
-
-    def is_active(self):
-        return self.expr.is_active()
-
-    def compute_cost(self):
-        return self.expr.compute_cost() + 10
-
-    def get_linearity(self, active_vars):
-        # The table is data, so the node is constant when its argument is and nonlinear otherwise
-        if self.expr.get_linearity(active_vars) == Linearity.CONSTANT:
-            return Linearity.CONSTANT
-
-        return Linearity.NONLINEAR
-
-
-class FourierNode(ExprNode):
-    """Real Fourier series with coefficients from a data table at a scalar expression."""
-
-    def __init__(self, table, expr, column=None, period=1.0):
-        super().__init__()
-        node = table.node if isinstance(table, Expr) else None
-        if not isinstance(node, VarNode) or node.active:
-            raise TypeError("fourier reads its coefficients from component data")
-        if node.shape is None:
-            raise ValueError("Fourier coefficients come in an array")
-        if len(node.shape) == 2:
-            if column is None or not 0 <= int(column) < node.shape[1]:
-                raise ValueError(
-                    f"A table of shape {node.shape} needs a column below {node.shape[1]}"
-                )
-            column = int(column)
-        elif column is not None:
-            raise ValueError("Only a 2D table takes a column")
-        if not float(period) > 0.0:
-            raise ValueError("The period must be positive")
-        if expr.shape is not None:
-            raise ValueError("fourier takes a scalar argument")
-
-        self.table = table
-        self.expr = expr
-        self.column = column
-        self.period = float(period)
-        self.shape = None
-
-    def is_zero(self):
-        return False
-
-    def serialize(self):
-        return (
-            "fourier",
-            self.table.serialize(),
-            self.expr.serialize(),
-            self.column,
-            self.period,
-        )
-
-    def to_cpp(self):
-        args = [self.table.to_cpp()]
-        if self.column is not None:
-            args.append(str(self.column))
-        args += [self.expr.to_cpp(), repr(self.period)]
-        return f"A2D::fourier({', '.join(args)})"
-
-    def is_active(self):
-        return self.expr.is_active()
-
-    def compute_cost(self):
-        return self.expr.compute_cost() + 20
-
-    def get_linearity(self, active_vars):
-        # The table is data, so the node is constant when its argument is and nonlinear otherwise
-        if self.expr.get_linearity(active_vars) == Linearity.CONSTANT:
-            return Linearity.CONSTANT
-
-        return Linearity.NONLINEAR
-
-
 class BSplineNode(ExprNode):
     """B-spline of a data table or the inverse of a coordinate spline at a scalar expression."""
 
@@ -721,16 +588,6 @@ class Expr:
             return cls(UnaryNode(d[1], cls.deserialize(d[2])))
         elif d[0] == "binary":
             return cls(BinaryNode(d[1], cls.deserialize(d[2]), cls.deserialize(d[3])))
-        elif d[0] == "interp":
-            return cls(
-                InterpNode(
-                    cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4], d[5], d[6]
-                )
-            )
-        elif d[0] == "fourier":
-            return cls(
-                FourierNode(cls.deserialize(d[1]), cls.deserialize(d[2]), d[3], d[4])
-            )
         elif d[0] == "bspline":
             return cls(
                 BSplineNode(
@@ -777,7 +634,7 @@ def _node_children(node):
         return [node.expr]
     if isinstance(node, BinaryNode):
         return [node.left, node.right]
-    if isinstance(node, (InterpNode, FourierNode, BSplineNode)):
+    if isinstance(node, BSplineNode):
         return [node.table, node.expr]
     return []
 
@@ -972,24 +829,6 @@ class ExprBuilder:
                 "left": child_ids[0],
                 "right": child_ids[1],
             }
-        elif isinstance(node, InterpNode):
-            options = (node.column, node.x0, node.dx, node.periodic)
-            key = ("interp", child_ids[0], child_ids[1]) + options
-            info = {
-                "type": "interp",
-                "table": child_ids[0],
-                "expr": child_ids[1],
-                "options": options,
-            }
-        elif isinstance(node, FourierNode):
-            options = (node.column, node.period)
-            key = ("fourier", child_ids[0], child_ids[1]) + options
-            info = {
-                "type": "fourier",
-                "table": child_ids[0],
-                "expr": child_ids[1],
-                "options": options,
-            }
         elif isinstance(node, BSplineNode):
             options = (node.order, node.column, node.inverse)
             key = ("bspline", child_ids[0], child_ids[1]) + options
@@ -1026,7 +865,7 @@ class ExprBuilder:
     @staticmethod
     def _operands(node):
         """Ids of the operands of an operation node, empty for a leaf."""
-        if node["type"] in ("unary", "interp", "fourier", "bspline", "bspline_basis"):
+        if node["type"] in ("unary", "bspline", "bspline_basis"):
             return [node["expr"]]
         if node["type"] == "binary":
             return [node["left"], node["right"]]
@@ -1096,22 +935,6 @@ class ExprBuilder:
                     node["op"],
                     self._build_expr_index(node["left"]),
                     self._build_expr_index(node["right"]),
-                )
-            )
-        elif node["type"] == "interp":
-            expr = Expr(
-                InterpNode(
-                    self._build_expr_index(node["table"]),
-                    self._build_expr_index(node["expr"]),
-                    *node["options"],
-                )
-            )
-        elif node["type"] == "fourier":
-            expr = Expr(
-                FourierNode(
-                    self._build_expr_index(node["table"]),
-                    self._build_expr_index(node["expr"]),
-                    *node["options"],
                 )
             )
         elif node["type"] == "bspline":
