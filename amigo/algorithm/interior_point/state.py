@@ -7,7 +7,7 @@ the currency flags that mark which of them are up to date.
 
 import amigo as am
 
-from .barrier_strategy import fraction_to_boundary
+from ..barrier_strategy import fraction_to_boundary
 
 
 class InteriorPointState:

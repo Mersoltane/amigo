@@ -6,7 +6,6 @@ order a solve runs through them.
 
 import copy
 import numbers
-import warnings
 
 import numpy as np
 
@@ -99,9 +98,6 @@ BARRIER = {
     # "none" or "cubic"
     "quality_function_balancing_term": "none",
     "quality_function_predictor_corrector": False,
-    # Barrier increase when the line search keeps rejecting
-    "max_consecutive_rejections": 5,
-    "barrier_increase_factor": 5.0,
 }
 
 # Linear solver, regularization, and inertia correction
@@ -200,33 +196,6 @@ OUTPUT = {
     "iteration_callback": None,
 }
 
-# Legacy options kept so old scripts still run with no effect
-LEGACY = {
-    "bound_push": 1e-2,
-    "monotone_barrier_fraction": 0.1,
-    "check_update_step": False,
-    "record_components": [],
-    "init_affine_step_multipliers": False,
-    "use_armijo_line_search": True,
-    "recompute_dual_inf_trigger": 1e2,
-    "funnel_gamma": 0.001,
-    "funnel_require_acceptance_wrt_current_iterate": False,
-    "funnel_armijo_fraction": 1e-4,
-    "funnel_armijo_tolerance": 1e-9,
-    "restoration_method": "l1",
-    "resto_infeas_tol": 1e-6,
-    "resto_bound_push": 1e-2,
-    "diverging_step_tol": 1e8,
-    "diverging_step_iters": 3,
-    "max_restorations": 5,
-    "restoration_budget_refresh_iters": 20,
-    "warm_start_bound_push": 1e-3,
-    "warm_start_mult_bound_push": 1e-3,
-    "armijo_constant": 1e-4,
-    "merit_armijo_constant": 1e-4,
-    "mu_max_fact": 1e3,
-}
-
 GROUPS = (
     CONVERGENCE,
     STARTING_POINT,
@@ -235,7 +204,6 @@ GROUPS = (
     LINE_SEARCH,
     RESTORATION,
     OUTPUT,
-    LEGACY,
 )
 
 # Allowed values of the string options that select a variant
@@ -276,25 +244,10 @@ def get_default_options(options={}):
 
     options = dict(options)
 
-    # Legacy alias for the line-search selector
-    if "filter_line_search" in options:
-        flag = options.pop("filter_line_search")
-        options.setdefault("line_search", "filter" if flag else "merit")
-
-    # Legacy alias for the fraction to the boundary floor
-    if "tau_min" in options:
-        options.setdefault("fraction_to_boundary", options.pop("tau_min"))
-
-    # Legacy name of the barrier subproblem tolerance factor
-    if "barrier_progress_tol" in options:
-        options.setdefault("barrier_tol_factor", options.pop("barrier_progress_tol"))
-
     for name in options:
         if name not in default:
             raise ValueError(f"Unrecognized option {name}")
         _check_value(name, options[name], default[name])
-        if name in LEGACY:
-            warnings.warn(f"Option {name} has no effect", stacklevel=2)
         default[name] = options[name]
 
     return default

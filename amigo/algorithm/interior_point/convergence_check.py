@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from ..amigo import OptVarType
+from ...amigo import OptVarType
 
 # Return codes for convergence check
 CONTINUE = 0

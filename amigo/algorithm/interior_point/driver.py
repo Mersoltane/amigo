@@ -10,14 +10,14 @@ import warnings
 import numpy as np
 
 # Raw pybind11 classes
-from ..amigo import InteriorPointOptimizer, Vector
+from ...amigo import InteriorPointOptimizer, Vector
 
 # Import from amigo classes
-from ..model import ModelVector
-from ..utils import tocsr
+from ...modeling.model import ModelVector
+from ...utils import tocsr
 
 # Optimizer imports from algorithm classes
-from .barrier_strategy import barrier_minimum, make_barrier_strategy
+from ..barrier_strategy import barrier_minimum, make_barrier_strategy
 from .convergence_check import (
     ConvergenceCheck,
     CONTINUE,
@@ -31,22 +31,22 @@ from .convergence_check import (
     TIME_LIMIT,
     TINY_STEP,
 )
-from .default_options import get_default_options
+from ..default_options import get_default_options
 from .evaluator import Evaluator
-from .globalization import make_line_search, make_restoration
-from .initialization import (
+from ..globalization import make_line_search, make_restoration
+from ..initialization import (
     FeasibilityPresolve,
     IterateCenterer,
     MultiplierInitializer,
     NLPScaling,
     hessian_perturbation_rows,
 )
-from .initialization.multiplier_initialization import FUTILE_FRACTION
-from .iteration_logger import OptimizationLogger
+from ..initialization.multiplier_initialization import FUTILE_FRACTION
+from ..monitoring.iteration_logger import OptimizationLogger
 from .step_contract import StepContract
-from .ipm_state import InteriorPointState
+from .state import InteriorPointState
 from .newton_direction import NewtonStep
-from .solvers import InertiaCorrector, make_solver
+from ..solvers import InertiaCorrector, make_solver
 
 
 def _as_vector(x):

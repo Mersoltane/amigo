@@ -1,7 +1,7 @@
 import numpy as np
-from .model import Model
-from .amigo import SparseLDL, SolverType
-from .utils import tocsr
+from ..modeling.model import Model
+from ..amigo import SparseLDL, SolverType
+from ..utils import tocsr
 
 
 class SimpleSolver:

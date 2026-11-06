@@ -1,21 +1,26 @@
-"""Amigo interior-point optimizer package.
+"""
+Interior point optimizer
+------------------------
 
-Module map, grouped by concern:
-
-  ipm_driver.py                  Optimizer class, main loop
-  ipm_state.py                   Per-iteration state
-  evaluator.py                   Gradient/residual/Hessian evaluation cache
-  newton_direction.py            KKT solve and step assembly
-  convergence_check.py           Convergence, divergence, and stall tests
-  iteration_logger.py            Iter-data assembly + progress table
-  default_options.py             Default option values
+  default_options.py             Every option with its default
   homotopy.py                    Path following over solves in one parameter
-  regime.py                      Easy, hard, jam, or stuck labels per iteration
-  step_contract.py               The dual step contract observer
+  simple_solver.py               Newton solver for square systems
+
+  interior_point/                The interior point loop
+    driver.py                    Optimizer class and main loop
+    state.py                     Per iteration state
+    evaluator.py                 Gradient, residual, and Hessian evaluation cache
+    newton_direction.py          KKT solve and step assembly
+    convergence_check.py         Convergence, divergence, and stall tests
+    step_contract.py             The dual step contract observer
+
+  monitoring/                    What a solve reports
+    iteration_logger.py          Iteration data and the progress table
+    regime.py                    Easy, hard, jam, or stuck label per iteration
 
   initialization/                Starting point construction
     iterate_initialization.py    Bounds push, slacks, bound duals
-    multiplier_initialization.py Least-squares / affine / zero duals
+    multiplier_initialization.py Least squares multipliers and their refresh
     nlp_scaling.py               Gradient-based NLP scaling
     presolve.py                  Starting point via restoration
 
@@ -35,7 +40,7 @@ Module map, grouped by concern:
     inertia_correction.py        Primal and dual regularization
 """
 
-from .ipm_driver import Optimizer, WarmStart
+from .interior_point.driver import Optimizer, WarmStart
 from .default_options import get_default_options
 from .homotopy import Homotopy, HomotopyHistory, HomotopyOptions, HomotopyStep
 

@@ -6,7 +6,7 @@ from .cell_types import CellType
 from .vandermonde import Vandermonde1D, Vandermonde2D, VecVandermonde2D
 from .fem_space import FunctionSpace
 from .cell_types import CellType, DofLayout
-from ..expressions import Expr
+from ..modeling.expressions import Expr
 
 
 def dot_product(x, y, n=1):

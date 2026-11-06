@@ -1,5 +1,5 @@
 import numpy as np
-from .component import Component
+from .modeling.component import Component
 
 try:
     from petsc4py import PETSc

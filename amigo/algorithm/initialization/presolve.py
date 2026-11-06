@@ -1,5 +1,5 @@
-"""Starting point strategy.
-
+"""
+Starting point strategy:
 Restores feasibility from the initial point and then centers the start
 at the requested initial mu with the shared centering rule.
 """

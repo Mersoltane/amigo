@@ -8,7 +8,7 @@ import math
 import sys
 import time
 
-from .convergence_check import (
+from ..interior_point.convergence_check import (
     CONVERGED,
     CONVERGED_ACCEPTABLE,
     CONVERGED_OBJECTIVE,

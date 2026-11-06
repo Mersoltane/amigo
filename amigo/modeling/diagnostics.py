@@ -1,6 +1,6 @@
 """
-amigo.diagnostics
-=================
+amigo.modeling.diagnostics
+==========================
 General-purpose pre-optimization diagnostic checks for any Amigo model.
 
 Usage
@@ -39,7 +39,7 @@ from __future__ import annotations
 import numpy as np
 from collections import defaultdict
 from typing import TYPE_CHECKING
-from .amigo import OptVarType
+from ..amigo import OptVarType
 
 if TYPE_CHECKING:  # avoid circular import at runtime
     from .model import Model, ModelVector

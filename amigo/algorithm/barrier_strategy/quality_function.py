@@ -7,7 +7,7 @@ The picked mu never exceeds the initial barrier parameter.
 
 import numpy as np
 
-from ..newton_direction import set_step_lengths
+from ..interior_point.newton_direction import set_step_lengths
 from .base import BarrierStrategy, BarrierInfo, fraction_to_boundary, monotone_mu
 
 

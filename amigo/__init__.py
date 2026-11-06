@@ -43,19 +43,19 @@ from .amigo import (
     MemoryLocation,
     OptVarType,
 )
-from .component import Component
-from .model import Model
-from .expression_component import ExpressionComponent
-from .diagnostics import Diagnostics
+from .modeling.component import Component
+from .modeling.model import Model
+from .modeling.expression_component import ExpressionComponent
+from .modeling.diagnostics import Diagnostics
 from .algorithm import *
 from .utils import *
-from .unary_operations import *
+from .modeling.unary_operations import *
 from .interfaces import (
     ExternalOpenMDAOComponent,
     ExplicitOpenMDAOPostOptComponent,
     AmigoIndepVarComp,
 )
 from .trajectory import *
-from .simple_solver import SimpleSolver
+from .algorithm.simple_solver import SimpleSolver
 
 inf = float("inf")

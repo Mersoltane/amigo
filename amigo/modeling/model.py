@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 import warnings
 import pybind11
-from .amigo import (
+from ..amigo import (
     abi_version,
     OrderingType,
     reorder_model,

@@ -1,7 +1,7 @@
 import amigo as am
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from ..expressions import Expr
+from ..modeling.expressions import Expr
 
 
 class FiniteElement(am.Component):
