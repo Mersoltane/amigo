@@ -125,7 +125,7 @@ class Meta:
                         )
 
         if (
-            self.var_type == "input"
+            self.var_type == VarType.INPUT
             and self.value is not self.UNSET
             and self.lower is not self.UNSET
             and self.upper is not self.UNSET

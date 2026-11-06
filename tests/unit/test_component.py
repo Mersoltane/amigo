@@ -9,6 +9,7 @@ Component metadata and sets
 import pytest
 
 from amigo.modeling.component import ConstantSet, DataSet, InputSet, Meta
+from amigo.modeling.meta import VarType
 from amigo.modeling.expressions import ConstNode, Expr, VarNode
 
 
@@ -21,26 +22,26 @@ class TestMetaValidation:
     def test_name_with_double_underscore_raises(self):
         """Names with a double underscore are reserved for amigo"""
         with pytest.raises(ValueError):
-            Meta("bad__name", "input")
+            Meta("bad__name", VarType.INPUT)
 
     def test_lower_greater_than_upper_raises(self):
         """The bounds must satisfy lower <= upper"""
         with pytest.raises(ValueError):
-            Meta("x", "input", lower=10.0, upper=1.0)
+            Meta("x", VarType.INPUT, lower=10.0, upper=1.0)
 
     def test_input_value_outside_bounds_raises(self):
         """The initial value of an input must lie within its bounds"""
         with pytest.raises(ValueError):
-            Meta("x", "input", value=5.0, lower=0.0, upper=4.0)
+            Meta("x", VarType.INPUT, value=5.0, lower=0.0, upper=4.0)
 
     def test_unknown_kwarg_raises(self):
         """An unknown keyword argument is rejected instead of ignored"""
         with pytest.raises(ValueError):
-            Meta("x", "input", unknown_kwarg=42)
+            Meta("x", VarType.INPUT, unknown_kwarg=42)
 
     def test_serialize_deserialize_roundtrip(self):
         """Deserialize rebuilds every field that serialize wrote"""
-        m = Meta("y", "constraint", lower=-1.0, upper=1.0, value=0.0)
+        m = Meta("y", VarType.CONSTRAINT, lower=-1.0, upper=1.0, value=0.0)
         data = m.serialize()
 
         # Deserialize pops from the dict, so it gets a copy
@@ -76,6 +77,13 @@ class TestInputSet:
         assert isinstance(expr, Expr)
         assert isinstance(expr.node, VarNode)
         assert expr.node.active is True
+
+    def test_add_checks_the_start_against_the_bounds(self):
+        """An input added with a start outside its bounds is rejected"""
+        inputs = InputSet()
+
+        with pytest.raises(ValueError):
+            inputs.add("x", value=5.0, lower=0.0, upper=4.0)
 
     def test_getitem_missing_key_raises_keyerror(self):
         inputs = InputSet()
