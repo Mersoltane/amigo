@@ -29,7 +29,9 @@ def test_removed_option_is_rejected(name, value):
         get_default_options({name: value})
 
 
-@pytest.mark.parametrize("mu, expected", [(1.0, 0.995), (0.1, 0.995), (1e-3, 0.999), (0.0, 1.0)])
+@pytest.mark.parametrize(
+    "mu, expected", [(1.0, 0.995), (0.1, 0.995), (1e-3, 0.999), (0.0, 1.0)]
+)
 def test_adaptive_tau_uses_the_option_as_floor(mu, expected):
     options = get_default_options({"fraction_to_boundary": 0.995})
 
@@ -75,7 +77,13 @@ def test_nan_tolerance_is_rejected():
 
 
 def test_integer_flags_and_numbers_are_accepted():
-    options = get_default_options({"second_order_correction": 0, "max_iterations": 50.0, "convergence_tolerance": 1})
+    options = get_default_options(
+        {
+            "second_order_correction": 0,
+            "max_iterations": 50.0,
+            "convergence_tolerance": 1,
+        }
+    )
 
     assert options["second_order_correction"] == 0
     assert options["max_iterations"] == 50.0

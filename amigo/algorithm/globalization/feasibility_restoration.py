@@ -11,7 +11,6 @@ from ..barrier_strategy import fraction_to_boundary
 from ..solvers import InertiaCorrector
 from .filter_acceptance import FilterAcceptance, FilterBasePoint
 
-
 # Scale limit of the optimality error, as in the main convergence test
 SCALE_MAX = 100.0
 
@@ -130,7 +129,9 @@ class FeasibilityRestoration:
         self.num_calls += 1
         self.num_iterations += info.iterations
         if state.comm_rank == 0:
-            tag = "ok" if info.success else "infeasible" if info.infeasible else "failed"
+            tag = (
+                "ok" if info.success else "infeasible" if info.infeasible else "failed"
+            )
             print(
                 f"  Restoration: theta {info.theta_enter:.3e} -> "
                 f"{info.theta_final:.3e} in {info.iterations} iters ({tag})"
@@ -251,7 +252,9 @@ class FeasibilityRestoration:
 
     def _error(self, state, mu, r, y):
         """Scaled optimality error of the restoration barrier problem at mu."""
-        dual_x, _, comp_x = self.optimizer.compute_kkt_error(mu, state.current, self.grad)
+        dual_x, _, comp_x = self.optimizer.compute_kkt_error(
+            mu, state.current, self.grad
+        )
         dual = max(
             dual_x,
             self._con_max(self.rho - y - self.zp),
@@ -271,7 +274,9 @@ class FeasibilityRestoration:
             + self._con_sum(self.zp + self.zn)
         )
         num_z = self.num_bounds + 2 * self.num_con
-        s_d = max(SCALE_MAX, (self._con_sum(np.abs(y)) + z_sum) / (self.num_con + num_z))
+        s_d = max(
+            SCALE_MAX, (self._con_sum(np.abs(y)) + z_sum) / (self.num_con + num_z)
+        )
         s_c = max(SCALE_MAX, z_sum / num_z)
         return max(dual * SCALE_MAX / s_d, primal, comp * SCALE_MAX / s_c)
 
@@ -313,7 +318,9 @@ class FeasibilityRestoration:
 
         # The constraint rows carry the linearized constraint with p and n eliminated
         self.optimizer.compute_residual(mu, state.current, self.grad, self.res)
-        rhs = -r + p - n + mu / zp - (p / zp) * (rho - y) - mu / zn + (n / zn) * (rho + y)
+        rhs = (
+            -r + p - n + mu / zp - (p / zp) * (rho - y) - mu / zn + (n / zn) * (rho + y)
+        )
         self._set_con_values(self.res, rhs)
         solver.solve(self.res, self.sol)
         self.optimizer.compute_update(mu, state.current, self.sol, self.step)
@@ -332,7 +339,9 @@ class FeasibilityRestoration:
         # The bound multipliers take the full fraction to the boundary step
         tau = fraction_to_boundary(self.options, self.mu)
         ax, _, az, _ = self.optimizer.compute_max_step(tau, state.current, self.step)
-        cut_x = self._con_max(np.maximum(np.maximum(-self.dp / self.p, -self.dn / self.n), 0.0))
+        cut_x = self._con_max(
+            np.maximum(np.maximum(-self.dp / self.p, -self.dn / self.n), 0.0)
+        )
         cut_z = self._con_max(
             np.maximum(np.maximum(-self.dzp / self.zp, -self.dzn / self.zn), 0.0)
         )
@@ -385,9 +394,7 @@ class FeasibilityRestoration:
         """Barrier objective of the restoration problem."""
         d = self._primal_values(vars.get_solution()) - self.x_ref
         prox = 0.5 * self.eta * self._primal_dot(self.dr2 * d, d)
-        elastic = self._con_sum(
-            self.rho * (p + n) - self.mu * (np.log(p) + np.log(n))
-        )
+        elastic = self._con_sum(self.rho * (p + n) - self.mu * (np.log(p) + np.log(n)))
         return elastic + prox + self.optimizer.compute_log_barrier(self.mu, vars)
 
     def _slope(self, state):

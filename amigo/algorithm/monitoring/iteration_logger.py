@@ -83,7 +83,11 @@ class OptimizationLogger:
         """Record the final status in the returned data and print the summary."""
         self.opt_data["status"] = status
         self.opt_data["status_message"] = STATUS_MESSAGES[status]
-        self.opt_data["converged"] = status in (CONVERGED, CONVERGED_ACCEPTABLE, CONVERGED_OBJECTIVE)
+        self.opt_data["converged"] = status in (
+            CONVERGED,
+            CONVERGED_ACCEPTABLE,
+            CONVERGED_OBJECTIVE,
+        )
         self.opt_data["acceptable"] = status == CONVERGED_ACCEPTABLE
 
         if state.comm_rank != 0 or not self.opt_data["iterations"]:
@@ -95,9 +99,13 @@ class OptimizationLogger:
         elif status == CONVERGED_ACCEPTABLE:
             title = f"Amigo converged to acceptable point in {iteration} iterations"
         elif status == CONVERGED_OBJECTIVE:
-            title = f"Amigo converged in {iteration} iterations at the objective tolerance"
+            title = (
+                f"Amigo converged in {iteration} iterations at the objective tolerance"
+            )
         else:
-            title = f"Amigo stopped after {iteration} iterations: {STATUS_MESSAGES[status]}"
+            title = (
+                f"Amigo stopped after {iteration} iterations: {STATUS_MESSAGES[status]}"
+            )
         self._print_summary(title, state, iter_data)
         sys.stdout.flush()
 
@@ -137,7 +145,11 @@ class OptimizationLogger:
         delta_c = iter_data.get("inertia_delta_c", 0.0)
         dc_str = f"{delta_c:8.1e}" if delta_c > 0 else f"{'---':>8s}"
         pivot = iter_data.get("kkt_min_pivot")
-        piv_str = f"{pivot:7.0e}" if pivot is not None and math.isfinite(pivot) else f"{'---':>7s}"
+        piv_str = (
+            f"{pivot:7.0e}"
+            if pivot is not None and math.isfinite(pivot)
+            else f"{'---':>7s}"
+        )
 
         dv = iter_data.get("dual_viol_total", 0)
         why = iter_data.get("ls_why") or "---"

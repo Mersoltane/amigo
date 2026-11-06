@@ -418,7 +418,9 @@ class InertiaCorrector:
             # A failed factorization cannot be repaired by more regularization
             if result is None:
                 if state.comm_rank == 0:
-                    print(f"  Inertia: factorization failed because {solver.describe_failure(self.failure)}")
+                    print(
+                        f"  Inertia: factorization failed because {solver.describe_failure(self.failure)}"
+                    )
                 break
 
             n_pos, n_neg, singular = result
@@ -453,7 +455,9 @@ class InertiaCorrector:
                     and self._positive_curvature(solver, evaluator, state)
                 ):
                     if state.comm_rank == 0 and self.verbose:
-                        print("  Inertia: accepting wrong inertia on positive curvature")
+                        print(
+                            "  Inertia: accepting wrong inertia on positive curvature"
+                        )
                     return self._accept(attempt)
                 # Past the cap a mildly perturbed factorization beats a heavily convexified one
                 if (

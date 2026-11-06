@@ -13,8 +13,12 @@ import numpy as np
 import pytest
 
 import amigo as am
-from amigo.modeling.model import GlobalIndexPool, ModelVector, _parse_attribute_path, _parse_var_expr
-
+from amigo.modeling.model import (
+    GlobalIndexPool,
+    ModelVector,
+    _parse_attribute_path,
+    _parse_var_expr,
+)
 
 # GlobalIndexPool allocates contiguous index arrays
 

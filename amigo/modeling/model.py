@@ -1263,7 +1263,9 @@ class Model:
         _built_modules.add(self.module_name)
         return
 
-    def generate_cpp(self, directory: str | Path | None = None, data_derivatives: bool = False):
+    def generate_cpp(
+        self, directory: str | Path | None = None, data_derivatives: bool = False
+    ):
         """
         Generate the C++ code and pybind11 wrappers for the model.
 
@@ -1288,7 +1290,11 @@ class Model:
 
         # Each class header with the C++ component definitions
         def header(code):
-            return '#include "amigo.h"\n#include "scalar_ad.h"\nnamespace amigo {' + code + "}\n"
+            return (
+                '#include "amigo.h"\n#include "scalar_ad.h"\nnamespace amigo {'
+                + code
+                + "}\n"
+            )
 
         # Classes are written once since class names are unique
         units = []
@@ -1297,7 +1303,10 @@ class Model:
             class_name = self.comp[name].class_name
             if class_name not in class_names:
                 comp_obj = self.comp[name].comp_obj
-                if not comp_obj.is_compute_empty() or not comp_obj.is_compute_output_empty():
+                if (
+                    not comp_obj.is_compute_empty()
+                    or not comp_obj.is_compute_output_empty()
+                ):
                     class_names[class_name] = True
                     wrapper = comp_obj.generate_pybind11(mod_ident="mod")
                     units.append((class_name, comp_obj.generate_cpp(), wrapper))

@@ -370,7 +370,11 @@ def switch_time(solution):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--build", dest="build", action="store_true", default=False, help="Enable building"
+        "--build",
+        dest="build",
+        action="store_true",
+        default=False,
+        help="Enable building",
     )
     args = parser.parse_args()
 
@@ -419,7 +423,9 @@ if __name__ == "__main__":
 
     # Print the exact solution and the result on every mesh
     print(f"\nExact solution: ts = {T_SWITCH:.6f}, tf = {T_FINAL:.6f}, J = {COST:.6f}")
-    print("mesh  intervals  points  max error   tf          J           ts          NLP")
+    print(
+        "mesh  intervals  points  max error   tf          J           ts          NLP"
+    )
 
     records = []
 

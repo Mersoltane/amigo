@@ -333,7 +333,9 @@ def test_sparse_ldl_poisson_natural_rhs():
         for k in range(nrhs):
             X[:, k] = rhs
 
-        ldl = am.SparseLDL(csr, solver_type=stype, ustab=0.4, order=am.OrderingType.NATURAL)
+        ldl = am.SparseLDL(
+            csr, solver_type=stype, ustab=0.4, order=am.OrderingType.NATURAL
+        )
         flag = ldl.factor()
 
         assert flag == 0

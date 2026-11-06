@@ -20,7 +20,13 @@ from ..collocation.mesh import (
     radau_points,
     support_points,
 )
-from .base import Assessment, MeshIteration, MeshRefinement, MeshSolution, best_iteration
+from .base import (
+    Assessment,
+    MeshIteration,
+    MeshRefinement,
+    MeshSolution,
+    best_iteration,
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,9 @@ class RefinementOptions:
             raise ValueError("an h refinement must create at least two subintervals")
 
         if not 1 <= self.min_points <= self.max_points:
-            raise ValueError("the point limits must satisfy 1 <= min_points <= max_points")
+            raise ValueError(
+                "the point limits must satisfy 1 <= min_points <= max_points"
+            )
 
         if self.max_iterations < 1:
             raise ValueError("at least one mesh must be solved")
@@ -160,7 +168,11 @@ def smoothness_estimates(mesh, errors, parents=None, previous=None):
         if parent < 0:
             continue
 
-        old = (2.0 * old_mesh.half_widths[parent], old_mesh.degrees[parent], old_errors[parent])
+        old = (
+            2.0 * old_mesh.half_widths[parent],
+            old_mesh.degrees[parent],
+            old_errors[parent],
+        )
         new = (2.0 * mesh.half_widths[k], mesh.degrees[k], errors[k])
 
         estimate = smoothness(old, new)
@@ -401,7 +413,9 @@ class HPRefinement(MeshRefinement):
     def assess(self, solution, state):
         """Relative errors and smoothness of every interval against the previous mesh"""
         errors = relative_errors(solution, self.dynamics)
-        q = smoothness_estimates(solution.mesh, errors, state["parents"], state["previous"])
+        q = smoothness_estimates(
+            solution.mesh, errors, state["parents"], state["previous"]
+        )
 
         state["previous"] = (solution.mesh, errors)
 
@@ -409,7 +423,9 @@ class HPRefinement(MeshRefinement):
 
     def decide(self, solution, assessment, state):
         """The next mesh with the action on every interval"""
-        result = refine(solution, assessment.errors, assessment.smoothness, self.options)
+        result = refine(
+            solution, assessment.errors, assessment.smoothness, self.options
+        )
 
         mesh = result[0]
         state["parents"] = result[1]

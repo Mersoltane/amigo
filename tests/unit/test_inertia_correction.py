@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from amigo.algorithm.default_options import get_default_options
-from amigo.algorithm.solvers.amigo_solver import FRONT_OVERFLOW, NONFINITE_MATRIX, AmigoSolver
+from amigo.algorithm.solvers.amigo_solver import (
+    FRONT_OVERFLOW,
+    NONFINITE_MATRIX,
+    AmigoSolver,
+)
 from amigo.algorithm.solvers.inertia_correction import InertiaCorrector
 
 
@@ -73,7 +77,9 @@ def make_corrector():
 
 def run_iteration(corrector, needed, mu=0.1):
     """Values of delta_w tried by one factorization call that needs at least needed"""
-    state = SimpleNamespace(primal_infeas=0.0, mu=mu, comm_rank=0, diagonal=None, hessian=None)
+    state = SimpleNamespace(
+        primal_infeas=0.0, mu=mu, comm_rank=0, diagonal=None, hessian=None
+    )
 
     corrector.needed = needed
     corrector.tried = []
@@ -141,7 +147,9 @@ def test_a_new_barrier_probes_down_again_and_a_served_probe_ends_the_hold():
     probed = run_iteration(corrector, needed=1.0, mu=0.02)
 
     assert probed == [pytest.approx(grown[-1] / 3.0)]
-    assert run_iteration(corrector, needed=1.0, mu=0.02) == [pytest.approx(probed[-1] / 3.0)]
+    assert run_iteration(corrector, needed=1.0, mu=0.02) == [
+        pytest.approx(probed[-1] / 3.0)
+    ]
 
 
 def test_zero_is_tried_once_the_decayed_value_is_small():
@@ -177,14 +185,21 @@ class FlaggedSolver(InertiaSolver):
 
 
 def test_a_failed_factorization_reports_its_reason_and_clears_on_the_next_call(capsys):
-    corrector = UnperturbedCorrector(get_default_options(), VectorProblem(), Optimizer())
+    corrector = UnperturbedCorrector(
+        get_default_options(), VectorProblem(), Optimizer()
+    )
     solver = FlaggedSolver(NONFINITE_MATRIX)
-    state = SimpleNamespace(primal_infeas=0.0, mu=0.1, comm_rank=0, diagonal=None, hessian=None)
+    state = SimpleNamespace(
+        primal_infeas=0.0, mu=0.1, comm_rank=0, diagonal=None, hessian=None
+    )
 
     # No regularization repairs the failure, so a single factorization is tried
     assert not corrector.factor_for_inertia(solver, QuietEvaluator(), state)
     assert corrector.failure == NONFINITE_MATRIX
-    assert "factorization failed because the matrix has a NaN or infinite entry" in capsys.readouterr().out
+    assert (
+        "factorization failed because the matrix has a NaN or infinite entry"
+        in capsys.readouterr().out
+    )
 
     # A good factorization clears the failure
     solver.flag = 0

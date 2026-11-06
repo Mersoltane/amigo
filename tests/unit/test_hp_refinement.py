@@ -111,7 +111,9 @@ def test_smoothness_estimates_take_the_collocation_points_where_q_is_undetermine
 
     # The first old interval splits in two and the last new interval comes from a merge
     old_errors = np.array([bound_error(1.0, 2.0, 1.0, 3), 1e-9])
-    errors = np.array([bound_error(1.0, 2.0, 0.5, 3), bound_error(1.0, 2.0, 0.5, 3), 1e-9])
+    errors = np.array(
+        [bound_error(1.0, 2.0, 0.5, 3), bound_error(1.0, 2.0, 0.5, 3), 1e-9]
+    )
 
     q = hp.smoothness_estimates(new, errors, np.array([0, 0, -1]), (old, old_errors))
 
@@ -167,8 +169,16 @@ def test_degree_reduction_drops_negligible_powers(flipped):
     small = quadratic + 1e-9 * s**3
 
     assert hp.reduced_degree(small, flipped, options(tolerance=1e-8)) == 2
-    assert hp.reduced_degree(quadratic + 1e-7 * s**3, flipped, options(tolerance=1e-8)) == 3
-    assert hp.reduced_degree(np.full(7, 2.0), flipped, options(tolerance=1e-8, min_points=1)) == 1
+    assert (
+        hp.reduced_degree(quadratic + 1e-7 * s**3, flipped, options(tolerance=1e-8))
+        == 3
+    )
+    assert (
+        hp.reduced_degree(
+            np.full(7, 2.0), flipped, options(tolerance=1e-8, min_points=1)
+        )
+        == 1
+    )
 
 
 def cubic(tau):
@@ -213,7 +223,9 @@ def test_refine_splits_reduces_and_merges():
     tau = mesh.state_points()
 
     states = np.column_stack([1.0 + tau - 0.5 * tau**2, 2.0 - tau])
-    solution = hp.MeshSolution(mesh, states, np.zeros((mesh.num_collocation, 1)), 0.0, 1.0)
+    solution = hp.MeshSolution(
+        mesh, states, np.zeros((mesh.num_collocation, 1)), 0.0, 1.0
+    )
 
     errors = np.array([1e-9, 5e-5, 1e-9, 1e-9])
     q = np.full(4, 3.0)
@@ -229,7 +241,9 @@ def test_refine_splits_reduces_and_merges():
     # Interval 1 splits into ceil of 50 to the one third equal parts
     count = math.ceil(50.0 ** (1.0 / 3.0))
 
-    assert np.allclose(new_mesh.points[1 : 2 + count], np.linspace(-0.5, 0.0, count + 1))
+    assert np.allclose(
+        new_mesh.points[1 : 2 + count], np.linspace(-0.5, 0.0, count + 1)
+    )
     assert list(parents[1 : 1 + count]) == [1] * count
 
     # Interval 0 keeps its parent and the last two intervals merge with two points
@@ -242,7 +256,9 @@ def test_refine_splits_reduces_and_merges():
 def test_refine_uses_p_refinement_when_q_exceeds_q_threshold():
     mesh = RadauMesh.uniform(2, 4)
     states = np.zeros((mesh.num_states, 1))
-    solution = hp.MeshSolution(mesh, states, np.zeros((mesh.num_collocation, 1)), 0.0, 1.0)
+    solution = hp.MeshSolution(
+        mesh, states, np.zeros((mesh.num_collocation, 1)), 0.0, 1.0
+    )
 
     errors = np.array([2e-6, 0.0])
     q = np.array([4.5, 4.5])
@@ -271,7 +287,15 @@ class LineSolve:
         states = np.column_stack([tau])
         controls = np.zeros((mesh.num_collocation, 1))
 
-        return hp.MeshSolution(mesh, states, controls, 0.0, 1.0, dict(self.parameters), converged=self.converged)
+        return hp.MeshSolution(
+            mesh,
+            states,
+            controls,
+            0.0,
+            1.0,
+            dict(self.parameters),
+            converged=self.converged,
+        )
 
 
 def wide_interval_errors(solution, dynamics):
@@ -303,7 +327,9 @@ def test_run_stops_at_a_mesh_whose_solve_failed(monkeypatch):
 
     monkeypatch.setattr(hp, "relative_errors", unit_errors)
 
-    history = hp.HPRefinement(options(), dynamics=None).run(RadauMesh.uniform(2, 3), solve)
+    history = hp.HPRefinement(options(), dynamics=None).run(
+        RadauMesh.uniform(2, 3), solve
+    )
 
     assert len(history) == 1 and solve.calls == [2]
     assert not history[0].solution.converged

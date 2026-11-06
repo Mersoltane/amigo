@@ -229,7 +229,9 @@ class MeshRefinement:
                 solution = solutions[i]
                 assessment = assessments[i]
 
-                entry.append(MeshIteration(solution, assessment.errors, assessment.smoothness))
+                entry.append(
+                    MeshIteration(solution, assessment.errors, assessment.smoothness)
+                )
 
             history.append(entry)
 

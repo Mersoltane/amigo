@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from amigo.algorithm.globalization.filter_acceptance import Filter, FilterAcceptance, FilterBasePoint
+from amigo.algorithm.globalization.filter_acceptance import (
+    Filter,
+    FilterAcceptance,
+    FilterBasePoint,
+)
 from amigo.algorithm.globalization.funnel_line_search import Funnel, FunnelLineSearch
 
 FUNNEL_OPTIONS = {
@@ -31,7 +35,9 @@ SHARED_OPTIONS = {
 }
 
 # Filter line search constants at their defaults
-FILTER_OPTIONS = dict(SHARED_OPTIONS, filter_delta=1.0, filter_s_theta=1.1, filter_s_phi=2.3)
+FILTER_OPTIONS = dict(
+    SHARED_OPTIONS, filter_delta=1.0, filter_s_theta=1.1, filter_s_phi=2.3
+)
 
 
 def make_funnel(theta0=1.0, **overrides):

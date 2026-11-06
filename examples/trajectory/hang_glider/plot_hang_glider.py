@@ -37,12 +37,18 @@ fig = plt.figure(figsize=(12, 9))
 axes = fig.subplots(3, 2)
 
 # The horizontal distance and the altitude
-plot_panel(axes[0, 0], t, q[:, 0], "Time (s)", "$x$ (m)", "Horizontal Position", blue_color)
+plot_panel(
+    axes[0, 0], t, q[:, 0], "Time (s)", "$x$ (m)", "Horizontal Position", blue_color
+)
 plot_panel(axes[0, 1], t, q[:, 1], "Time (s)", "$y$ (m)", "Altitude", blue_color)
 
 # The velocities
-plot_panel(axes[1, 0], t, q[:, 2], "Time (s)", "$v_x$ (m/s)", "Horizontal Velocity", blue_color)
-plot_panel(axes[1, 1], t, q[:, 3], "Time (s)", "$v_y$ (m/s)", "Vertical Velocity", blue_color)
+plot_panel(
+    axes[1, 0], t, q[:, 2], "Time (s)", "$v_x$ (m/s)", "Horizontal Velocity", blue_color
+)
+plot_panel(
+    axes[1, 1], t, q[:, 3], "Time (s)", "$v_y$ (m/s)", "Vertical Velocity", blue_color
+)
 
 # The path and the lift coefficient
 plot_panel(axes[2, 0], q[:, 0], q[:, 1], "$x$ (m)", "$y$ (m)", "Trajectory", blue_color)

@@ -102,8 +102,7 @@ class ConvergenceCheck:
         """Primal feasibility and complementarity at the solve tolerance."""
         tol = self.options["convergence_tolerance"]
         return (
-            state.constr_viol <= tol
-            and state.complementarity / state.obj_scale <= tol
+            state.constr_viol <= tol and state.complementarity / state.obj_scale <= tol
         )
 
     def objective_converged(self, state):

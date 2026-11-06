@@ -91,7 +91,17 @@ class Scripted(BangBangSolver):
         self.script = list(script)
         self.calls = []
 
-    def solve_arcs(self, source, sigma, given=None, carry=None, noise=0.0, budget=None, effort=None, search=False):
+    def solve_arcs(
+        self,
+        source,
+        sigma,
+        given=None,
+        carry=None,
+        noise=0.0,
+        budget=None,
+        effort=None,
+        search=False,
+    ):
         if carry is not None:
             self.calls.append(("carry", budget))
         else:
@@ -190,7 +200,10 @@ def test_the_stage_order_does_not_change_after_a_level_the_homotopy_served():
     solver = Scripted([arcs(21.0)])
 
     previous = previous_step(1.0)
-    previous.stages = [Stage("jump", "does not serve", 100), Stage("homotopy", "serves", 200)]
+    previous.stages = [
+        Stage("jump", "does not serve", 100),
+        Stage("homotopy", "serves", 200),
+    ]
 
     step = solver.step(0.8, previous)
 
@@ -257,7 +270,12 @@ def test_arcs_that_meet_the_tolerance_beat_lighter_ones_that_miss_it_and_otherwi
 
     # A gain within the tolerance of the objective is no gain
     assert not solver.better(found_arcs(0.022 - 1e-9, 1e-9), found_arcs(0.022, 1e-9))
-    assert solver.best([None, found_arcs(0.022, 1e-9), found_arcs(0.021, 1e-9)]).solution.objective == 0.021
+    assert (
+        solver.best(
+            [None, found_arcs(0.022, 1e-9), found_arcs(0.021, 1e-9)]
+        ).solution.objective
+        == 0.021
+    )
 
 
 def test_a_family_visits_values_at_most_the_max_step_apart_and_every_value_asked_for():
@@ -332,7 +350,9 @@ class OneMesh:
         entry = []
 
         for solution in solutions:
-            entry.append(MeshIteration(solution, np.full(solution.mesh.num_intervals, 1e-9)))
+            entry.append(
+                MeshIteration(solution, np.full(solution.mesh.num_intervals, 1e-9))
+            )
 
         if stop is not None:
             stop(solutions)
@@ -371,9 +391,13 @@ class LayoutSolver:
             mesh = meshes[p]
 
             states = np.zeros((mesh.num_states, 1))
-            controls = np.full((mesh.num_collocation, 1), float(self.kinds[p] == "burn"))
+            controls = np.full(
+                (mesh.num_collocation, 1), float(self.kinds[p] == "burn")
+            )
 
-            solutions.append(MeshSolution(mesh, states, controls, edges[p], edges[p + 1]))
+            solutions.append(
+                MeshSolution(mesh, states, controls, edges[p], edges[p + 1])
+            )
 
         return solutions
 
@@ -439,13 +463,15 @@ class Layouts(BangBangProblem):
 
 def hump_in_the_burn(t):
     """A switching function with a hump above zero inside the burn"""
-    return np.where(t <= 2.0, np.exp(-((t - 1.0) / 0.3) ** 2) - 0.5, 1.0)
+    return np.where(t <= 2.0, np.exp(-(((t - 1.0) / 0.3) ** 2)) - 0.5, 1.0)
 
 
 def test_a_region_where_the_switching_function_has_the_wrong_sign_gets_an_arc_of_the_other_kind():
     problem = Layouts([("burn", 0.0, 2.0), ("coast", 2.0, 4.0)], hump_in_the_burn)
 
-    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(None, None)[0]
+    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(
+        None, None
+    )[0]
 
     # The coast inside the burn saves its own length of burning, and the switching function then agrees
     kinds = []
@@ -456,7 +482,9 @@ def test_a_region_where_the_switching_function_has_the_wrong_sign_gets_an_arc_of
     assert problem.layouts == [["burn", "coast"], ["burn", "coast", "burn", "coast"]]
     assert found.check["stands"]
     assert kinds == ["burn", "coast", "burn", "coast"]
-    assert problem.objective(found.solution) == pytest.approx(2.0 - 2.0 * 0.3 * np.sqrt(np.log(2.0)), abs=0.02)
+    assert problem.objective(found.solution) == pytest.approx(
+        2.0 - 2.0 * 0.3 * np.sqrt(np.log(2.0)), abs=0.02
+    )
 
 
 class CountedSolver:
@@ -508,7 +536,9 @@ def test_a_stage_that_spends_its_effort_returns_what_it_holds_while_the_full_dan
     # The effort buys three layouts
     problem = Restless()
 
-    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(None, None, effort=300)[0]
+    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(
+        None, None, effort=300
+    )[0]
 
     assert len(problem.layouts) == 3
     assert found is not None and not found.check["stands"]
@@ -527,10 +557,17 @@ def coast_after_half(t):
 
 
 def test_an_arc_that_shrinks_to_the_floor_goes_to_its_neighbors_without_refining_further():
-    read = [("burn", 0.0, 0.5), ("coast", 0.5, 1.5), ("burn", 1.5, 2.5), ("coast", 2.5, 4.0)]
+    read = [
+        ("burn", 0.0, 0.5),
+        ("coast", 0.5, 1.5),
+        ("burn", 1.5, 2.5),
+        ("coast", 2.5, 4.0),
+    ]
     problem = Layouts(read, coast_after_half, shrink=1.0)
 
-    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(None, None)[0]
+    found = BangBangSolver(problem, BangBangOptions(arc_floor=1e-3)).solve_arcs(
+        None, None
+    )[0]
 
     # The two coasts around the shrunk burn join into one
     assert problem.layouts == [["burn", "coast", "burn", "coast"], ["burn", "coast"]]

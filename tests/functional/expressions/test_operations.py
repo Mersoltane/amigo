@@ -351,7 +351,9 @@ def test_gradient_jacobian_wrt_data_matches_differences(model):
 
     problem = model.get_problem()
     jac = problem.create_gradient_jacobian_wrt_data()
-    problem.gradient_jacobian_wrt_data(point(model, v[:3], v[3], v[4]).get_vector(), jac)
+    problem.gradient_jacobian_wrt_data(
+        point(model, v[:3], v[3], v[4]).get_vector(), jac
+    )
 
     # The rows of x, s, and y and the columns of both tables
     cols = []

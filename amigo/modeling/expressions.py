@@ -476,7 +476,9 @@ class BSplineNode(ExprNode):
             raise ValueError("Only a 2D table takes a column")
         order = int(order)
         if not 1 <= order <= node.shape[0]:
-            raise ValueError(f"A spline of order {order} needs at least {order} coefficients")
+            raise ValueError(
+                f"A spline of order {order} needs at least {order} coefficients"
+            )
         if expr.shape is not None:
             raise ValueError("bspline takes a scalar argument")
 
@@ -529,9 +531,13 @@ class BSplineBasisNode(ExprNode):
         super().__init__()
         index, size, order = int(index), int(size), int(order)
         if not 1 <= order <= size:
-            raise ValueError(f"A spline of order {order} needs at least {order} coefficients")
+            raise ValueError(
+                f"A spline of order {order} needs at least {order} coefficients"
+            )
         if not 0 <= index < size:
-            raise ValueError(f"Basis index {index} out of range for {size} coefficients")
+            raise ValueError(
+                f"Basis index {index} out of range for {size} coefficients"
+            )
         if expr.shape is not None:
             raise ValueError("bspline_basis takes a scalar argument")
 
@@ -545,7 +551,13 @@ class BSplineBasisNode(ExprNode):
         return False
 
     def serialize(self):
-        return ("bspline_basis", self.expr.serialize(), self.index, self.size, self.order)
+        return (
+            "bspline_basis",
+            self.expr.serialize(),
+            self.index,
+            self.size,
+            self.order,
+        )
 
     def to_cpp(self):
         return f"A2D::bspline_basis<{self.order}, {self.size}>({self.index}, {self.expr.to_cpp()})"
@@ -1312,7 +1324,10 @@ class ExprBuilder:
             parts, lines = self._split_sum(lhs, rhs, make_active)
             decl.extend(
                 self.get_declarations(
-                    parts, scalar_reference=False, mode=mode, template_name=template_name
+                    parts,
+                    scalar_reference=False,
+                    mode=mode,
+                    template_name=template_name,
                 )
             )
             active.extend(lines)

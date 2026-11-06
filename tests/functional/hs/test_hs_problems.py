@@ -17,9 +17,20 @@ import pytest
 
 import amigo as am
 from amigo.algorithm.interior_point import driver
-from amigo.algorithm.interior_point.convergence_check import CONVERGED, CONVERGED_ACCEPTABLE
+from amigo.algorithm.interior_point.convergence_check import (
+    CONVERGED,
+    CONVERGED_ACCEPTABLE,
+)
 
-ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "test_suites", "hock_schittkowski")
+ROOT = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "..",
+    "examples",
+    "test_suites",
+    "hock_schittkowski",
+)
 SCRIPTS = sorted(glob.glob(os.path.join(ROOT, "hs*", "hs*.py")))
 
 # Published optimal objectives, written with the digits of their source
@@ -94,7 +105,9 @@ def params():
 
         marks = []
         if name in DISAGREE:
-            marks.append(pytest.mark.xfail(reason=f"Converges to {DISAGREE[name]}", strict=True))
+            marks.append(
+                pytest.mark.xfail(reason=f"Converges to {DISAGREE[name]}", strict=True)
+            )
 
         cases.append(pytest.param(script, id=name, marks=marks))
 
@@ -178,7 +191,9 @@ def test_problem_reaches_published_optimum(script, monkeypatch, log):
     assert objective == pytest.approx(expected, rel=1e-6, abs=precision + 1e-6)
 
 
-def test_a_warm_start_from_the_solution_and_its_bound_duals_needs_fewer_iterations(monkeypatch):
+def test_a_warm_start_from_the_solution_and_its_bound_duals_needs_fewer_iterations(
+    monkeypatch,
+):
     script = os.path.join(ROOT, "hs71", "hs71.py")
 
     optimum = published_optimum(script)
@@ -208,7 +223,9 @@ def test_a_warm_start_from_the_solution_and_its_bound_duals_needs_fewer_iteratio
 
     assert warm["status"] in (CONVERGED, CONVERGED_ACCEPTABLE), warm["status_message"]
     assert len(warm["iterations"]) < len(cold["iterations"])
-    assert warm["iterations"][-1]["objective"] == pytest.approx(expected, rel=1e-6, abs=precision + 1e-6)
+    assert warm["iterations"][-1]["objective"] == pytest.approx(
+        expected, rel=1e-6, abs=precision + 1e-6
+    )
 
     # The solution restarted at the barrier it ended at is already converged
     assert warm_start.mu < 1e-6
@@ -229,7 +246,9 @@ def test_a_warm_start_from_the_solution_and_its_bound_duals_needs_fewer_iteratio
 
 @pytest.mark.parametrize("factor", [1e-2, 1e2])
 @pytest.mark.parametrize("name", ["hs71", "hs76"])
-def test_objective_scaling_keeps_the_optimum_and_reports_it_unscaled(name, factor, monkeypatch, log):
+def test_objective_scaling_keeps_the_optimum_and_reports_it_unscaled(
+    name, factor, monkeypatch, log
+):
     script = os.path.join(ROOT, name, f"{name}.py")
 
     optimum = published_optimum(script)

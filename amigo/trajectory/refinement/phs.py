@@ -14,7 +14,13 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from ..collocation.mesh import RadauMesh, lagrange_matrix, mesh_time, radau_points, support_points
+from ..collocation.mesh import (
+    RadauMesh,
+    lagrange_matrix,
+    mesh_time,
+    radau_points,
+    support_points,
+)
 from .base import Assessment, MeshRefinement
 
 DIRECTIONS = ("forward", "backward")
@@ -53,7 +59,9 @@ class PHSOptions:
             raise ValueError("the tolerance must be positive")
 
         if not 2 <= self.min_points <= self.max_points:
-            raise ValueError("the point limits must satisfy 2 <= min_points <= max_points")
+            raise ValueError(
+                "the point limits must satisfy 2 <= min_points <= max_points"
+            )
 
         if self.max_iterations < 1:
             raise ValueError("at least one mesh must be solved")
@@ -65,7 +73,9 @@ class PHSOptions:
             raise ValueError("the number of evenly spaced points cannot be negative")
 
         if not self.directions or set(self.directions) - set(DIRECTIONS):
-            raise ValueError(f"the directions must be a nonempty subset of {DIRECTIONS}")
+            raise ValueError(
+                f"the directions must be a nonempty subset of {DIRECTIONS}"
+            )
 
 
 class FlightError(RuntimeError):
@@ -217,7 +227,9 @@ def _fly(solution, first, last, dynamics, options, direction, event=None):
         return Flight(stopped=True)
 
     if not sol.success or not np.all(np.isfinite(sol.y)):
-        return Flight(failure=f"the {direction} flight of interval {k} failed: {sol.message}")
+        return Flight(
+            failure=f"the {direction} flight of interval {k} failed: {sol.message}"
+        )
 
     # The states at the solver steps
     if options.even_points == 0:
@@ -300,7 +312,9 @@ def constraint_samples(solution, k, constraints, options):
 
     # constraints(states, controls, t) returns scaled values that are feasible at or below zero
     t = mesh_time(tau, t_mesh[k], t_mesh[k + 1])
-    values = np.asarray(constraints(states, controls, t), dtype=float).reshape(len(tau), -1)
+    values = np.asarray(constraints(states, controls, t), dtype=float).reshape(
+        len(tau), -1
+    )
 
     return tau, t, values
 
@@ -548,7 +562,9 @@ def refine(solution, errors, dynamics, options, reduce=True, keep=None, cuts=Non
             else:
                 count = h_refinement(wanted, options)
 
-                points.extend(np.linspace(mesh.points[k], mesh.points[k + 1], count + 1)[1:])
+                points.extend(
+                    np.linspace(mesh.points[k], mesh.points[k + 1], count + 1)[1:]
+                )
                 degrees.extend([options.min_points] * count)
                 actions.append("split")
 
@@ -570,9 +586,13 @@ def same_mesh(a, b):
     return np.allclose(a.points, b.points, rtol=0.0, atol=1e-12)
 
 
-def next_mesh(solution, errors, dynamics, options, solved, growing, keep=None, cuts=None):
+def next_mesh(
+    solution, errors, dynamics, options, solved, growing, keep=None, cuts=None
+):
     """The next mesh of one phase, the action on every interval, and whether it only gains points from then on"""
-    result = refine(solution, errors, dynamics, options, reduce=not growing, keep=keep, cuts=cuts)
+    result = refine(
+        solution, errors, dynamics, options, reduce=not growing, keep=keep, cuts=cuts
+    )
 
     mesh = result[0]
     actions = result[1]
@@ -589,7 +609,9 @@ def next_mesh(solution, errors, dynamics, options, solved, growing, keep=None, c
             break
 
     if repeated:
-        result = refine(solution, errors, dynamics, options, reduce=False, keep=keep, cuts=cuts)
+        result = refine(
+            solution, errors, dynamics, options, reduce=False, keep=keep, cuts=cuts
+        )
 
         return result[0], result[1], True
 
@@ -609,7 +631,9 @@ class PHSRefinement(MeshRefinement):
     def start(self, mesh):
         """The meshes a phase has solved and whether it only gains points"""
         if mesh.degrees.max() > self.options.max_points:
-            raise ValueError("every interval of the initial mesh needs at most max_points collocation points")
+            raise ValueError(
+                "every interval of the initial mesh needs at most max_points collocation points"
+            )
 
         return {"solved": [], "growing": False}
 

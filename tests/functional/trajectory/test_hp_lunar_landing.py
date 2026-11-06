@@ -28,7 +28,15 @@ from amigo.trajectory import (
 
 # The lunar landing example supplies the model and the exact solution
 EXAMPLE = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "trajectory", "lunar_landing")
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "examples",
+        "trajectory",
+        "lunar_landing",
+    )
 )
 
 if EXAMPLE not in sys.path:
@@ -175,7 +183,9 @@ def flown_end(solution):
     return y
 
 
-def test_phs_refinement_meets_the_tolerance_with_flights_that_reach_the_target(solve, flipped):
+def test_phs_refinement_meets_the_tolerance_with_flights_that_reach_the_target(
+    solve, flipped
+):
     options = PHSOptions(tolerance=1e-6, min_points=3, max_points=10)
     refinement = PHSRefinement(options, ll.rates)
     history = refinement.run(RadauMesh.uniform(10, 3, flipped), solve)

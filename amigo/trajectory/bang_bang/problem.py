@@ -61,7 +61,9 @@ class BangBangProblem:
 
     def arc_meshes(self, arcs):
         """Uniform meshes of five points per interval with about forty intervals over all the arcs"""
-        return uniform_arc_meshes(arc_edges(arcs), intervals=40, degree=5, min_intervals=2)
+        return uniform_arc_meshes(
+            arc_edges(arcs), intervals=40, degree=5, min_intervals=2
+        )
 
     def arc_start(self, source, arcs, meshes, shift, parameters):
         """Solutions of the arcs on their meshes from a source solution"""

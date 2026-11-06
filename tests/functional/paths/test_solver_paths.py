@@ -374,7 +374,9 @@ class ScriptedMumpsCall:
         ([-13], -13, 0),
     ],
 )
-def test_mumps_errors_become_factorization_flags(hs71, monkeypatch, codes, flag, doublings):
+def test_mumps_errors_become_factorization_flags(
+    hs71, monkeypatch, codes, flag, doublings
+):
     solved = solve_with_mumps(hs71)
     opt = solved[0]
     data = solved[1]
@@ -383,7 +385,9 @@ def test_mumps_errors_become_factorization_flags(hs71, monkeypatch, codes, flag,
 
     # Each factorization call reports the next scripted error code
     solver = opt.solver
-    monkeypatch.setattr(solver, "_call_mumps", ScriptedMumpsCall(solver, solver._call_mumps, codes))
+    monkeypatch.setattr(
+        solver, "_call_mumps", ScriptedMumpsCall(solver, solver._call_mumps, codes)
+    )
 
     workspace = solver._mumps.icntl[13]
 
@@ -396,7 +400,9 @@ def test_post_optimality_derivatives_match_the_analytic_values(quadratic):
 
     assert opt.optimize()["converged"]
 
-    derivatives = opt.compute_post_opt_derivatives(of="comp.f", wrt=["comp.a", "comp.b"])
+    derivatives = opt.compute_post_opt_derivatives(
+        of="comp.f", wrt=["comp.a", "comp.b"]
+    )
     dfdx = derivatives[0]
     of_map = derivatives[1]
     wrt_map = derivatives[2]
@@ -405,5 +411,9 @@ def test_post_optimality_derivatives_match_the_analytic_values(quadratic):
     a = 1.0
     b = 3.0
 
-    assert dfdx[of_map["comp.f"], wrt_map["comp.a"]] == pytest.approx((10 * a - 8 * b) / 9, abs=1e-8)
-    assert dfdx[of_map["comp.f"], wrt_map["comp.b"]] == pytest.approx((10 * b - 8 * a) / 9, abs=1e-8)
+    assert dfdx[of_map["comp.f"], wrt_map["comp.a"]] == pytest.approx(
+        (10 * a - 8 * b) / 9, abs=1e-8
+    )
+    assert dfdx[of_map["comp.f"], wrt_map["comp.b"]] == pytest.approx(
+        (10 * b - 8 * a) / 9, abs=1e-8
+    )

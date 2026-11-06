@@ -202,7 +202,15 @@ class BangBangSolver:
         agreement = sign_agreement(signs, solutions, sigma)
 
         # The arcs the switching function asks for
-        inserted = insert_arcs(kinds, solutions, sigma, signs, problem.other, options.switch_noise, options.arc_floor)
+        inserted = insert_arcs(
+            kinds,
+            solutions,
+            sigma,
+            signs,
+            problem.other,
+            options.switch_noise,
+            options.arc_floor,
+        )
         asked = inserted[0]
         edges = inserted[1]
 
@@ -244,7 +252,16 @@ class BangBangSolver:
             b = edges[i + 1]
 
             arcs.append((kinds[i], a, b))
-            meshes.append(sub_mesh(combined.mesh, combined.t0, combined.tf, a, b, self.options.arc_floor))
+            meshes.append(
+                sub_mesh(
+                    combined.mesh,
+                    combined.t0,
+                    combined.tf,
+                    a,
+                    b,
+                    self.options.arc_floor,
+                )
+            )
 
         start = problem.arc_start(source, arcs, meshes, 0.0, dict(combined.parameters))
 
@@ -263,7 +280,9 @@ class BangBangSolver:
         # The objective must drop by more than the tolerance
         best = self.problem.objective(kept.solution)
 
-        return self.problem.objective(found.solution) < best - tolerance * max(1.0, abs(best))
+        return self.problem.objective(found.solution) < best - tolerance * max(
+            1.0, abs(best)
+        )
 
     def best(self, candidates):
         """The best of some solved arcs, or None"""
@@ -312,7 +331,17 @@ class BangBangSolver:
 
         return relaid + (record,)
 
-    def solve_arcs(self, source, sigma, given=None, carry=None, noise=0.0, budget=None, effort=None, search=False):
+    def solve_arcs(
+        self,
+        source,
+        sigma,
+        given=None,
+        carry=None,
+        noise=0.0,
+        budget=None,
+        effort=None,
+        search=False,
+    ):
         """Solved arcs from a source or given or carried, with free switch times and every mesh size"""
         problem = self.problem
         options = self.options
@@ -400,7 +429,9 @@ class BangBangSolver:
                 continue
 
             if events.short:
-                layout = self.collapsed_layout(kinds, history[-1], solver, solver.records[-1])
+                layout = self.collapsed_layout(
+                    kinds, history[-1], solver, solver.records[-1]
+                )
                 continue
 
             # The arcs on the mesh that stands
@@ -422,7 +453,9 @@ class BangBangSolver:
 
                 if asked not in seen:
                     seen.add(asked)
-                    layout = self.disagreeing_layout(kinds, solutions, costate, check, record)
+                    layout = self.disagreeing_layout(
+                        kinds, solutions, costate, check, record
+                    )
                     continue
 
             # The layout that settled refines on to the mesh tolerance from where it stopped
@@ -462,7 +495,9 @@ class BangBangSolver:
                 costate = solver.costate(record)
 
                 combined = combine_arcs(solutions)
-                check = self.check(kinds, solutions, problem.switching(combined, costate))
+                check = self.check(
+                    kinds, solutions, problem.switching(combined, costate)
+                )
 
                 history = fine
 
@@ -506,7 +541,9 @@ class BangBangSolver:
 
         # meshes caps the meshes the refinement tries
         refinement = problem.refinement(tolerance, max_iterations=meshes)
-        history = refinement.run(solution.mesh, SingleSolve(problem, blend), first=solution)
+        history = refinement.run(
+            solution.mesh, SingleSolve(problem, blend), first=solution
+        )
 
         best = history.best_index
         solution = history[best].solution
@@ -537,7 +574,9 @@ class BangBangSolver:
         """The arcs read from the last single phase solve and solved, with their meshes noted on the step"""
         sigma = self.problem.switching(single, self.problem.single_costate())
 
-        result = self.solve_arcs(single, sigma, noise=noise, budget=budget, effort=effort, search=search)
+        result = self.solve_arcs(
+            single, sigma, noise=noise, budget=budget, effort=effort, search=search
+        )
         found = result[0]
         steps = result[1]
 
@@ -580,7 +619,9 @@ class BangBangSolver:
         smooth = path.last.solution
 
         # The arcs are read on the mesh of the homotopy first, with a budget on each solve
-        found = self.read_and_solve(step, smooth, options.read_noise, options.budget, options.probe_effort)
+        found = self.read_and_solve(
+            step, smooth, options.read_noise, options.budget, options.probe_effort
+        )
 
         if self.serves(found):
             return smooth, found
@@ -597,7 +638,12 @@ class BangBangSolver:
 
         if refined.converged:
             second = self.read_and_solve(
-                step, refined, options.read_noise, options.budget, options.search_effort, search=True
+                step,
+                refined,
+                options.read_noise,
+                options.budget,
+                options.search_effort,
+                search=True,
             )
             smooth = refined
 
@@ -644,7 +690,13 @@ class BangBangSolver:
             mark = problem.iterations
 
             carry = problem.carried(previous.arcs.carry, value)
-            result = self.solve_arcs(None, None, carry=carry, budget=options.budget, effort=options.probe_effort)
+            result = self.solve_arcs(
+                None,
+                None,
+                carry=carry,
+                budget=options.budget,
+                effort=options.probe_effort,
+            )
             carried = result[0]
             steps = result[1]
 
@@ -684,7 +736,9 @@ class BangBangSolver:
         )
 
         if single.converged and not missed:
-            self.record(step, "jump", mark, "the single phase meets the tolerance", single)
+            self.record(
+                step, "jump", mark, "the single phase meets the tolerance", single
+            )
 
             step.solution = single
             step.start = single
@@ -692,7 +746,9 @@ class BangBangSolver:
             return step
 
         if single.converged:
-            jumped = self.read_and_solve(step, single, 0.0, options.budget, options.probe_effort)
+            jumped = self.read_and_solve(
+                step, single, 0.0, options.budget, options.probe_effort
+            )
 
             serves = self.serves(jumped)
             self.record_arcs(step, "jump", mark, jumped, serves)
@@ -730,7 +786,9 @@ class BangBangSolver:
 
         mark = problem.iterations
 
-        result = self.refined(single, 0.0, options.tolerance, meshes=options.last_meshes)
+        result = self.refined(
+            single, 0.0, options.tolerance, meshes=options.last_meshes
+        )
         refined = result[0]
         error = result[1]
         steps = result[2]
@@ -740,7 +798,9 @@ class BangBangSolver:
         found = None
 
         if refined.converged:
-            found = self.read_and_solve(step, refined, 0.0, options.budget, options.search_effort, search=True)
+            found = self.read_and_solve(
+                step, refined, 0.0, options.budget, options.search_effort, search=True
+            )
 
         self.record_arcs(step, "refined single phase", mark, found, found is not None)
 

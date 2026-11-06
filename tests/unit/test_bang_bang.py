@@ -113,9 +113,13 @@ def test_only_the_intervals_that_hold_a_sign_change_split_into_equal_parts():
     mesh = RadauMesh([-1.0, -0.5, 0.5, 1.0], [3, 3, 3], flipped=True)
 
     # Sigma changes sign inside the second interval only
-    split = split_at_switches(mesh, [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0], parts=4)
+    split = split_at_switches(
+        mesh, [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0], parts=4
+    )
 
-    assert split.points.tolist() == pytest.approx([-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0])
+    assert split.points.tolist() == pytest.approx(
+        [-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0]
+    )
     assert split.degrees.tolist() == [3, 3, 3, 3, 3, 3]
 
 

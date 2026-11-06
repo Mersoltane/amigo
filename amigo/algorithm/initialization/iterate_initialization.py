@@ -70,7 +70,9 @@ class IterateCenterer:
         gap = state.mu / zmax
         if keep_bound_duals:
             # The band every iterate obeys, open when the safeguard is off
-            kappa = options["kappa_sigma"] if options["kappa_sigma"] > 0.0 else float("inf")
+            kappa = (
+                options["kappa_sigma"] if options["kappa_sigma"] > 0.0 else float("inf")
+            )
             self.optimizer.initialize_duals_keep(state.mu, gap, kappa, state.current)
         else:
             self.optimizer.initialize_duals_warm(state.mu, gap, zmax, state.current)

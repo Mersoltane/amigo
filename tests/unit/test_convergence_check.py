@@ -99,7 +99,9 @@ def test_square_system_converges_once_feasible():
     check = make_check()
     check.square = True
 
-    assert check.test_convergence(StubEvaluator(1.0), make_feasible_state()) == CONVERGED
+    assert (
+        check.test_convergence(StubEvaluator(1.0), make_feasible_state()) == CONVERGED
+    )
 
 
 def test_feasibility_alone_does_not_end_a_free_problem():
@@ -126,7 +128,9 @@ def test_an_error_that_stops_halving_stalls_after_the_stall_iterations():
     # The error halves twice and then creeps, so three iterations after the last halving the solve stalls
     check = make_check(stall_iterations=3, stall_factor=0.5)
 
-    assert statuses(check, [1.0, 0.5, 0.25, 0.24, 0.23, 0.22]) == [CONTINUE] * 5 + [STALLED]
+    assert statuses(check, [1.0, 0.5, 0.25, 0.24, 0.23, 0.22]) == [CONTINUE] * 5 + [
+        STALLED
+    ]
 
 
 def test_an_error_that_keeps_halving_never_stalls():
@@ -152,7 +156,9 @@ def objective_state(constr_viol, compl, pred_obj, objective=1000.0):
 
 
 def test_a_feasible_centered_iterate_whose_step_cannot_move_the_objective_is_converged():
-    check = ConvergenceCheck(get_default_options({"objective_tolerance": 1e-6}), None, None)
+    check = ConvergenceCheck(
+        get_default_options({"objective_tolerance": 1e-6}), None, None
+    )
 
     assert check.objective_converged(objective_state(1e-5, 1e-5, 5e-4))
 

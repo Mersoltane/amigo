@@ -227,7 +227,9 @@ class Optimizer:
             full.zero()
             full.set_values_at(primal, z)
             full.copy_device_to_host()
-            duals.append(full if self.model is None else ModelVector(self.model, x=full))
+            duals.append(
+                full if self.model is None else ModelVector(self.model, x=full)
+            )
         return tuple(duals)
 
     def get_warm_start(self):
@@ -304,12 +306,18 @@ class Optimizer:
         corrector_options = options
         if isinstance(options["hessian_perturbation_indices"], str):
             if self.model is None:
-                raise ValueError("The free variables need the model that built the problem")
+                raise ValueError(
+                    "The free variables need the model that built the problem"
+                )
             corrector_options = dict(options)
-            corrector_options["hessian_perturbation_indices"] = hessian_perturbation_rows(self.model)
+            corrector_options["hessian_perturbation_indices"] = (
+                hessian_perturbation_rows(self.model)
+            )
 
         # The inertia correction
-        inertia_corrector = InertiaCorrector(corrector_options, self.problem, self.optimizer)
+        inertia_corrector = InertiaCorrector(
+            corrector_options, self.problem, self.optimizer
+        )
 
         # Initialize the line search algorithm
         line_search = make_line_search(options, self.problem, self.optimizer)
@@ -318,7 +326,9 @@ class Optimizer:
         newton_step = NewtonStep(options, self.problem, self.optimizer)
 
         # Feasibility restoration phase algorithm
-        feasible_resto = make_restoration(corrector_options, self.problem, self.optimizer)
+        feasible_resto = make_restoration(
+            corrector_options, self.problem, self.optimizer
+        )
 
         # Initialize the barrier strategy correction algorithm
         barrier_strategy = make_barrier_strategy(options, self.problem, self.optimizer)
@@ -464,7 +474,6 @@ class Optimizer:
             # update. For instance, this call may reset the filter
             line_search.reset_on_new_barrier(self.state, barrier_info)
 
-
             # Factor the KKT system considering the inertia
             # TODO: Implement a inertia info class
             factor_ok = inertia_corrector.factor_for_inertia(
@@ -490,7 +499,9 @@ class Optimizer:
                 )
                 s_d, s_c = self.evaluator.compute_optimality_scaling(self.state)
                 gate = kappa_eps * self.state.mu
-                dual_blocked = dual / s_d > gate and primal <= gate and comp / s_c <= gate
+                dual_blocked = (
+                    dual / s_d > gate and primal <= gate and comp / s_c <= gate
+                )
 
             do_feasible_resto = True
             if factor_ok:
@@ -561,7 +572,9 @@ class Optimizer:
 
                     # Refresh multipliers near feasibility to prevent dual divergence
                     helped = multiplier_init.recompute_multipliers(
-                        self.evaluator, self.solver, self.state,
+                        self.evaluator,
+                        self.solver,
+                        self.state,
                         dual_prev=contract.pre_step_dual,
                         force=dual_blocked,
                     )
@@ -674,7 +687,9 @@ class Optimizer:
             elif r not in constraints:
                 hessian.update((r, c))
 
-        names = self._index_names(set(jacobian) | set().union(*jacobian.values()) | hessian)
+        names = self._index_names(
+            set(jacobian) | set().union(*jacobian.values()) | hessian
+        )
         lines = []
         for r in sorted(jacobian)[:limit]:
             wrt = ", ".join(names[c] for c in sorted(jacobian[r])[:limit])
@@ -695,7 +710,9 @@ class Optimizer:
         bad = np.flatnonzero(~np.isfinite(diagonal.get_array())).tolist()
         if bad:
             where = self._index_names(set(bad))
-            lines.append(f"Non-finite barrier diagonal at {', '.join(where[i] for i in sorted(where)[:limit])}")
+            lines.append(
+                f"Non-finite barrier diagonal at {', '.join(where[i] for i in sorted(where)[:limit])}"
+            )
         return lines + self._invalid_derivatives(limit)
 
     def _index_names(self, indices):

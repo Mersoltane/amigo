@@ -60,7 +60,9 @@ class HessianSparsity:
                 continue
             children = self._children(item.node)
             if ready:
-                memo[key] = self._combine(item.node, [memo[id(c.node)] for c in children])
+                memo[key] = self._combine(
+                    item.node, [memo[id(c.node)] for c in children]
+                )
             else:
                 stack.append((item, True))
                 stack.extend((c, False) for c in children if id(c.node) not in memo)
@@ -72,7 +74,9 @@ class HessianSparsity:
 
     def _children(self, node):
         # The table of an interpolation, a series, or a spline is data and adds no dependency
-        if isinstance(node, (UnaryNode, InterpNode, FourierNode, BSplineNode, BSplineBasisNode)):
+        if isinstance(
+            node, (UnaryNode, InterpNode, FourierNode, BSplineNode, BSplineBasisNode)
+        ):
             return [node.expr]
         if isinstance(node, BinaryNode):
             return [node.left, node.right]

@@ -111,6 +111,8 @@ def test_two_agreeing_iterations_do_not_change_the_label():
     feed(monitor, settled)
 
     # Two hard looking iterations followed by an easy one
-    labels = feed(monitor, [row(alpha=0.2, delta_w=1e-2), row(alpha=0.2, delta_w=1e-2), row()])
+    labels = feed(
+        monitor, [row(alpha=0.2, delta_w=1e-2), row(alpha=0.2, delta_w=1e-2), row()]
+    )
 
     assert set(labels) == {EASY}

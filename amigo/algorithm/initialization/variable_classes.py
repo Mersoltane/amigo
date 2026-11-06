@@ -34,7 +34,9 @@ def _kkt_blocks(model, multipliers, alpha):
     hess = model.create_matrix()
     model.eval_hessian(x, hess, alpha=alpha, zero_fixed_rows_and_columns=False)
     _, _, _, rowp, cols = hess.get_nonzero_structure()
-    return sp.csr_matrix((np.array(hess.get_data()), np.asarray(cols), np.asarray(rowp)), shape=(n, n))
+    return sp.csr_matrix(
+        (np.array(hess.get_data()), np.asarray(cols), np.asarray(rowp)), shape=(n, n)
+    )
 
 
 def _largest_entries(A, keep):
@@ -46,7 +48,9 @@ def _largest_entries(A, keep):
     mask = rank < keep
     counts = np.bincount(rows[mask], minlength=A.shape[0])
     indptr = np.concatenate([[0], np.cumsum(counts)])
-    return sp.csr_matrix((np.ones(int(mask.sum())), A.indices[mask], indptr), shape=A.shape)
+    return sp.csr_matrix(
+        (np.ones(int(mask.sum())), A.indices[mask], indptr), shape=A.shape
+    )
 
 
 def classify_variables(model):
@@ -102,7 +106,9 @@ def classify_variables(model):
 
     # Every variable of a defining row influences the variable the row defines
     G = sp.csr_matrix((np.ones(J.nnz), J.indices, J.indptr), shape=J.shape)
-    influence = sp.csr_matrix((G.data, columns[G.indices], G.indptr), shape=(eq_rows.size, n))
+    influence = sp.csr_matrix(
+        (G.data, columns[G.indices], G.indptr), shape=(eq_rows.size, n)
+    )
     defined_of_row = columns[match]
 
     # Curvature propagates back from the reached variables to those that influence them

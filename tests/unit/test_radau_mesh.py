@@ -52,7 +52,9 @@ def test_points_match_closed_forms():
     r6 = np.sqrt(6.0)
 
     assert np.allclose(radau_points(2), [-1.0, 1.0 / 3.0], atol=1e-15)
-    assert np.allclose(radau_points(3), [-1.0, (1.0 - r6) / 5.0, (1.0 + r6) / 5.0], atol=1e-15)
+    assert np.allclose(
+        radau_points(3), [-1.0, (1.0 - r6) / 5.0, (1.0 + r6) / 5.0], atol=1e-15
+    )
 
 
 @pytest.mark.parametrize("flipped", CONVENTIONS)
@@ -152,7 +154,9 @@ def test_interpolation_reproduces_piecewise_polynomials(flipped):
     states = poly_values(c, mesh.state_points())
     exact = poly_values(c, tau)
 
-    assert np.allclose(mesh.interpolate_states(states[:, None], tau)[:, 0], exact, atol=1e-12)
+    assert np.allclose(
+        mesh.interpolate_states(states[:, None], tau)[:, 0], exact, atol=1e-12
+    )
 
     # The control polynomial has one degree less than the state polynomial
     c = c[:2]
@@ -188,9 +192,15 @@ def test_carried_densities_are_exact_for_a_polynomial_density(flipped):
     new_density = poly_values(c, new.collocation_points())
 
     # Two columns of multipliers that scale with the quadrature weights
-    values = old.quadrature_weights()[:, None] * np.column_stack([old_density, 2.0 * old_density])
-    carried = carry_densities(old, new, values, old.quadrature_weights(), new.quadrature_weights())
-    expected = new.quadrature_weights()[:, None] * np.column_stack([new_density, 2.0 * new_density])
+    values = old.quadrature_weights()[:, None] * np.column_stack(
+        [old_density, 2.0 * old_density]
+    )
+    carried = carry_densities(
+        old, new, values, old.quadrature_weights(), new.quadrature_weights()
+    )
+    expected = new.quadrature_weights()[:, None] * np.column_stack(
+        [new_density, 2.0 * new_density]
+    )
 
     assert np.allclose(carried, expected, atol=1e-12)
 

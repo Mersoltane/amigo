@@ -11,7 +11,13 @@ import numpy as np
 import pytest
 
 import amigo.trajectory.refinement.phs as phs
-from amigo.trajectory.collocation.mesh import RadauMesh, integration_matrix, lagrange_matrix, radau_points, support_points
+from amigo.trajectory.collocation.mesh import (
+    RadauMesh,
+    integration_matrix,
+    lagrange_matrix,
+    radau_points,
+    support_points,
+)
 from amigo.trajectory.refinement.base import MeshSolution
 
 
@@ -48,7 +54,9 @@ def piecewise_solution(flipped, u_left, u_right):
 
 @pytest.mark.parametrize("even_points", [0, 21])
 @pytest.mark.parametrize("flipped", [False, True])
-def test_error_estimate_vanishes_when_the_polynomials_solve_the_dynamics(flipped, even_points):
+def test_error_estimate_vanishes_when_the_polynomials_solve_the_dynamics(
+    flipped, even_points
+):
     mesh = RadauMesh([-1.0, -0.2, 0.5, 1.0], [2, 3, 4], flipped)
 
     t0 = 0.0
@@ -60,7 +68,9 @@ def test_error_estimate_vanishes_when_the_polynomials_solve_the_dynamics(flipped
     controls = np.full((mesh.num_collocation, 1), 1.5)
     solution = MeshSolution(mesh, states, controls, t0, tf)
 
-    errors = phs.simulated_errors(solution, double_integrator, phs.PHSOptions(even_points=even_points))
+    errors = phs.simulated_errors(
+        solution, double_integrator, phs.PHSOptions(even_points=even_points)
+    )
 
     assert np.all(errors < 1e-10)
 
@@ -145,7 +155,9 @@ def test_refine_raises_points_or_splits_above_the_tolerance_and_reduces_below_it
 
     # Interval 1 asks for seven points and splits into four subintervals of two
     assert new_mesh.degrees.tolist() == [6, 2, 2, 2, 2, 4, 5]
-    assert np.allclose(new_mesh.points, [-1.0, -0.5, -0.375, -0.25, -0.125, 0.0, 0.5, 1.0])
+    assert np.allclose(
+        new_mesh.points, [-1.0, -0.5, -0.375, -0.25, -0.125, 0.0, 0.5, 1.0]
+    )
     assert actions == ["raise", "split", "keep", "raise"]
 
 
@@ -185,7 +197,9 @@ def test_neighbors_merge_in_order_of_increasing_error_once_per_pass(monkeypatch)
     assert actions == ["keep", "merge", "merge", "keep"]
 
 
-def test_a_merged_interval_keeps_the_larger_point_count_and_a_failed_pair_does_not_merge(monkeypatch):
+def test_a_merged_interval_keeps_the_larger_point_count_and_a_failed_pair_does_not_merge(
+    monkeypatch,
+):
     solution = zero_solution(RadauMesh([-1.0, 0.0, 1.0], [3, 5]))
     errors = np.full(2, 1e-9)
 
@@ -227,8 +241,14 @@ def test_flights_across_a_control_jump_forbid_the_merge(flipped):
     errors = phs.simulated_errors(jump, double_integrator, opts)
 
     assert np.all(errors < 1e-10)
-    assert phs.pair_error(jump, 0, double_integrator, opts, phs.scale_factors(jump)) > 0.1
-    assert phs.refine(jump, errors, double_integrator, opts)[0].points.tolist() == [-1.0, 0.0, 1.0]
+    assert (
+        phs.pair_error(jump, 0, double_integrator, opts, phs.scale_factors(jump)) > 0.1
+    )
+    assert phs.refine(jump, errors, double_integrator, opts)[0].points.tolist() == [
+        -1.0,
+        0.0,
+        1.0,
+    ]
 
 
 def sine_solution(points, degrees, flipped):
@@ -243,10 +263,14 @@ def sine_solution(points, degrees, flipped):
 
 
 @pytest.mark.parametrize("flipped", [False, True])
-def test_one_polynomial_that_holds_the_state_of_both_intervals_has_no_merge_error(flipped):
+def test_one_polynomial_that_holds_the_state_of_both_intervals_has_no_merge_error(
+    flipped,
+):
     smooth = piecewise_solution(flipped, 0.5, 0.5)
 
-    assert phs.merge_error(smooth, 0, phs.PHSOptions(), phs.scale_factors(smooth)) < 1e-12
+    assert (
+        phs.merge_error(smooth, 0, phs.PHSOptions(), phs.scale_factors(smooth)) < 1e-12
+    )
 
 
 @pytest.mark.parametrize("flipped", [False, True])
@@ -263,7 +287,9 @@ def test_a_state_that_one_polynomial_cannot_follow_does_not_merge(flipped):
 
     # One polynomial of eight points over the period misses it by as much as the merged mesh does
     predicted = phs.merge_error(halves, 0, opts, gamma)
-    actual = phs.simulated_errors(sine_solution([-1.0, 1.0], [8], flipped), sine_rates, opts)[0]
+    actual = phs.simulated_errors(
+        sine_solution([-1.0, 1.0], [8], flipped), sine_rates, opts
+    )[0]
 
     assert predicted > 1e-4 and actual > 1e-4
     assert predicted == pytest.approx(actual, rel=0.1)
@@ -294,7 +320,9 @@ def test_a_failed_flight_stops_the_estimate_and_names_the_interval_and_direction
         phs.simulated_errors(solution, blowup, phs.PHSOptions())
 
     # The backward flights alone finish
-    errors = phs.simulated_errors(solution, blowup, phs.PHSOptions(directions=("backward",)))
+    errors = phs.simulated_errors(
+        solution, blowup, phs.PHSOptions(directions=("backward",))
+    )
 
     assert np.all(np.isfinite(errors))
 
@@ -337,7 +365,9 @@ def test_a_merge_flight_stops_at_the_first_step_past_the_tolerance():
     # The flight matches the narrow interval and leaves the tolerance soon after it
     opts = phs.PHSOptions(directions=("backward",))
 
-    assert phs.pair_error(solution, 0, decay, opts, phs.scale_factors(solution)) == np.inf
+    assert (
+        phs.pair_error(solution, 0, decay, opts, phs.scale_factors(solution)) == np.inf
+    )
     assert phs.simulated_errors(solution, decay, opts)[1] < 1e-9
 
 
@@ -376,7 +406,9 @@ def test_run_stops_when_every_interval_meets_the_tolerance(monkeypatch):
 
     monkeypatch.setattr(phs, "simulated_errors", wide_interval_errors)
 
-    loop = phs.PHSRefinement(phs.PHSOptions(tolerance=1e-6, min_points=2, max_points=4), dynamics=None)
+    loop = phs.PHSRefinement(
+        phs.PHSOptions(tolerance=1e-6, min_points=2, max_points=4), dynamics=None
+    )
     history = loop.run(RadauMesh.uniform(2, 3), solve)
 
     assert solve.calls == [2, 6]
@@ -420,7 +452,9 @@ def test_run_on_phases_refines_only_the_phases_above_the_tolerance(monkeypatch):
     monkeypatch.setattr(phs, "simulated_errors", second_phase_errors)
     monkeypatch.setattr(phs, "pair_error", ConstantPairError(np.inf))
 
-    loop = phs.PHSRefinement(phs.PHSOptions(tolerance=1e-6, min_points=2, max_points=4), dynamics=None)
+    loop = phs.PHSRefinement(
+        phs.PHSOptions(tolerance=1e-6, min_points=2, max_points=4), dynamics=None
+    )
     history = loop.run([RadauMesh.uniform(2, 3), RadauMesh.uniform(2, 3)], solve)
 
     # The first phase keeps its points instead of dropping to the fewest
@@ -452,16 +486,22 @@ def failed_solve(mesh, previous):
 
 
 def test_run_stops_at_a_failed_solve_without_flying_it(monkeypatch):
-    monkeypatch.setattr(phs, "simulated_errors", Forbidden("a failed solve must not be flown"))
+    monkeypatch.setattr(
+        phs, "simulated_errors", Forbidden("a failed solve must not be flown")
+    )
 
-    history = phs.PHSRefinement(phs.PHSOptions(), dynamics=None).run(RadauMesh.uniform(2, 3), failed_solve)
+    history = phs.PHSRefinement(phs.PHSOptions(), dynamics=None).run(
+        RadauMesh.uniform(2, 3), failed_solve
+    )
 
     assert len(history) == 1
     assert np.all(np.isnan(history[0].errors))
     assert history[0].solution.parameters == {"s": 0.5}
 
 
-def test_refine_without_reductions_keeps_the_points_of_the_intervals_within_the_tolerance(monkeypatch):
+def test_refine_without_reductions_keeps_the_points_of_the_intervals_within_the_tolerance(
+    monkeypatch,
+):
     solution = zero_solution(RadauMesh.uniform(4, 6))
 
     errors = np.array([5e-4, 1e-15, 1e-15, 5e-6])
@@ -478,7 +518,9 @@ def test_refine_without_reductions_keeps_the_points_of_the_intervals_within_the_
     assert actions == ["split", "merge", "merge", "raise"]
 
     # Without them the two quiet intervals neither merge nor drop points, while the others refine as before
-    monkeypatch.setattr(phs, "pair_error", Forbidden("no merge is tried without reductions"))
+    monkeypatch.setattr(
+        phs, "pair_error", Forbidden("no merge is tried without reductions")
+    )
 
     result = phs.refine(solution, errors, None, opts, reduce=False)
     kept = result[0]
@@ -497,7 +539,9 @@ class CyclingRefine:
         self.second = second
         self.finer = finer
 
-    def __call__(self, solution, errors, dynamics, options, reduce=True, keep=None, cuts=None):
+    def __call__(
+        self, solution, errors, dynamics, options, reduce=True, keep=None, cuts=None
+    ):
         actions = ["raise"] * solution.mesh.num_intervals
 
         if not reduce:
@@ -549,7 +593,9 @@ def test_run_refines_without_reductions_once_a_mesh_comes_back(monkeypatch):
     monkeypatch.setattr(phs, "simulated_errors", quiet_on_four_intervals)
     monkeypatch.setattr(phs, "refine", CyclingRefine(first, second, finer))
 
-    loop = phs.PHSRefinement(phs.PHSOptions(tolerance=1e-6, max_iterations=10), dynamics=None)
+    loop = phs.PHSRefinement(
+        phs.PHSOptions(tolerance=1e-6, max_iterations=10), dynamics=None
+    )
     history = loop.run(first, solve)
 
     assert solve.calls == [2, 3, 4]
@@ -588,7 +634,9 @@ def quiet_first_phase_or_four_intervals(solution, dynamics, options):
     return np.full(solution.mesh.num_intervals, error)
 
 
-def test_run_on_phases_refines_without_reductions_only_the_phase_whose_mesh_comes_back(monkeypatch):
+def test_run_on_phases_refines_without_reductions_only_the_phase_whose_mesh_comes_back(
+    monkeypatch,
+):
     first = RadauMesh.uniform(2, 3)
     second = RadauMesh.uniform(3, 3)
     finer = RadauMesh.uniform(4, 4)
@@ -599,7 +647,9 @@ def test_run_on_phases_refines_without_reductions_only_the_phase_whose_mesh_come
     monkeypatch.setattr(phs, "simulated_errors", quiet_first_phase_or_four_intervals)
     monkeypatch.setattr(phs, "refine", CyclingRefine(first, second, finer))
 
-    loop = phs.PHSRefinement(phs.PHSOptions(tolerance=1e-6, max_iterations=10), dynamics=None)
+    loop = phs.PHSRefinement(
+        phs.PHSOptions(tolerance=1e-6, max_iterations=10), dynamics=None
+    )
     meshes = [RadauMesh.uniform(5, 3), first]
     loop.run(meshes, solve)
 
@@ -659,7 +709,9 @@ def test_path_violations_find_a_dip_between_the_collocation_points(flipped):
     assert active[0]
 
 
-def test_refine_neither_merges_nor_reduces_an_interval_where_a_constraint_is_active(monkeypatch):
+def test_refine_neither_merges_nor_reduces_an_interval_where_a_constraint_is_active(
+    monkeypatch,
+):
     solution = zero_solution(RadauMesh.uniform(4, 4))
 
     errors = np.full(4, 1e-30)
@@ -667,10 +719,16 @@ def test_refine_neither_merges_nor_reduces_an_interval_where_a_constraint_is_act
 
     monkeypatch.setattr(phs, "pair_error", ConstantPairError(1e-8))
 
-    assert phs.refine(solution, errors, None, opts)[0].points.tolist() == [-1.0, 0.0, 1.0]
+    assert phs.refine(solution, errors, None, opts)[0].points.tolist() == [
+        -1.0,
+        0.0,
+        1.0,
+    ]
 
     # The first interval keeps its four points and its neighbor merges with the next one instead
-    result = phs.refine(solution, errors, None, opts, keep=np.array([True, False, False, False]))
+    result = phs.refine(
+        solution, errors, None, opts, keep=np.array([True, False, False, False])
+    )
     kept = result[0]
     actions = result[1]
 
@@ -711,7 +769,9 @@ class DipSolve:
         else:
             states = np.ones_like(tau)
 
-        return MeshSolution(mesh, states[:, None], np.zeros((mesh.num_collocation, 1)), -1.0, 1.0)
+        return MeshSolution(
+            mesh, states[:, None], np.zeros((mesh.num_collocation, 1)), -1.0, 1.0
+        )
 
 
 def no_flight_errors(solution, dynamics, options):
@@ -724,10 +784,14 @@ def test_run_splits_an_interval_where_its_constraint_slips_most(monkeypatch):
 
     monkeypatch.setattr(phs, "simulated_errors", no_flight_errors)
 
-    loop = phs.PHSRefinement(phs.PHSOptions(tolerance=1e-6), dynamics=None, constraints=AtLeast(0.5))
+    loop = phs.PHSRefinement(
+        phs.PHSOptions(tolerance=1e-6), dynamics=None, constraints=AtLeast(0.5)
+    )
     history = loop.run(RadauMesh([-1.0, 1.0], [2]), solve)
 
-    assert solve.meshes[1].points.tolist() == [-1.0, 0.0, 1.0] and solve.meshes[1].degrees.tolist() == [2, 2]
+    assert solve.meshes[1].points.tolist() == [-1.0, 0.0, 1.0] and solve.meshes[
+        1
+    ].degrees.tolist() == [2, 2]
     assert history[0].errors[0] == pytest.approx(0.5)
     assert history[-1].errors.max() <= 1e-6
 
@@ -756,13 +820,18 @@ def test_touch_points_are_interior_local_maxima_of_a_constraint_at_its_bound(fli
     assert phs.touch_points(solution, AtLeast(0.4), opts) == []
 
     # The lowest state at the start of the phase is no interior touch
-    assert phs.touch_points(bowl_solution([-1.0, 1.0], -1.0, flipped), AtLeast(0.5), opts) == []
+    assert (
+        phs.touch_points(bowl_solution([-1.0, 1.0], -1.0, flipped), AtLeast(0.5), opts)
+        == []
+    )
 
 
 def test_a_touch_on_the_point_two_intervals_share_counts_once():
     solution = bowl_solution([-1.0, 0.3, 1.0], 0.3)
 
-    assert phs.touch_points(solution, AtLeast(0.5), phs.PHSOptions(tolerance=1e-6)) == [(pytest.approx(0.3), 0)]
+    assert phs.touch_points(solution, AtLeast(0.5), phs.PHSOptions(tolerance=1e-6)) == [
+        (pytest.approx(0.3), 0)
+    ]
 
 
 class RecordingRefine:
@@ -771,7 +840,9 @@ class RecordingRefine:
     def __init__(self):
         self.reduces = []
 
-    def __call__(self, solution, errors, dynamics, options, reduce=True, keep=None, cuts=None):
+    def __call__(
+        self, solution, errors, dynamics, options, reduce=True, keep=None, cuts=None
+    ):
         self.reduces.append(reduce)
 
         new_mesh = RadauMesh.uniform(solution.mesh.num_intervals + 1, 3)
@@ -789,7 +860,9 @@ def dipping_solve(mesh, previous):
     else:
         states = np.ones_like(tau)
 
-    return MeshSolution(mesh, states[:, None], np.zeros((mesh.num_collocation, 1)), -1.0, 1.0)
+    return MeshSolution(
+        mesh, states[:, None], np.zeros((mesh.num_collocation, 1)), -1.0, 1.0
+    )
 
 
 def test_run_only_gains_points_once_a_constraint_slips_between_the_points(monkeypatch):
@@ -826,7 +899,9 @@ def flat_then_dipping_solve(meshes, previous):
     return [first, dipping_solve(meshes[1], None)]
 
 
-def test_run_on_phases_only_gains_points_in_the_phase_whose_constraint_slips(monkeypatch):
+def test_run_on_phases_only_gains_points_in_the_phase_whose_constraint_slips(
+    monkeypatch,
+):
     refine = RecordingRefine()
 
     monkeypatch.setattr(phs, "refine", refine)
@@ -836,7 +911,9 @@ def test_run_on_phases_only_gains_points_in_the_phase_whose_constraint_slips(mon
 
     options = phs.PHSOptions(tolerance=1e-6, max_iterations=10)
     loop = phs.PHSRefinement(options, dynamics=None, constraints=AtLeast(0.5))
-    loop.run([RadauMesh.uniform(5, 3), RadauMesh.uniform(1, 3)], flat_then_dipping_solve)
+    loop.run(
+        [RadauMesh.uniform(5, 3), RadauMesh.uniform(1, 3)], flat_then_dipping_solve
+    )
 
     assert refine.reduces == [True, False, False]
 

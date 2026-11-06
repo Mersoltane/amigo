@@ -34,7 +34,15 @@ from amigo.trajectory import (
 
 # The lunar landing example supplies the single phase and the exact solution
 EXAMPLE = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "trajectory", "lunar_landing")
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "examples",
+        "trajectory",
+        "lunar_landing",
+    )
 )
 
 if EXAMPLE not in sys.path:
@@ -344,8 +352,12 @@ class SingleSolver:
             controls = np.full((mesh.num_collocation, 1), ll.C)
             tf = 5.0
         else:
-            states = previous.mesh.interpolate_states(previous.states, mesh.state_points())
-            controls = previous.mesh.interpolate_controls(previous.controls, mesh.collocation_points())
+            states = previous.mesh.interpolate_states(
+                previous.states, mesh.state_points()
+            )
+            controls = previous.mesh.interpolate_controls(
+                previous.controls, mesh.collocation_points()
+            )
             tf = previous.tf
 
         x = model.create_vector()
@@ -353,7 +365,9 @@ class SingleSolver:
         x["ends.tf"] = tf
         x["pts.y"] = states[mesh.collocated_states()]
         x["pts.u"] = np.clip(controls[:, 0], 0.0, ll.U_MAX)
-        x["pts.ydot"] = ll.rates(states[mesh.collocated_states()], np.clip(controls, 0.0, ll.U_MAX), None)
+        x["pts.ydot"] = ll.rates(
+            states[mesh.collocated_states()], np.clip(controls, 0.0, ll.U_MAX), None
+        )
         x["ends.y0"] = states[0]
 
         # Solve and count the iterations
@@ -371,11 +385,17 @@ class SingleSolver:
         controls = np.asarray(x["pts.u"]).reshape(-1, 1)
         tf = float(x["ends.tf"][0])
 
-        solution = MeshSolution(mesh, states, controls, 0.0, tf, converged=bool(result["converged"]))
+        solution = MeshSolution(
+            mesh, states, controls, 0.0, tf, converged=bool(result["converged"])
+        )
 
         # Keep the multipliers of the last converged solve for its costate
         if result["converged"]:
-            self.last = {"mesh": mesh, "point": opt.get_warm_start().point, "tf": solution.tf}
+            self.last = {
+                "mesh": mesh,
+                "point": opt.get_warm_start().point,
+                "tf": solution.tf,
+            }
 
         return solution
 
@@ -401,7 +421,9 @@ class ArcSolve:
             m = record["slots"][p][2]
 
             mu = np.asarray(record["point"][f"{kind}.res"])[a : a + m]
-            rows.append(quadrature_costate(mu, record["meshes"][p], record["durations"][p]))
+            rows.append(
+                quadrature_costate(mu, record["meshes"][p], record["durations"][p])
+            )
 
         return np.vstack(rows)
 
@@ -439,8 +461,12 @@ class ArcSolve:
                 guesses.append(g)
             else:
                 states = g.mesh.interpolate_states(g.states, mesh.state_points())
-                controls = g.mesh.interpolate_controls(g.controls, mesh.collocation_points())
-                guesses.append(MeshSolution(mesh, states, controls, g.t0, g.tf, dict(g.parameters)))
+                controls = g.mesh.interpolate_controls(
+                    g.controls, mesh.collocation_points()
+                )
+                guesses.append(
+                    MeshSolution(mesh, states, controls, g.t0, g.tf, dict(g.parameters))
+                )
 
         # The states and the rates of every arc at its collocation points
         x = model.create_vector()
@@ -457,7 +483,9 @@ class ArcSolve:
             coll = guesses[p].states[1:]
 
             x[f"{kind}.y[{a}:{a + m}, :]"] = coll
-            x[f"{kind}.ydot[{a}:{a + m}, :]"] = np.column_stack([coll[:, 1], np.full(m, thrust - ll.C)])
+            x[f"{kind}.ydot[{a}:{a + m}, :]"] = np.column_stack(
+                [coll[:, 1], np.full(m, thrust - ll.C)]
+            )
 
         # The first state and the start and end of every arc
         guess_starts = []
@@ -610,8 +638,15 @@ class Landing(BangBangProblem):
             mesh = meshes[p]
 
             # The source states at the support points of the arc
-            tau = 2.0 * (mesh_time(mesh.state_points(), a, b) - source.t0) / (source.tf - source.t0) - 1.0
-            states = source.mesh.interpolate_states(source.states, np.clip(tau, -1.0, 1.0))
+            tau = (
+                2.0
+                * (mesh_time(mesh.state_points(), a, b) - source.t0)
+                / (source.tf - source.t0)
+                - 1.0
+            )
+            states = source.mesh.interpolate_states(
+                source.states, np.clip(tau, -1.0, 1.0)
+            )
 
             thrust = 0.0
             if kind == "burn":
@@ -635,7 +670,12 @@ class Landing(BangBangProblem):
         if max_iterations is None:
             options = PHSOptions(tolerance=tolerance, min_points=3, max_points=8)
         else:
-            options = PHSOptions(tolerance=tolerance, min_points=3, max_points=8, max_iterations=max_iterations)
+            options = PHSOptions(
+                tolerance=tolerance,
+                min_points=3,
+                max_points=8,
+                max_iterations=max_iterations,
+            )
 
         return PHSRefinement(options, ll.rates)
 
@@ -660,7 +700,9 @@ def built(tmp_path_factory):
         sys.path.insert(0, str(tmp_path))
 
 
-def test_the_solver_reads_the_coast_and_burn_from_the_single_phase_and_lands_on_the_exact_switch(built):
+def test_the_solver_reads_the_coast_and_burn_from_the_single_phase_and_lands_on_the_exact_switch(
+    built,
+):
     problem = Landing()
     options = BangBangOptions(tolerance=1e-8, homotopy=(), arc_floor=FLOOR)
     solver = BangBangSolver(problem, options)

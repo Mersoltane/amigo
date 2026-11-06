@@ -42,14 +42,22 @@ fig = plt.figure(figsize=(15, 9))
 axes = fig.subplots(3, 3)
 
 # The positions and the angle
-plot_panel(axes[0, 0], t, q[:, 0], "Time (s)", "x (m)", "Horizontal Position", blue_color)
+plot_panel(
+    axes[0, 0], t, q[:, 0], "Time (s)", "x (m)", "Horizontal Position", blue_color
+)
 plot_panel(axes[0, 1], t, q[:, 1], "Time (s)", "y (m)", "Vertical Position", blue_color)
 plot_panel(axes[0, 2], t, q[:, 2], "Time (s)", "θ (rad)", "Orientation", blue_color)
 
 # The velocities
-plot_panel(axes[1, 0], t, q[:, 3], "Time (s)", "vx (m/s)", "Horizontal Velocity", blue_color)
-plot_panel(axes[1, 1], t, q[:, 4], "Time (s)", "vy (m/s)", "Vertical Velocity", blue_color)
-plot_panel(axes[1, 2], t, q[:, 5], "Time (s)", "ω (rad/s)", "Angular Velocity", blue_color)
+plot_panel(
+    axes[1, 0], t, q[:, 3], "Time (s)", "vx (m/s)", "Horizontal Velocity", blue_color
+)
+plot_panel(
+    axes[1, 1], t, q[:, 4], "Time (s)", "vy (m/s)", "Vertical Velocity", blue_color
+)
+plot_panel(
+    axes[1, 2], t, q[:, 5], "Time (s)", "ω (rad/s)", "Angular Velocity", blue_color
+)
 
 # The path and the thrusts
 plot_panel(axes[2, 0], q[:, 0], q[:, 1], "x (m)", "y (m)", "Trajectory", blue_color)
@@ -72,5 +80,7 @@ for ax in axes.flat:
         tick.set_fontname(fontname)
 
 plt.tight_layout()
-plt.savefig("free_flying_robot_solution.png", dpi=300, bbox_inches="tight", facecolor="white")
+plt.savefig(
+    "free_flying_robot_solution.png", dpi=300, bbox_inches="tight", facecolor="white"
+)
 plt.show()

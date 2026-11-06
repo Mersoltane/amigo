@@ -91,7 +91,9 @@ def switch_estimates(mesh, sigma, control, noise=0.0):
     control = np.asarray(control, dtype=float)
 
     if len(sigma) != mesh.num_collocation or len(control) != mesh.num_collocation:
-        raise ValueError("sigma and the control need one value at every collocation point")
+        raise ValueError(
+            "sigma and the control need one value at every collocation point"
+        )
 
     sign = switch_signs(sigma, noise)
 

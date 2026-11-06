@@ -36,7 +36,9 @@ class Within:
         if previous is not None:
             start = previous.value
 
-        converged = max(value / start, start / value) <= self.ratio and value >= self.floor
+        converged = (
+            max(value / start, start / value) <= self.ratio and value >= self.floor
+        )
 
         return Point(value, converged)
 
@@ -57,7 +59,9 @@ def test_a_step_out_of_reach_is_halved_geometrically_until_it_converges():
     history = Homotopy().run([1.0, 0.01], solve)
 
     # The halfway value 0.1 is still out of reach from 1, so 10 ** -0.5 bridges it
-    assert solve.calls == pytest.approx([1.0, 0.01, 0.1, 10**-0.5, 0.1, 0.01, 10**-1.5, 0.01])
+    assert solve.calls == pytest.approx(
+        [1.0, 0.01, 0.1, 10**-0.5, 0.1, 0.01, 10**-1.5, 0.01]
+    )
     assert history.reached(0.01)
 
 
@@ -66,7 +70,9 @@ def test_a_path_stops_when_a_step_still_fails_after_its_halvings():
 
     history = Homotopy(HomotopyOptions(max_bisections=2)).run([1.0, 0.1], solve)
 
-    assert solve.calls == pytest.approx([1.0, 0.1, 10**-0.5, 10**-0.25, 10**-0.5, 10**-0.375, 10**-0.3125])
+    assert solve.calls == pytest.approx(
+        [1.0, 0.1, 10**-0.5, 10**-0.25, 10**-0.5, 10**-0.375, 10**-0.3125]
+    )
     assert history.last.value == pytest.approx(10**-0.25)
     assert not history.reached(0.1)
 

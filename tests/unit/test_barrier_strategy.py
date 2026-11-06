@@ -8,7 +8,9 @@ Quality function globalization
 
 from types import SimpleNamespace
 
-from amigo.algorithm.barrier_strategy.quality_function import QualityFunctionBarrierStrategy
+from amigo.algorithm.barrier_strategy.quality_function import (
+    QualityFunctionBarrierStrategy,
+)
 
 
 class StubEvaluator:

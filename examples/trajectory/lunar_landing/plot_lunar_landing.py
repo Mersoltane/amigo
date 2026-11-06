@@ -32,7 +32,9 @@ def exact_solution(t, ts):
     y1s = 10.0 - 2.0 * ts - 0.5 * C * ts**2
     y2s = -2.0 - C * ts
     d = t - ts
-    y1 = np.where(coast, 10.0 - 2.0 * t - 0.5 * C * t**2, y1s + y2s * d + 0.5 * (U_MAX - C) * d**2)
+    y1 = np.where(
+        coast, 10.0 - 2.0 * t - 0.5 * C * t**2, y1s + y2s * d + 0.5 * (U_MAX - C) * d**2
+    )
     y2 = np.where(coast, -2.0 - C * t, y2s + (U_MAX - C) * d)
     u = np.where(coast, 0.0, U_MAX)
     return y1, y2, u
@@ -54,8 +56,12 @@ def style(ax, title, ylabel):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("results", nargs="?", default=os.path.join("results", "lunar_landing.json"))
-    parser.add_argument("--out", default=None, help="Image path, next to the results by default")
+    parser.add_argument(
+        "results", nargs="?", default=os.path.join("results", "lunar_landing.json")
+    )
+    parser.add_argument(
+        "--out", default=None, help="Image path, next to the results by default"
+    )
     args = parser.parse_args()
 
     with open(args.results) as fp:
@@ -73,8 +79,15 @@ def main():
     controls = np.array(final["controls"])[:, 0]
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 7), facecolor=SURFACE)
-    marker = dict(marker="o", markersize=4, linestyle="none", color=COMPUTED, markeredgewidth=0.0,
-                  label="hp solution", zorder=3)
+    marker = dict(
+        marker="o",
+        markersize=4,
+        linestyle="none",
+        color=COMPUTED,
+        markeredgewidth=0.0,
+        label="hp solution",
+        zorder=3,
+    )
     line = dict(color=EXACT, linewidth=1.5, label="exact", zorder=2)
 
     panels = [
@@ -92,17 +105,28 @@ def main():
     ax = axes[1, 1]
     for i, mesh in enumerate(meshes):
         t = np.array(mesh["t_collocation"])
-        ax.plot(t, np.full(len(t), i), marker="o", markersize=3, linestyle="none", color=COMPUTED,
-                markeredgewidth=0.0, zorder=3)
+        ax.plot(
+            t,
+            np.full(len(t), i),
+            marker="o",
+            markersize=3,
+            linestyle="none",
+            color=COMPUTED,
+            markeredgewidth=0.0,
+            zorder=3,
+        )
     ax.axvline(ts, color=EXACT, linewidth=1.0, linestyle="--", zorder=1)
     ax.set_ylim(-0.5, len(meshes) - 0.2)
-    ax.text(ts, len(meshes) - 0.35, " exact switch time", color=INK, fontsize=8, va="center")
+    ax.text(
+        ts, len(meshes) - 0.35, " exact switch time", color=INK, fontsize=8, va="center"
+    )
     ax.set_yticks(range(len(meshes)))
     style(ax, "(d) collocation point history", "mesh refinement iteration")
 
     fig.suptitle(
         f"Soft lunar landing with hp mesh refinement, tolerance 1e-6, {len(meshes)} meshes",
-        color=INK, fontsize=11,
+        color=INK,
+        fontsize=11,
     )
     fig.tight_layout()
     out = args.out or os.path.splitext(args.results)[0] + ".png"

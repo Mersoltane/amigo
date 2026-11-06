@@ -176,7 +176,9 @@ class OrbitDynamics(am.Component):
         # Rates of the elements and the weight
         pdot = (2.0 * p / q) * sqrt_pm * dt
         fdot = sqrt_pm * (dr * sinL + ((q + 1.0) * cosL + f) * dt / q - hk * g * dn / q)
-        gdot = sqrt_pm * (-dr * cosL + ((q + 1.0) * sinL + g) * dt / q + hk * f * dn / q)
+        gdot = sqrt_pm * (
+            -dr * cosL + ((q + 1.0) * sinL + g) * dt / q + hk * f * dn / q
+        )
         hdot = sqrt_pm * (s2 * cosL / (2.0 * q)) * dn
         kdot = sqrt_pm * (s2 * sinL / (2.0 * q)) * dn
         Ldot = am.sqrt(mu * p) * (q / p) ** 2 + sqrt_pm * (hk / q) * dn

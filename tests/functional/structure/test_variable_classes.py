@@ -106,7 +106,9 @@ def test_the_free_shift_solves_the_chain(model, rows):
     if rows == "named":
         named = hessian_perturbation_rows(model).tolist()
 
-    data = am.Optimizer(model).optimize({"hessian_perturbation_indices": named, "max_iterations": 100})
+    data = am.Optimizer(model).optimize(
+        {"hessian_perturbation_indices": named, "max_iterations": 100}
+    )
 
     assert data["converged"], data["status_message"]
 

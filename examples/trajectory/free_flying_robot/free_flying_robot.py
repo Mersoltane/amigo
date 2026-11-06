@@ -261,7 +261,9 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-model = create_free_flying_robot_model(final_time=final_time, num_time_steps=num_time_steps)
+model = create_free_flying_robot_model(
+    final_time=final_time, num_time_steps=num_time_steps
+)
 set_initial_guess(model, final_time=final_time, num_time_steps=num_time_steps)
 
 if args.build:

@@ -12,7 +12,6 @@ from amigo.modeling.component import ConstantSet, DataSet, InputSet, Meta
 from amigo.modeling.meta import VarType
 from amigo.modeling.expressions import ConstNode, Expr, VarNode
 
-
 # Meta validates its fields at construction
 
 

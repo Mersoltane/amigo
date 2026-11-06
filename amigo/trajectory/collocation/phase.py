@@ -90,7 +90,9 @@ class Phase:
             raise ValueError(f"{name} is already used")
 
         if record.lower > record.upper:
-            raise ValueError(f"{name}: lower bound {record.lower} is above upper bound {record.upper}")
+            raise ValueError(
+                f"{name}: lower bound {record.lower} is above upper bound {record.upper}"
+            )
 
         self.names.add(name)
         group[name] = record

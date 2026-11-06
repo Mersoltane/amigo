@@ -124,7 +124,11 @@ def test_stretching_scales_every_time_about_the_first_start():
         s = stretched[p]
         piece = pieces[p]
 
-        assert s.states is piece.states and s.controls is piece.controls and s.mesh is piece.mesh
+        assert (
+            s.states is piece.states
+            and s.controls is piece.controls
+            and s.mesh is piece.mesh
+        )
 
 
 @pytest.mark.parametrize("flipped", [False, True])
@@ -146,7 +150,9 @@ def test_the_arcs_of_a_switching_function_are_its_switches_in_time(flipped):
     switches = estimates[0]
     expected = estimates[1]
 
-    assert edges == pytest.approx(mesh_time(np.concatenate([[-1.0], switches, [1.0]]), 2.0, 6.0))
+    assert edges == pytest.approx(
+        mesh_time(np.concatenate([[-1.0], switches, [1.0]]), 2.0, 6.0)
+    )
     assert list(signs) == list(expected) == [1.0, -1.0, 1.0]
 
 
@@ -154,11 +160,17 @@ def test_switch_brackets_reach_halfway_to_the_next_switches_and_open_at_the_ends
     assert switch_brackets([0.0, 4.0]) == []
     assert switch_brackets([0.0, 1.0, 4.0]) == [(-np.inf, np.inf)]
     assert switch_brackets([0.0, 1.0, 3.0, 4.0]) == [(-np.inf, 2.0), (2.0, np.inf)]
-    assert switch_brackets([0.0, 1.0, 3.0, 4.0, 8.0]) == [(-np.inf, 2.0), (2.0, 3.5), (3.5, np.inf)]
+    assert switch_brackets([0.0, 1.0, 3.0, 4.0, 8.0]) == [
+        (-np.inf, 2.0),
+        (2.0, 3.5),
+        (3.5, np.inf),
+    ]
 
 
 def test_uniform_arc_meshes_share_the_intervals_by_duration_with_a_floor():
-    meshes = uniform_arc_meshes([0.0, 5.0, 5.1, 10.0], intervals=20, degree=4, min_intervals=2)
+    meshes = uniform_arc_meshes(
+        [0.0, 5.0, 5.1, 10.0], intervals=20, degree=4, min_intervals=2
+    )
 
     counts = []
 
@@ -213,17 +225,29 @@ def test_a_short_arc_joins_its_neighbors_of_the_other_kind_or_goes_to_one_of_its
     kinds = ["burn", "coast", "burn", "coast", "coast", "burn"]
     edges = [0.0, 1.0, 1.001, 2.0, 3.0, 4.0, 5.0]
 
-    assert merge_short_arcs(kinds, edges, 1e-3) == (["burn", "coast", "coast", "burn"], [0.0, 2.0, 3.0, 4.0, 5.0])
+    assert merge_short_arcs(kinds, edges, 1e-3) == (
+        ["burn", "coast", "coast", "burn"],
+        [0.0, 2.0, 3.0, 4.0, 5.0],
+    )
 
     # A short arc of a contact event goes to the arc of its kind
     kinds = ["burn", "coast", "coast", "burn"]
     edges = [0.0, 1.0, 2.0, 2.001, 3.0]
 
-    assert merge_short_arcs(kinds, edges, 1e-3) == (["burn", "coast", "burn"], [0.0, 1.0, 2.001, 3.0])
+    assert merge_short_arcs(kinds, edges, 1e-3) == (
+        ["burn", "coast", "burn"],
+        [0.0, 1.0, 2.001, 3.0],
+    )
 
     # Short arcs at the ends go inward
-    assert merge_short_arcs(["coast", "burn"], [0.0, 0.001, 1.0], 1e-3) == (["burn"], [0.0, 1.0])
-    assert merge_short_arcs(["burn", "coast"], [0.0, 1.0, 1.001], 1e-3) == (["burn"], [0.0, 1.001])
+    assert merge_short_arcs(["coast", "burn"], [0.0, 0.001, 1.0], 1e-3) == (
+        ["burn"],
+        [0.0, 1.0],
+    )
+    assert merge_short_arcs(["burn", "coast"], [0.0, 1.0, 1.001], 1e-3) == (
+        ["burn"],
+        [0.0, 1.001],
+    )
 
 
 def solved_arcs(kinds, edges, intervals=8):
@@ -258,14 +282,21 @@ def other(kind):
 
 def hump_and_dip(t):
     """A hump above zero inside the burn and a dip below zero at the start of the coast"""
-    return np.where(t <= 2.0, np.exp(-((t - 1.0) / 0.3) ** 2) - 0.5, t - 2.5)
+    return np.where(t <= 2.0, np.exp(-(((t - 1.0) / 0.3) ** 2)) - 0.5, t - 2.5)
 
 
 def test_arcs_of_the_other_kind_go_where_the_switching_function_has_the_wrong_sign():
     arcs = solved_arcs(["burn", "coast"], [0.0, 2.0, 4.0])
 
     # The hump asks for a coast inside the burn and the dip moves the switch to the coast
-    result = insert_arcs(["burn", "coast"], arcs, switching(arcs, hump_and_dip), [-1.0, 1.0], other, floor=1e-3)
+    result = insert_arcs(
+        ["burn", "coast"],
+        arcs,
+        switching(arcs, hump_and_dip),
+        [-1.0, 1.0],
+        other,
+        floor=1e-3,
+    )
     kinds = result[0]
     edges = result[1]
 
@@ -298,11 +329,18 @@ def test_arcs_the_switching_function_agrees_with_come_back_as_they_are_and_conta
 
     arcs = solved_arcs(kinds, edges)
 
-    assert insert_arcs(kinds, arcs, switching(arcs, burn_then_coast), signs, other) == (["burn", "coast", "coast"], edges)
+    assert insert_arcs(kinds, arcs, switching(arcs, burn_then_coast), signs, other) == (
+        ["burn", "coast", "coast"],
+        edges,
+    )
 
     # A region within the noise or shorter than twice the floor asks for nothing
-    assert insert_arcs(kinds, arcs, switching(arcs, noisy), signs, other, noise=1e-4)[0] == ["burn", "coast", "coast"]
-    assert insert_arcs(kinds, arcs, switching(arcs, bumpy), signs, other, floor=0.5)[0] == ["burn", "coast", "coast"]
+    assert insert_arcs(kinds, arcs, switching(arcs, noisy), signs, other, noise=1e-4)[
+        0
+    ] == ["burn", "coast", "coast"]
+    assert insert_arcs(kinds, arcs, switching(arcs, bumpy), signs, other, floor=0.5)[
+        0
+    ] == ["burn", "coast", "coast"]
 
     # A coast region inside the burn leaves the contact event between the two coasts in place
     result = insert_arcs(kinds, arcs, switching(arcs, bumpy), signs, other)
@@ -316,15 +354,21 @@ def test_arcs_the_switching_function_agrees_with_come_back_as_they_are_and_conta
 def iteration(error, converged=True):
     """One solved mesh of one interval with an error"""
     mesh = RadauMesh([-1.0, 1.0], [2], True)
-    solution = MeshSolution(mesh, np.zeros((3, 1)), np.zeros((2, 1)), 0.0, 1.0, converged=converged)
+    solution = MeshSolution(
+        mesh, np.zeros((3, 1)), np.zeros((2, 1)), 0.0, 1.0, converged=converged
+    )
 
     return MeshIteration(solution, np.array([error]))
 
 
 def test_the_last_entry_stands_when_it_meets_the_tolerance_or_else_the_least_error():
     assert best_iteration([iteration(1e-3), iteration(1e-9)], 1e-8) == 1
-    assert best_iteration([iteration(1e-3), iteration(2e-8), iteration(5e-8)], 1e-8) == 1
-    assert best_iteration([iteration(1e-3), iteration(np.nan, converged=False)], 1e-8) == 0
+    assert (
+        best_iteration([iteration(1e-3), iteration(2e-8), iteration(5e-8)], 1e-8) == 1
+    )
+    assert (
+        best_iteration([iteration(1e-3), iteration(np.nan, converged=False)], 1e-8) == 0
+    )
     assert best_iteration([iteration(np.nan, converged=False)], 1e-8) == 0
 
 

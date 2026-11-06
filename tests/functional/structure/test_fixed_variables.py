@@ -98,7 +98,9 @@ def test_the_variable_is_free_again_once_its_bounds_part(model):
     # Solve once with x fixed
     limits = bounds(model, 0.3, 0.3)
 
-    am.Optimizer(model, lower=limits[0], upper=limits[1]).optimize({"max_iterations": 100})
+    am.Optimizer(model, lower=limits[0], upper=limits[1]).optimize(
+        {"max_iterations": 100}
+    )
 
     # Then solve with x free
     limits = bounds(model, -am.inf, am.inf)

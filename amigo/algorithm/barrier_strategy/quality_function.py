@@ -111,7 +111,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
 
         # One progress test per iteration decides the mode, as in Nocedal, Waechter, and Waltz
         glob = self.options["adaptive_mu_globalization"]
-        progress = glob == "never-monotone" or self._sufficient_progress(evaluator, state)
+        progress = glob == "never-monotone" or self._sufficient_progress(
+            evaluator, state
+        )
         if self.free_mode and progress:
             self._remember_point(evaluator, state)
         elif self.free_mode:
@@ -165,7 +167,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             self.free_mode = False
 
             if state.comm_rank == 0:
-                print(f"  QF -> monotone (line search failed): mu_bar={mu_candidate:.3e}")
+                print(
+                    f"  QF -> monotone (line search failed): mu_bar={mu_candidate:.3e}"
+                )
 
             state.invalidate(grad=False, hess=False)
 
@@ -292,9 +296,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         dual_sq, primal_sq = self.optimizer.compute_kkt_error_squares(
             state.current, state.gradient
         )
-        comp_sq = self.optimizer.compute_sum_squared_complementarity(
-            0.0, state.current
-        )
+        comp_sq = self.optimizer.compute_sum_squared_complementarity(0.0, state.current)
         qf = dual_sq * self.sd + primal_sq * self.sp + comp_sq * self.sc
 
         centrality = self.options["quality_function_centrality"]
@@ -366,7 +368,15 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             return self._mehrotra(state, self.px, self.dpx, mu_nat, avg_comp, mu_lo)
 
         return self._golden_search(
-            evaluator, state, self.px, self.dpx, mu_nat, dual_inf, primal_inf, avg_comp, mu_lo
+            evaluator,
+            state,
+            self.px,
+            self.dpx,
+            mu_nat,
+            dual_inf,
+            primal_inf,
+            avg_comp,
+            mu_lo,
         )
 
     def _mehrotra(self, state, px0, dpx, mu_nat, avg_comp, mu_lo):

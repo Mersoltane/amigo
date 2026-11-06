@@ -140,7 +140,9 @@ class Lookup(am.Component):
         b = self.inputs["b"]
         c = self.inputs["c"]
 
-        self.objective["obj"] = am.interp1d(a, table) * b + am.interp1d(b * c, table, dx=0.5)
+        self.objective["obj"] = am.interp1d(a, table) * b + am.interp1d(
+            b * c, table, dx=0.5
+        )
 
         return
 
@@ -168,7 +170,9 @@ class Series(am.Component):
         b = self.inputs["b"]
         c = self.inputs["c"]
 
-        self.objective["obj"] = am.fourier(a, coef) * b + am.fourier(b * c, coef, period=0.5)
+        self.objective["obj"] = am.fourier(a, coef) * b + am.fourier(
+            b * c, coef, period=0.5
+        )
 
         return
 

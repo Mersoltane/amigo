@@ -303,7 +303,9 @@ class RadauMesh:
             nodes = radau_points(self.degrees[k], self.flipped)
             basis = lagrange_matrix(nodes, s)
 
-            out[rows] = np.tensordot(basis, controls[self.collocation_indices(k)], axes=1)
+            out[rows] = np.tensordot(
+                basis, controls[self.collocation_indices(k)], axes=1
+            )
 
         return out
 

@@ -30,7 +30,6 @@ from amigo.modeling.expressions import (
     _sum_terms,
 )
 
-
 # is_zero on each node type
 
 
@@ -652,7 +651,10 @@ class TestNorm:
     def test_norm_sqrt_costs_like_sqrt(self):
         a = Expr(VarNode("a"))
 
-        assert UnaryNode("norm_sqrt", a).compute_cost() == UnaryNode("sqrt", a).compute_cost()
+        assert (
+            UnaryNode("norm_sqrt", a).compute_cost()
+            == UnaryNode("sqrt", a).compute_cost()
+        )
 
 
 def make_table(shape=5):
@@ -698,7 +700,9 @@ class TestInterp:
         assert not am.interp1d(Expr(ConstNode(value=0.3)), make_table()).is_active()
 
     def test_round_trip(self):
-        e = am.interp1d(Expr(VarNode("s")), make_table((5, 2)), column=1, x0=0.5, dx=0.1)
+        e = am.interp1d(
+            Expr(VarNode("s")), make_table((5, 2)), column=1, x0=0.5, dx=0.1
+        )
 
         assert Expr.deserialize(e.serialize()).to_cpp() == e.to_cpp()
 

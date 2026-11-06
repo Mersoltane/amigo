@@ -64,7 +64,9 @@ class Solution:
 
 def make_state(x, dx, constr_viol=0.0):
     """The iterate, the step, and the violation that the tiny step test reads"""
-    return SimpleNamespace(current=Solution(x), step=Solution(dx), constr_viol=constr_viol)
+    return SimpleNamespace(
+        current=Solution(x), step=Solution(dx), constr_viol=constr_viol
+    )
 
 
 @pytest.mark.parametrize(
@@ -76,7 +78,9 @@ def make_state(x, dx, constr_viol=0.0):
         ([1e-16, 0.0, 0.0], 1.0, False),
     ],
 )
-def test_tiny_step_needs_small_relative_steps_at_a_feasible_point(dx, constr_viol, tiny):
+def test_tiny_step_needs_small_relative_steps_at_a_feasible_point(
+    dx, constr_viol, tiny
+):
     state = make_state([10.0, -3.0, 5.0], dx, constr_viol)
 
     assert make_line_search()._tiny_step(state) == tiny

@@ -9,14 +9,22 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from amigo.trajectory import Assessment, MeshRefinement, MeshSolution, RadauMesh, RefinementHistory
+from amigo.trajectory import (
+    Assessment,
+    MeshRefinement,
+    MeshSolution,
+    RadauMesh,
+    RefinementHistory,
+)
 
 
 class Halving(MeshRefinement):
     """A toy method whose error halves with every interval it adds, and that counts the meshes it keeps"""
 
     def __init__(self, tolerance, max_iterations):
-        super().__init__(SimpleNamespace(tolerance=tolerance, max_iterations=max_iterations))
+        super().__init__(
+            SimpleNamespace(tolerance=tolerance, max_iterations=max_iterations)
+        )
 
         self.stays = 0
 
@@ -138,7 +146,9 @@ def test_phases_give_a_list_per_mesh_and_a_phase_within_the_tolerance_keeps_its_
 
 
 def test_a_failed_solve_ends_the_run_unassessed_and_the_best_converged_mesh_stands():
-    history = Halving(1e-12, 10).run(RadauMesh.uniform(1, 3), solve_until_three_intervals)
+    history = Halving(1e-12, 10).run(
+        RadauMesh.uniform(1, 3), solve_until_three_intervals
+    )
 
     assert interval_counts(history) == [1, 2, 3]
     assert np.isnan(history[-1].errors).all()
@@ -166,7 +176,9 @@ def test_a_solution_given_for_the_first_mesh_is_assessed_without_solving_it_agai
 
 
 def test_a_stop_ends_the_run_after_the_mesh_it_names_and_that_mesh_stands_by_its_error():
-    history = Halving(1e-12, 10).run(RadauMesh.uniform(1, 3), solve_one_phase, stop=stop_at_two_intervals)
+    history = Halving(1e-12, 10).run(
+        RadauMesh.uniform(1, 3), solve_one_phase, stop=stop_at_two_intervals
+    )
 
     assert interval_counts(history) == [1, 2]
     assert history.best_index == 1

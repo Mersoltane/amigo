@@ -32,7 +32,9 @@ TABLE = np.array(
 
 CX = np.array([0.0, 0.2, 0.5, 0.9, 1.4, 2.0, 2.4, 2.9, 3.3, 3.6])
 
-CX2 = np.array([[-1.0, 0.1], [-0.4, 0.2], [0.3, 0.35], [0.9, 0.5], [1.2, 0.8], [2.0, 0.9]])
+CX2 = np.array(
+    [[-1.0, 0.1], [-0.4, 0.2], [0.3, 0.35], [0.9, 0.5], [1.2, 0.8], [2.0, 0.9]]
+)
 
 TENSOR = np.array(
     [
@@ -44,7 +46,15 @@ TENSOR = np.array(
     ]
 )
 
-PIECES = ["spline", "spline_column", "basis", "inverse", "inverse_column", "clamped", "tensor"]
+PIECES = [
+    "spline",
+    "spline_column",
+    "basis",
+    "inverse",
+    "inverse_column",
+    "clamped",
+    "tensor",
+]
 
 
 class Splines(am.Component):

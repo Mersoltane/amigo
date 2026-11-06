@@ -216,10 +216,18 @@ def build_model(data: ParallelSellarData):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--build", dest="build", action="store_true", default=False, help="Enable building"
+        "--build",
+        dest="build",
+        action="store_true",
+        default=False,
+        help="Enable building",
     )
-    parser.add_argument("--N", type=int, default=5, help="Disciplines in the first group")
-    parser.add_argument("--M", type=int, default=4, help="Disciplines in the second group")
+    parser.add_argument(
+        "--N", type=int, default=5, help="Disciplines in the first group"
+    )
+    parser.add_argument(
+        "--M", type=int, default=4, help="Disciplines in the second group"
+    )
     args = parser.parse_args()
 
     model = build_model(generate_data(args.N, args.M))
