@@ -3,6 +3,7 @@ Operations
 ----------
 
 - Compiled checks of the norm, the inverse tangents, and binary functions with a number
+- The tangent, the hyperbolic functions, and their inverses to second order
 - A long chain that the code generator cuts into temporaries
 - The gradient, the Hessian, and the output Jacobian against finite differences
 """
@@ -25,6 +26,12 @@ PIECES = [
     "atan",
     "atan2",
     "atan2_vars",
+    "tan",
+    "tanh",
+    "sinh_cosh",
+    "asinh",
+    "acosh",
+    "atanh",
     "chain",
 ]
 
@@ -65,6 +72,12 @@ class Operations(am.Component):
             "atan": am.atan(s * y),
             "atan2": am.atan2(0.3, s) + am.atan2(y, 2.0),
             "atan2_vars": am.atan2(y, s) * s,
+            "tan": am.tan(0.5 * y) * s,
+            "tanh": am.tanh(s * y),
+            "sinh_cosh": am.sinh(s) * am.cosh(y),
+            "asinh": am.asinh(s - y),
+            "acosh": am.acosh(2.0 + s * s),
+            "atanh": am.atanh(0.5 * y) * s,
             "chain": y * chain,
         }
 
@@ -106,6 +119,12 @@ def reference(x, s, y):
         "atan": np.arctan(s * y),
         "atan2": np.arctan2(0.3, s) + np.arctan2(y, 2.0),
         "atan2_vars": np.arctan2(y, s) * s,
+        "tan": np.tan(0.5 * y) * s,
+        "tanh": np.tanh(s * y),
+        "sinh_cosh": np.sinh(s) * np.cosh(y),
+        "asinh": np.arcsinh(s - y),
+        "acosh": np.arccosh(2.0 + s * s),
+        "atanh": np.arctanh(0.5 * y) * s,
         "chain": y * chain,
     }
 

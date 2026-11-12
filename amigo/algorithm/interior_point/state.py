@@ -17,6 +17,9 @@ class InteriorPointState:
     # Iteration counter
     iter: int
 
+    # Wall clock time past which the solve and its restoration stop
+    deadline: float
+
     # Barrier parameter
     mu: float
 
@@ -67,6 +70,7 @@ class InteriorPointState:
     def __init__(self, x, options, problem, optimizer, warm_mu=None):
         self.comm_rank = 0
         self.iter = 0
+        self.deadline = float("inf")
         # A warm start begins at the barrier the driver resolved for its near-optimal point
         if options["warm_start"]:
             self.mu = warm_mu
@@ -106,6 +110,9 @@ class InteriorPointState:
 
         # Change of the unscaled objective that the full Newton step predicts
         self.pred_obj = 0.0
+
+        # Whether the step of the iteration is the normal step of the finishing phase
+        self.normal_step = False
 
     @property
     def barrier_objective(self):

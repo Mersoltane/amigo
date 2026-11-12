@@ -19,10 +19,28 @@ unary_expressions = [
     "log",
     "sin",
     "cos",
+    "tan",
     "asin",
     "acos",
     "atan",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
 ]
+
+
+def numpy_acosh(x):
+    """Inverse hyperbolic cosine of 1 + x, which keeps it inside its domain"""
+    return np.acosh(1.0 + x)
+
+
+def amigo_acosh(x):
+    """Inverse hyperbolic cosine of 1 + x, which keeps it inside its domain"""
+    return am.acosh(1.0 + x)
+
 
 # The numpy and the amigo function of every name
 NUMPY = {
@@ -31,9 +49,16 @@ NUMPY = {
     "log": np.log,
     "sin": np.sin,
     "cos": np.cos,
+    "tan": np.tan,
     "asin": np.asin,
     "acos": np.acos,
     "atan": np.atan,
+    "sinh": np.sinh,
+    "cosh": np.cosh,
+    "tanh": np.tanh,
+    "asinh": np.asinh,
+    "acosh": numpy_acosh,
+    "atanh": np.atanh,
 }
 
 AMIGO = {
@@ -42,9 +67,16 @@ AMIGO = {
     "log": am.log,
     "sin": am.sin,
     "cos": am.cos,
+    "tan": am.tan,
     "asin": am.asin,
     "acos": am.acos,
     "atan": am.atan,
+    "sinh": am.sinh,
+    "cosh": am.cosh,
+    "tanh": am.tanh,
+    "asinh": am.asinh,
+    "acosh": amigo_acosh,
+    "atanh": am.atanh,
 }
 
 

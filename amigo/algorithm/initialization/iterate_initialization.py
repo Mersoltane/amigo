@@ -5,8 +5,13 @@ Warm starts keep the supplied point where the barrier admits it, every gap is he
 least mu over the dual cap times the scale of its bound, so the point moves only where
 its centered dual would pass the cap in the variable's own units. Warm starts also keep
 the bound duals of the previous solve when they are available, clipped into the sigma
-band around mu over the gap that every iterate obeys.
+band around mu over the gap that every iterate obeys. A cold start also gives the elastic
+parts of the relaxed rows the violation their slacks could not take.
 """
+
+import numpy as np
+
+from .elastic_parts import elastic_split
 
 
 class IterateCenterer:
@@ -43,12 +48,24 @@ class IterateCenterer:
             x_array = x.get_array()
             grad_array = state.gradient.get_array()
 
+            # The gradient holds the rows in the scale of the solve and the slacks live in the units of the rows
+            residual = grad_array[ineq_indices]
+            scale = self.problem.get_var_scale()
+            if scale is not None:
+                scale.copy_device_to_host()
+                residual = residual / np.asarray(scale.get_array())[ineq_indices]
+
             # Absorb each inequality residual into its slack for feasibility
-            x_array[slack_indices] += grad_array[ineq_indices]
+            x_array[slack_indices] += residual
             x.copy_host_to_device()
 
             # Project the moved slacks back interior with the same rule
             self._project(state, warm, keep_bound_duals)
+
+            # A cold start gives the elastic parts the violation the slacks could not take
+            if not warm and len(self.model.elastic_row_indices) > 0:
+                self._start_elastic_parts(evaluator, state)
+                self._project(state, warm, keep_bound_duals)
 
         # Restore the saved multipliers
         if warm:
@@ -56,6 +73,37 @@ class IterateCenterer:
             state.invalidate()
 
         return
+
+    def _start_elastic_parts(self, evaluator, state):
+        """Split the residual left on every elastic row into its pair as the restoration splits its own."""
+        model = self.model
+        x = state.get_current_point()
+        state.invalidate()
+        evaluator.evaluate_gradient(state)
+        x.copy_device_to_host()
+        state.gradient.copy_device_to_host()
+        x_array = x.get_array()
+        grad_array = state.gradient.get_array()
+
+        data = self.problem.get_data_vector()
+        data.copy_device_to_host()
+        rho = np.asarray(data.get_array())[model.elastic_weight_indices]
+
+        # The gradient holds the rows in the scale of the solve and the parts live in the units of the rows
+        residual = grad_array[model.elastic_row_indices]
+        scale = self.problem.get_var_scale()
+        if scale is not None:
+            scale.copy_device_to_host()
+            residual = (
+                residual / np.asarray(scale.get_array())[model.elastic_row_indices]
+            )
+
+        # The row reads c - p + n, so the pair that zeroes it carries the residual plus the current pair
+        p, n = model.elastic_p_indices, model.elastic_n_indices
+        violation = residual + x_array[p] - x_array[n]
+        x_array[p], x_array[n] = elastic_split(violation, state.mu, rho)
+        x.copy_host_to_device()
+        state.invalidate()
 
     def _project(self, state, warm, keep_bound_duals):
         """Push the primals interior and set the bound duals for a cold or a warm start."""

@@ -2,12 +2,17 @@
 
 A primal-dual barrier method solves the IPOPT restoration problem
     min rho sum(p + n) + (eta / 2) ||D_R (x - x_R)||^2  s.t.  c(x) - b - p + n = 0
-The phase succeeds once the violation meets its target at a point the main filter accepts.
+The phase returns once the main filter accepts a point whose largest violation is the
+required fraction of its value at entry, and it draws its iterations and its wall time
+from the budget of the solve.
 """
+
+import time
 
 import numpy as np
 
 from ..barrier_strategy import fraction_to_boundary
+from ..initialization.elastic_parts import elastic_split
 from ..solvers import InertiaCorrector
 from .filter_acceptance import FilterAcceptance, FilterBasePoint
 
@@ -18,28 +23,14 @@ SCALE_MAX = 100.0
 INFEASIBLE_FACTOR = 100.0
 
 
-def elastic_split(r, mu, rho):
-    """Elastic pair p - n = r that minimizes rho (p + n) - mu log p - mu log n.
-
-    With a = mu / rho and s = sqrt(r^2 + a^2) the pair has the product
-    p n = mu (a + s) / (2 rho), which gives each root without cancellation.
-    """
-    a = mu / rho
-    s = np.sqrt(r * r + a * a)
-    pn = mu * (a + s) / (2.0 * rho)
-    p_pos = 0.5 * (a + r + s)
-    n_neg = 0.5 * (a - r + s)
-    p = np.where(r >= 0.0, p_pos, pn / n_neg)
-    n = np.where(r >= 0.0, pn / p_pos, n_neg)
-    return p, n
-
-
 class RestorationInfo:
     success: bool = False
     infeasible: bool = False
+    out_of_iterations: bool = False
+    out_of_time: bool = False
     iterations: int = 0
-    theta_enter: float = 0.0
-    theta_final: float = 0.0
+    violation_enter: float = 0.0
+    violation_final: float = 0.0
 
 
 class FeasibilityRestoration:
@@ -80,9 +71,25 @@ class FeasibilityRestoration:
         self.num_calls = 0
         self.num_iterations = 0
 
+        # Largest violation a call must reach and the iterations it may take
+        self.target = 0.0
+        self.budget = 0
+
     def add_log_info(self, info):
         info["resto_calls"] = self.num_calls
         info["resto_iterations"] = self.num_iterations
+
+    def _tag(self, info):
+        """Name of the ending of a call for the log."""
+        if info.success:
+            return "ok"
+        if info.infeasible:
+            return "infeasible"
+        if info.out_of_time:
+            return "time limit"
+        if info.out_of_iterations:
+            return "iteration limit"
+        return "failed"
 
     def restore(self, solver, evaluator, state, line_search):
         """Reduce the constraint violation from the current point, updating it in place."""
@@ -90,26 +97,26 @@ class FeasibilityRestoration:
         obj_scale_store = state.obj_scale
         mu_store = state.mu
 
-        # The failure point sets the target and returns when the phase fails
-        evaluator.evaluate_objective_and_infeasibility(state)
-        info.theta_enter = state.con_infeasibility
-        target = max(
-            self.options["resto_required_reduction"] * info.theta_enter,
-            self.options["convergence_tolerance"],
-        )
+        # The failure point, which the phase returns to when it fails
+        evaluator.evaluate_gradient(state)
+        residual = self._residual(state.current, state.gradient)
+        info.violation_enter = self._con_max(residual)
         self.entry.copy(state.current)
 
+        # The violation the phase must reach, floored at the tolerance of the solve
+        floor = min(
+            self.options["convergence_tolerance"], self.options["constr_viol_tol"]
+        )
+        required = self.options["resto_required_reduction"]
+        self.target = max(required * info.violation_enter, floor)
+
+        # A call draws on the iterations the solve has left
+        used = state.iter + self.num_iterations
+        self.budget = int(self.options["max_iterations"]) - used
+
         try:
-            info.success, info.infeasible, info.theta_final, info.iterations = (
-                self._minimize(
-                    solver,
-                    evaluator,
-                    state,
-                    line_search,
-                    target,
-                    obj_scale_store,
-                    mu_store,
-                )
+            self._minimize(
+                solver, evaluator, state, line_search, obj_scale_store, mu_store, info
             )
         finally:
             state.obj_scale = obj_scale_store
@@ -129,35 +136,31 @@ class FeasibilityRestoration:
         self.num_calls += 1
         self.num_iterations += info.iterations
         if state.comm_rank == 0:
-            tag = (
-                "ok" if info.success else "infeasible" if info.infeasible else "failed"
-            )
             print(
-                f"  Restoration: theta {info.theta_enter:.3e} -> "
-                f"{info.theta_final:.3e} in {info.iterations} iters ({tag})"
+                f"  Restoration: largest violation {info.violation_enter:.3e} -> "
+                f"{info.violation_final:.3e} in {info.iterations} iters ({self._tag(info)})"
             )
         return info
 
     def _exit_acceptable(
-        self, evaluator, state, line_search, target, obj_scale_store, mu_store
+        self, evaluator, state, line_search, obj_scale_store, mu_store
     ):
-        """True when the violation meets the target and the main filter accepts the point."""
+        """True when the main filter accepts the point."""
         resto_scale, resto_mu = state.obj_scale, state.mu
         state.obj_scale, state.mu = obj_scale_store, mu_store
         state.invalidate()
         evaluator.evaluate_objective_and_infeasibility(state)
-        theta = state.con_infeasibility
-        ok = theta <= target and line_search.restoration_acceptable(
-            state.barrier_objective, theta
+        ok = line_search.restoration_acceptable(
+            state.barrier_objective, state.con_infeasibility
         )
         state.obj_scale, state.mu = resto_scale, resto_mu
         state.invalidate()
         return ok
 
     def _minimize(
-        self, solver, evaluator, state, line_search, target, obj_scale_store, mu_store
+        self, solver, evaluator, state, line_search, obj_scale_store, mu_store, info
     ):
-        """Barrier iterations on the restoration problem, returns (success, infeasible, theta, iterations)."""
+        """Barrier iterations on the restoration problem, recording in info how the phase ends."""
         opts = self.options
         tol = opts["convergence_tolerance"]
         mu_floor = max(
@@ -166,40 +169,53 @@ class FeasibilityRestoration:
         )
         self._enter(evaluator, state, mu_store)
 
-        theta = 0.0
-        for it in range(opts["resto_max_iterations"]):
+        for it in range(self.budget):
+            info.iterations = it
             state.mu = self.mu
             evaluator.evaluate_gradient(state)
             r = self._residual(state.current, state.gradient)
-            theta = self._con_sum(np.abs(r))
+            info.violation_final = self._con_max(r)
 
             # The phase ends once the main filter accepts a point at the target violation
-            if theta <= target:
+            if info.violation_final <= self.target:
                 if self._exit_acceptable(
-                    evaluator, state, line_search, target, obj_scale_store, mu_store
+                    evaluator, state, line_search, obj_scale_store, mu_store
                 ):
-                    return True, False, theta, it
+                    info.success = True
+                    return
                 evaluator.evaluate_gradient(state)
 
             y = self._con_values(state.get_current_point())
             self._gradient(state)
-            if self._update_barrier(state, r, y, mu_floor):
-                return False, self._infeasible(state, r, y), theta, it
+
+            # Past the wall time of the solve the phase stops at the current point
+            if time.perf_counter() > state.deadline:
+                info.out_of_time = True
+                info.infeasible = self._infeasible(state, r, y)
+                return
+
+            # The barrier holds through the first iteration, whose start is centered for it
+            if it > 0 and self._update_barrier(state, r, y, mu_floor):
+                info.infeasible = self._infeasible(state, r, y)
+                return
             state.mu = self.mu
 
             if not (
                 self._direction(solver, evaluator, state, r, y)
                 and self._line_search(evaluator, state, r)
             ):
-                return False, self._infeasible(state, r, y), theta, it
+                info.infeasible = self._infeasible(state, r, y)
+                return
 
         # The budget ends the phase at the last accepted point
         evaluator.evaluate_gradient(state)
         r = self._residual(state.current, state.gradient)
         y = self._con_values(state.get_current_point())
         self._gradient(state)
-        theta = self._con_sum(np.abs(r))
-        return False, self._infeasible(state, r, y), theta, opts["resto_max_iterations"]
+        info.iterations = self.budget
+        info.violation_final = self._con_max(r)
+        info.out_of_iterations = True
+        info.infeasible = self._infeasible(state, r, y)
 
     def _infeasible(self, state, r, y):
         """True when the point nearly solves the restoration problem with a violation well above the tolerance."""

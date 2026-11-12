@@ -17,8 +17,8 @@ Usage
         },
     )
 
-The five checks
----------------
+The six checks
+--------------
 1. **NaN/Inf** - scan every entry of the design vector.
 2. **Bounds**  - compare x against user-supplied lower/upper vectors and
    against component-declared meta bounds, flagging zero-valued bounds that
@@ -32,6 +32,10 @@ The five checks
 5. **Spotlight constraints** - read named constraint-residual variables
    directly from ``x`` (useful for IC/FC whose values the user seeds during
    initial-guess setup) and report per-element pass/fail.
+6. **Pinned rows** - name equality rows whose variables are all fixed by
+   rows of one variable, which makes the row dependent, and rows that leave
+   one variable free and are satisfied with that variable on one of its
+   bounds, which pins the variable against the barrier at the solution.
 """
 
 from __future__ import annotations
@@ -138,11 +142,17 @@ class Diagnostics:
         connect_fail = self._check_connectivity()
         constrain_fail = self._check_constraints()
         spot_fail = self._check_spotlights(spotlights, tol)
+        pinned_fail = self._check_pinned_rows()
 
         print(f"{_SEP}\n")
 
         total_fail = (
-            nan_fail or bounds_fail or connect_fail or constrain_fail or spot_fail
+            nan_fail
+            or bounds_fail
+            or connect_fail
+            or constrain_fail
+            or spot_fail
+            or pinned_fail
         )
 
         fail_dict = {
@@ -151,6 +161,7 @@ class Diagnostics:
             "connectivity": connect_fail,
             "constraints": constrain_fail,
             "spotlights": spot_fail,
+            "pinned": pinned_fail,
         }
 
         return total_fail, fail_dict
@@ -168,36 +179,22 @@ class Diagnostics:
         dict
             Maps each constraint group name (e.g. ``"ac.res"``, ``"trap.res"``)
             to a numpy array of residual values evaluated at x.
-
-        Raises
-        ------
-        RuntimeError
-            If the total size of named constraint groups does not match the
-            number of multiplier variables, indicating an ordering mismatch.
         """
         g = self.model.create_vector()
         self.model.eval_gradient(x, g, alpha=0.0)
         g_arr = np.asarray(g[:], dtype=float)
 
-        var_types = self.model.problem.get_var_types().get_array()
-        bits = int(OptVarType.DUAL_INEQUALITY) | int(OptVarType.DUAL_EQUALITY)
-        mult_mask = (var_types & bits) != 0
-        c_flat = g_arr[mult_mask]
-
+        # Every group reads its own rows, which the reordering scatters
         result = {}
-        k = 0
         _, cons_names, _, _ = self.model.get_names()
         for name in cons_names:
-            n = int(np.atleast_1d(self.model.get_indices(name)).size)
-            result[name] = c_flat[k : k + n]
-            k += n
+            # The rows of the slacks are the rows of their inequalities
+            if name.split(".")[0] == self.model.slack_comp_name:
+                continue
 
-        if k != len(c_flat):
-            raise RuntimeError(
-                f"eval_constraints: named constraints sum to {k} entries "
-                f"but multiplier vector has {len(c_flat)}. "
-                "Constraint ordering mismatch — please report this as a bug."
-            )
+            indices = np.atleast_1d(self.model.get_indices(name)).ravel()
+            result[name] = g_arr[indices]
+
         return result
 
     # ── check 1: NaN / Inf ────────────────────────────────────────────────────
@@ -480,6 +477,101 @@ class Diagnostics:
                     fail = True
 
         return fail
+
+    # ── check 6: rows pinned by other rows or by a bound ─────────────────────
+
+    def _equality_row_columns(self) -> dict:
+        """Primal columns of every equality row from the structure of the KKT matrix at x"""
+        mat = self.model.create_matrix()
+        self.model.eval_hessian(self.x, mat)
+        mat.copy_data_device_to_host()
+        nrows, ncols, nnz, rowp, cols = mat.get_nonzero_structure()
+        rowp = np.asarray(rowp)
+        cols = np.asarray(cols)
+
+        var_types = self.model.problem.get_var_types().get_array()
+        dual_bits = int(OptVarType.DUAL_INEQUALITY) | int(OptVarType.DUAL_EQUALITY)
+        is_dual = (var_types & dual_bits) != 0
+        is_equality = (var_types & int(OptVarType.DUAL_EQUALITY)) != 0
+
+        row_columns = {}
+        for r in np.where(is_equality)[0]:
+            columns = []
+            for c in cols[rowp[r] : rowp[r + 1]]:
+                if not is_dual[c]:
+                    columns.append(int(c))
+            row_columns[int(r)] = columns
+
+        return row_columns
+
+    def _check_pinned_rows(self, tol: float = 1e-8) -> bool:
+        """Name equality rows that other rows make dependent or that force a variable onto a bound"""
+        print("\n  [6] Equality rows pinned by other rows or by a bound")
+        row_columns = self._equality_row_columns()
+
+        lo = np.asarray(self.lower[:], dtype=float)
+        hi = np.asarray(self.upper[:], dtype=float)
+
+        # Variables fixed by a row of one variable or by equal bounds
+        fixed = set()
+        for r, columns in row_columns.items():
+            if len(columns) == 1:
+                fixed.add(columns[0])
+        for v in np.where(lo == hi)[0]:
+            fixed.add(int(v))
+
+        g = self.model.create_vector()
+        trial = self.model.create_vector()
+
+        dependent = []
+        pinned = []
+        for r, columns in row_columns.items():
+            if len(columns) <= 1:
+                continue
+            free = []
+            for c in columns:
+                if c not in fixed:
+                    free.append(c)
+            if len(free) == 0:
+                dependent.append(r)
+                continue
+            if len(free) > 1:
+                continue
+
+            # The row evaluated with its one free variable on each finite bound
+            v = free[0]
+            for side, bound in (("lower", lo[v]), ("upper", hi[v])):
+                if not np.isfinite(bound):
+                    continue
+                trial.copy(self.x)
+                trial[v] = bound
+                self.model.eval_gradient(trial, g, alpha=0.0)
+                residual = float(np.asarray(g[:], dtype=float)[r])
+                if abs(residual) <= tol * max(1.0, abs(bound)):
+                    pinned.append((r, v, side, bound))
+
+        if not dependent and not pinned:
+            print(
+                "      [OK]   No equality row is made dependent or forces a variable onto a bound"
+            )
+            return False
+
+        for r in dependent[: self._MAX_VIOLATIONS_SHOWN]:
+            name = self._idx_to_name.get(r, f"row={r}")
+            print(f"      [WARN] {name:40s} every variable fixed by other rows")
+        if len(dependent) > self._MAX_VIOLATIONS_SHOWN:
+            print(f"             ... ({len(dependent)} dependent rows)")
+
+        for r, v, side, bound in pinned[: self._MAX_VIOLATIONS_SHOWN]:
+            name = self._idx_to_name.get(r, f"row={r}")
+            vname = self._idx_to_name.get(v, f"var={v}")
+            print(
+                f"      [WARN] {name:40s} forces {vname} onto its {side} bound {bound:.4g}"
+            )
+        if len(pinned) > self._MAX_VIOLATIONS_SHOWN:
+            print(f"             ... ({len(pinned)} pinned rows)")
+
+        return True
 
     # ── internal helpers ──────────────────────────────────────────────────────
 

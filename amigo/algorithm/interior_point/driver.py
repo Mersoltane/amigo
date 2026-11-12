@@ -21,6 +21,7 @@ from ..barrier_strategy import barrier_minimum, make_barrier_strategy
 from .convergence_check import (
     ConvergenceCheck,
     CONTINUE,
+    CONVERGED,
     CONVERGED_ACCEPTABLE,
     CONVERGED_OBJECTIVE,
     DEGENERATE_DUALS,
@@ -44,6 +45,7 @@ from ..initialization import (
 from ..initialization.multiplier_initialization import FUTILE_FRACTION
 from ..monitoring.iteration_logger import OptimizationLogger
 from .step_contract import StepContract
+from .polish import ConstraintPolish
 from .state import InteriorPointState
 from .newton_direction import NewtonStep
 from ..solvers import InertiaCorrector, make_solver
@@ -294,6 +296,9 @@ class Optimizer:
             self.x, options, self.problem, self.optimizer, warm_mu=warm_mu
         )
 
+        # The wall time budget runs from the start of the call
+        self.state.deadline = _t_optimize_start + options["max_wall_time"]
+
         # The solver keeps its symbolic analysis across solves with the same options
         _t_solver_build = time.perf_counter()
         if self.solver is None or not self.solver.reset(options, self.state):
@@ -338,6 +343,7 @@ class Optimizer:
 
         # The dual step contract that doses the stabilization after a breach
         contract = StepContract(options, self.problem)
+        polish = ConstraintPolish(options)
 
         # Initialize the logger. The logger takes in additional objects that may
         # provide logging info via "obj.get_log_info()"
@@ -353,6 +359,20 @@ class Optimizer:
         # Set the initial point with the fixed variables at their bounds
         self.x.copy(self.x_init)
         self.optimizer.set_fixed_values(self.x)
+
+        # The elastic parts and their weights, set from the option before the scaling reads the gradient
+        if self.model is not None:
+            elastic_parts, elastic_weights = self.model.get_elastic()
+        else:
+            elastic_parts = elastic_weights = np.zeros(0, dtype=int)
+        if elastic_parts.size > 0:
+            data = self.problem.get_data_vector()
+            data.copy_device_to_host()
+            data.get_array()[elastic_weights] = options["elastic_weight"]
+            data.copy_host_to_device()
+
+        # The optimality scaling leaves out the duals of the elastic parts
+        self.evaluator.set_elastic_parts(self._dual_positions(elastic_parts))
 
         # Scale at the start point so the rest of the algorithm runs scaled
         self.nlp_scaling = NLPScaling(options, self.problem, self.optimizer)
@@ -421,8 +441,9 @@ class Optimizer:
         # Initialize the barrier strategy prior to optimization
         barrier_strategy.initialize(self.evaluator, self.state)
 
+        elastic_updates = 0
+
         max_iters = options["max_iterations"]
-        max_wall_time = options["max_wall_time"]
         tiny_steps = 0
         for counter in range(max_iters):
             # Update the iteration counter
@@ -437,12 +458,20 @@ class Optimizer:
             # Check for convergence based on the initial point
             status = check.test_convergence(self.evaluator, self.state)
 
+            # An acceptable stop with the constraints above the tolerance polishes them with normal steps first
+            self.state.normal_step = False
+            if status == CONVERGED_ACCEPTABLE and polish.claim_step(self.state):
+                self.state.normal_step = True
+                status = CONTINUE
+
             # Past the wall time budget the solve stops at the current point
-            if (
-                status == CONTINUE
-                and time.perf_counter() - _t_optimize_start > max_wall_time
-            ):
+            if status == CONTINUE and time.perf_counter() > self.state.deadline:
                 status = TIME_LIMIT
+
+            # The iterations of the restoration count against the budget of the solve
+            spent = counter + feasible_resto.num_iterations
+            if status == CONTINUE and spent >= max_iters:
+                status = MAX_ITERATIONS
 
             # Log the information about the iteration and the status of all the
             # internal objects within the optimizer
@@ -455,13 +484,36 @@ class Optimizer:
 
             # Convergence, divergence, and invalid numbers all end the solve
             if status != CONTINUE:
-                if status == INVALID_NUMBER and self.state.comm_rank == 0:
-                    names = self._invalid_entries()
-                    if names:
-                        print(f"  Non-finite values at {', '.join(names)}")
-                    for line in self._invalid_derivatives():
-                        print(f"  {line}")
-                break
+                # A converged point with elastic parts left grows their weight and goes on
+                grown = False
+                if (
+                    status in (CONVERGED, CONVERGED_ACCEPTABLE)
+                    and elastic_parts.size > 0
+                ):
+                    if elastic_updates < options["elastic_max_updates"]:
+                        grown = self._grow_elastic_weights(
+                            options,
+                            line_search,
+                            elastic_parts,
+                            elastic_weights,
+                            force=True,
+                        )
+
+                    # Parts left at the last weight leave their rows open, so the point is infeasible
+                    if not grown and self._elastic_parts_left(options, elastic_parts):
+                        status = LOCALLY_INFEASIBLE
+                        logger.mark_status(status)
+
+                if grown:
+                    elastic_updates += 1
+                else:
+                    if status == INVALID_NUMBER and self.state.comm_rank == 0:
+                        names = self._invalid_entries()
+                        if names:
+                            print(f"  Non-finite values at {', '.join(names)}")
+                        for line in self._invalid_derivatives():
+                            print(f"  {line}")
+                    break
 
             # Callback for the continuation control
             if continuation_control is not None:
@@ -473,6 +525,17 @@ class Optimizer:
             # Let the line search object determine if a reset is appropriate based on the barrier parameter
             # update. For instance, this call may reset the filter
             line_search.reset_on_new_barrier(self.state, barrier_info)
+
+            # A new barrier level asks the duals of the elastic parts whether their weight is exact
+            if (
+                elastic_parts.size > 0
+                and barrier_info.new_barrier
+                and elastic_updates < options["elastic_max_updates"]
+                and self._grow_elastic_weights(
+                    options, line_search, elastic_parts, elastic_weights, force=False
+                )
+            ):
+                elastic_updates += 1
 
             # Factor the KKT system considering the inertia
             # TODO: Implement a inertia info class
@@ -487,6 +550,7 @@ class Optimizer:
 
             # Test whether the duals alone block the barrier after a step that did not cut them
             dual_blocked = False
+            dual_gate = 0.0
             if (
                 options["dual_complete_schedule"]
                 and not barrier_info.new_barrier
@@ -498,16 +562,21 @@ class Optimizer:
                     self.state.mu, self.state.current, self.state.gradient
                 )
                 s_d, s_c = self.evaluator.compute_optimality_scaling(self.state)
-                gate = kappa_eps * self.state.mu
+                dual_gate = kappa_eps * self.state.mu
                 dual_blocked = (
-                    dual / s_d > gate and primal <= gate and comp / s_c <= gate
+                    dual / s_d > dual_gate
+                    and primal <= dual_gate
+                    and comp / s_c <= dual_gate
                 )
 
             do_feasible_resto = True
             if factor_ok:
-                # The step is a descent direction because of the inertia check, and an
-                # adaptive barrier strategy may choose mu and the step together
-                if barrier_strategy.computes_step():
+                # A polish step moves onto the constraints, else the barrier strategy or the Newton step gives a descent direction
+                if self.state.normal_step:
+                    newton_step.compute_normal_step(
+                        self.solver, self.evaluator, self.state
+                    )
+                elif barrier_strategy.computes_step():
                     barrier_strategy.compute_step(
                         self.solver, self.evaluator, self.state
                     )
@@ -524,6 +593,27 @@ class Optimizer:
                 if check.objective_converged(self.state):
                     status = CONVERGED_OBJECTIVE
                     logger.mark_status(status)
+                    grown = False
+                    if elastic_parts.size > 0:
+                        if elastic_updates < options["elastic_max_updates"]:
+                            grown = self._grow_elastic_weights(
+                                options,
+                                line_search,
+                                elastic_parts,
+                                elastic_weights,
+                                force=True,
+                            )
+
+                        # Parts left at the last weight leave their rows open, so the point is infeasible
+                        if not grown and self._elastic_parts_left(
+                            options, elastic_parts
+                        ):
+                            status = LOCALLY_INFEASIBLE
+                            logger.mark_status(status)
+
+                    if grown:
+                        elastic_updates += 1
+                        continue
                     break
 
                 # Perform a line search along the step direction
@@ -579,20 +669,46 @@ class Optimizer:
                         force=dual_blocked,
                     )
                     if dual_blocked and helped is False:
-                        # A futile refresh at a converged primal certifies degenerate duals
+                        # The reduced gradient the multipliers of the refresh leave without their cap and their size
+                        residual = multiplier_init.estimate_residual
+                        size = multiplier_init.estimate_size
+                        s_d, _ = self.evaluator.compute_optimality_scaling(self.state)
+
+                        # A futile refresh at a converged primal certifies degenerate duals when only multipliers past the cap close them
                         if (
                             self.state.kkt_error > options["convergence_tolerance"]
                             and self.state.mu <= barrier_minimum(options, self.state)
                             and check.primal_converged(self.state)
                         ):
-                            logger.log_iteration(DEGENERATE_DUALS, self.state)
-                            status = DEGENERATE_DUALS
-                            break
-                        barrier_strategy.force_decrease = True
-                        if self.state.comm_rank == 0:
+                            stationary = (
+                                residual is not None
+                                and residual / s_d <= options["convergence_tolerance"]
+                            )
+                            if stationary:
+                                logger.log_iteration(DEGENERATE_DUALS, self.state)
+                                status = DEGENERATE_DUALS
+                                break
+                            if self.state.comm_rank == 0:
+                                print(
+                                    f"  Certificate refused: multipliers up to {size:.2e} leave "
+                                    f"a dual residual of {residual:.2e}, the point is not stationary"
+                                )
+
+                        # The duals are complete when multipliers past the cap close them to the gate or the step leaves the objective within it
+                        closed = residual is not None and residual / s_d <= dual_gate
+                        moved = abs(self.state.pred_obj) * self.state.obj_scale
+                        if closed or moved <= dual_gate:
+                            barrier_strategy.force_decrease = True
+                            if self.state.comm_rank == 0:
+                                print(
+                                    f"  Dual complete: forcing the barrier below "
+                                    f"mu={self.state.mu:.2e}"
+                                )
+                        elif self.state.comm_rank == 0 and options["verbose_barrier"]:
+                            left = float("nan") if residual is None else residual
                             print(
-                                f"  Dual complete: forcing the barrier below "
-                                f"mu={self.state.mu:.2e}"
+                                f"  Dual open: a reduced gradient of {left:.2e} remains "
+                                f"and the step moves the objective by {moved:.2e}"
                             )
 
                     # Steps accepted at near-zero alpha while still infeasible
@@ -610,10 +726,16 @@ class Optimizer:
                 resto_info = attempt_restoration()
                 if resto_info is not None and resto_info.success:
                     continue
-                if resto_info is not None and resto_info.infeasible:
-                    status = LOCALLY_INFEASIBLE
-                else:
-                    status = RESTORATION_NEEDED
+
+                # A call that fails ends the solve, under the limit that stopped it when one did
+                status = RESTORATION_NEEDED
+                if resto_info is not None:
+                    if resto_info.infeasible:
+                        status = LOCALLY_INFEASIBLE
+                    elif resto_info.out_of_time:
+                        status = TIME_LIMIT
+                    elif resto_info.out_of_iterations:
+                        status = MAX_ITERATIONS
                 logger.log_iteration(status, self.state)
                 break
 
@@ -642,6 +764,72 @@ class Optimizer:
         self.last_mu = self.state.mu
 
         return logger.get_data()
+
+    def _dual_positions(self, parts):
+        """Positions of the bound duals of the given variables"""
+        primal = np.asarray(self.problem.get_primal_indices().get_array())
+        size = self.state.current.get_solution().get_array().size
+        position = np.full(size, -1)
+        position[primal] = np.arange(primal.size)
+        return position[parts]
+
+    def _elastic_parts_sum(self, parts):
+        """Sum of the elastic parts, the violation their rows still carry"""
+        x = self.state.current.get_solution()
+        x.copy_device_to_host()
+        values = np.asarray(x.get_array())
+        return float(np.abs(values[parts]).sum())
+
+    def _elastic_parts_left(self, options, parts):
+        """True when the elastic parts carry more than the violation tolerance"""
+        return self._elastic_parts_sum(parts) > options["constr_viol_tol"]
+
+    def _grow_elastic_weights(self, options, line_search, parts, weights, force):
+        """Grow the weight of the elastic parts when their bound duals say the penalty is not exact.
+
+        The scaled bound dual of a part is the scaled weight minus the
+        multiplier of its row, so a part whose dual falls below the floor
+        times the weight sits on a row whose multiplier has reached the
+        weight and the part stays nonzero at the solution. With force the
+        parts left at a converged point decide alone. Returns True when the
+        weight grew.
+        """
+        total = self._elastic_parts_sum(parts)
+        if total <= options["constr_viol_tol"]:
+            return False
+
+        data = self.problem.get_data_vector()
+        data.copy_device_to_host()
+        entries = data.get_array()
+        weight = float(np.max(entries[weights]))
+
+        # The duals of the parts against their scaled weight
+        zl = self.state.current.get_zl()
+        zl.copy_device_to_host()
+        positions = self._dual_positions(parts)
+        scaled_weight = weight * self.state.obj_scale
+        floor = float(np.min(np.asarray(zl.get_array())[positions])) / scaled_weight
+        if not force and floor >= options["elastic_dual_floor"]:
+            return False
+
+        # The duals mean nothing while the dual error is still of the order of the weight
+        if (
+            not force
+            and self.state.dual_infeas > options["elastic_dual_floor"] * scaled_weight
+        ):
+            return False
+
+        growth = options["elastic_weight_growth"]
+        entries[weights] *= growth
+        data.copy_host_to_device()
+        self.state.invalidate()
+        line_search.reset_after_restoration()
+        if self.state.comm_rank == 0:
+            print(
+                f"  Elastic: parts sum {total:.2e}, smallest dual {floor:.2e} of the weight "
+                f"{weight:.1e}, raising the weight to {weight * growth:.1e}"
+            )
+        return True
 
     def _invalid_entries(self, limit=5):
         """Names of the first variables and constraints whose value or derivative is not finite."""

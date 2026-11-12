@@ -180,22 +180,22 @@ class UnaryNode(ExprNode):
         "norm_sqrt",
         "sin",
         "cos",
+        "tan",
         "asin",
         "acos",
         "atan",
+        "sinh",
+        "cosh",
+        "tanh",
+        "asinh",
+        "acosh",
+        "atanh",
         "exp",
         "log",
     ]
 
-    # Operations with no A2D derivatives that would fail when the module compiles
-    unsupported_ops = ["tan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh"]
-
     def __init__(self, op, expr):
         super().__init__()
-        if op in UnaryNode.unsupported_ops:
-            raise NotImplementedError(
-                f"A2D has no derivatives for {op}, write it with exp, log, sin, or cos"
-            )
         if not op in UnaryNode.unary_ops:
             raise ValueError(f"Unrecognized unary operation {op}")
         self.op = op

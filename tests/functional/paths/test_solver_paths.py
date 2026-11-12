@@ -325,7 +325,9 @@ def test_partial_bounds_change_only_the_entries_set(hs71):
         data = opt.optimize({"max_iterations": 300})
 
         assert data["converged"], data["status_message"]
-        assert np.ravel(opt.get_optimized_point()["comp.x1"])[0] >= 1.5 - 1e-8
+
+        # The solve relaxes a bound by 1e-8 of its size
+        assert np.ravel(opt.get_optimized_point()["comp.x1"])[0] >= 1.5 - 2e-8
     finally:
         hs71.get_lower().get_vector().get_array()[:] = lower_before
         hs71.get_upper().get_vector().get_array()[:] = upper_before

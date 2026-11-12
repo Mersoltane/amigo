@@ -62,6 +62,7 @@ class OptimizationLogger:
         px = state.step.get_solution()
         iter_data["step_norm"] = self.problem.maxabs(px)
         iter_data["pred_obj"] = state.pred_obj
+        iter_data["normal_step"] = state.normal_step
 
         # The breach counts come from the step contract
         iter_data.setdefault("dual_viol_total", 0)
@@ -118,7 +119,7 @@ class OptimizationLogger:
                 f"{'inf_pr':>9s}  {'inf_du':>9s}  {'compl':>9s}  "
                 f"{'mu':>9s}  {'||d||':>9s}  {'dobj':>9s}  {'delta_w':>8s}  {'delta_c':>8s}  {'piv':>7s}  {'ic':>2s}  "
                 f"{'alpha_x':>8s}  {'alpha_z':>8s}  "
-                f"{'ls':>2s}  {'filt':>4s}  {'rej':>4s}  {'frej':>4s}  {'dv':>3s}  {'why':>8s}  {'soc':>4s}  {'regime':>6s}"
+                f"{'ls':>2s}  {'filt':>4s}  {'rej':>4s}  {'frej':>4s}  {'dv':>3s}  {'why':>8s}  {'soc':>4s}  {'fin':>3s}  {'regime':>6s}"
             )
 
         mu = iter_data.get("barrier_param", 1.0)
@@ -154,13 +155,14 @@ class OptimizationLogger:
         dv = iter_data.get("dual_viol_total", 0)
         why = iter_data.get("ls_why") or "---"
         soc = iter_data.get("soc") or "---"
+        fin = "n" if iter_data.get("normal_step", False) else "---"
         regime = iter_data.get("regime", "")
         print(
             f"{iteration:4d}  {nlp_err:9.2e}  {obj:12.5e}  "
             f"{inf_pr:9.2e}  {inf_du:9.2e}  {compl:9.2e}  "
             f"{mu:9.2e}  {step_norm:9.2e}  {pred_obj:9.2e}  {dw_str}  {dc_str}  {piv_str}  {ic:2d}  "
             f"{ax:8.2e}  {az:8.2e}  "
-            f"{ls:2d}  {fsize:4d}  {rej:4d}  {frej:4d}  {dv:3d}  {why:>8s}  {soc:>4s}  {regime:>6s}"
+            f"{ls:2d}  {fsize:4d}  {rej:4d}  {frej:4d}  {dv:3d}  {why:>8s}  {soc:>4s}  {fin:>3s}  {regime:>6s}"
         )
         sys.stdout.flush()
 

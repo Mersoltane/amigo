@@ -16,7 +16,7 @@ CONVERGENCE = {
     "dual_inf_tol": 1.0,
     "constr_viol_tol": 1e-4,
     "compl_inf_tol": 1e-4,
-    # Relative objective change the full step predicts below which a feasible centered iterate is converged, and 0 disables
+    # Relative objective change the full step predicts below which an acceptable iterate finishes on the constraints alone, and 0 disables
     "objective_tolerance": 0.0,
     # Acceptable convergence, a weaker solution held for several iterations
     "acceptable_tol": 1e-6,
@@ -44,7 +44,7 @@ STARTING_POINT = {
     # Begin from a restored feasible point with centered duals
     "feasibility_presolve": False,
     # Relax bounds by factor * max(1, |b|), capped at constr_viol_tol
-    "bound_relax_factor": 0.0,
+    "bound_relax_factor": 1e-8,
     # Warm start keeping the supplied multipliers and the previous bound duals
     "warm_start": False,
     # Cap on the centered bound duals of a warm start, which holds every gap at least mu over the cap
@@ -107,7 +107,7 @@ LINEAR_SOLVER = {
     # Threshold pivoting parameter where larger values favor stability over sparsity
     "amigo_pivot_threshold": 1e-4,
     # Symmetric equilibration sweeps before each factorization and 0 disables
-    "amigo_scaling_sweeps": 1,
+    "amigo_scaling_sweeps": 2,
     # Memory in GB one frontal matrix may take as delayed pivots grow it
     "amigo_max_front_gb": 4.0,
     # Iterative refinement until the solve backward error meets the tolerance
@@ -126,7 +126,7 @@ LINEAR_SOLVER = {
     # Apply delta_c on every factorization, for persistently singular KKTs
     "perturb_always_cd": False,
     # Resume from the decayed previous delta_x instead of restarting at 0, holding it after a failed decay
-    "hessian_perturbation_warm_start": True,
+    "hessian_perturbation_warm_start": False,
     # Primal rows that carry delta_x, None for all, "free" for the variables the equalities leave free, or an index list
     "hessian_perturbation_indices": None,
     # Accept a wrong inertia when the step curvature exceeds this fraction of its norm and 0 disables
@@ -184,8 +184,14 @@ RESTORATION = {
     "feasibility_restoration": True,
     # Weight of the l1 violation in the restoration objective
     "resto_penalty": 1000.0,
-    "resto_max_iterations": 100,
-    "resto_required_reduction": 0.5,
+    # Weight of the elastic parts of the constraints the model marks elastic at a cold start
+    "elastic_weight": 1000.0,
+    # Growth of the weight of the elastic parts when their bound duals fall below the floor times the weight
+    "elastic_weight_growth": 10.0,
+    "elastic_dual_floor": 0.1,
+    "elastic_max_updates": 5,
+    # Fraction of its entry value the largest violation must reach before the phase returns
+    "resto_required_reduction": 0.9,
     # Trigger after this many accepted steps below the alpha threshold
     "resto_trigger_alpha": 1e-3,
     "resto_trigger_iters": 5,

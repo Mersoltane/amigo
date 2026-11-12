@@ -3,6 +3,7 @@ Local infeasibility
 -------------------
 
 - An infeasible problem ends with the local infeasibility verdict
+- The iteration and wall time limits of the solve hold inside its restoration
 """
 
 import contextlib
@@ -12,7 +13,12 @@ import sys
 import pytest
 
 import amigo as am
-from amigo.algorithm.interior_point.convergence_check import LOCALLY_INFEASIBLE
+from amigo.algorithm.globalization import feasibility_restoration
+from amigo.algorithm.interior_point.convergence_check import (
+    LOCALLY_INFEASIBLE,
+    MAX_ITERATIONS,
+    TIME_LIMIT,
+)
 
 
 class Circle(am.Component):
@@ -85,12 +91,45 @@ def test_small_violation_is_detected(model):
 
 
 def test_budget_ending_at_the_solution_keeps_the_verdict(model):
-    # The phase runs out of iterations at the point where it would stop as solved
-    budget = solve(model, 1.0)["iterations"][-1]["resto_iterations"]
+    # The iterations of the solve and of its restoration when nothing limits them
+    free = solve(model, 1.0)["iterations"]
+    taken = free[-1]["iteration"]
+    restored = free[-1]["resto_iterations"]
 
-    data = solve(model, 1.0, resto_max_iterations=budget)
+    # The phase draws on the budget of the solve and runs out where it would stop as solved
+    data = solve(model, 1.0, max_iterations=taken + restored)
 
+    assert data["iterations"][-1]["resto_iterations"] == restored
     assert data["iterations"][-1]["status"] == LOCALLY_INFEASIBLE
+
+
+def test_budget_ending_inside_the_restoration_is_the_iteration_limit(model):
+    # The iteration at which the solve calls its restoration
+    free = solve(model, 1.0)["iterations"]
+    taken = free[-1]["iteration"]
+
+    # One iteration is left for the phase, which cannot solve its problem in it
+    data = solve(model, 1.0, max_iterations=taken + 1)
+
+    assert data["iterations"][-1]["resto_iterations"] == 1
+    assert data["iterations"][-1]["status"] == MAX_ITERATIONS
+
+
+class LateClock:
+    """Clock that reads past every deadline"""
+
+    def perf_counter(self):
+        return math.inf
+
+
+def test_wall_time_ending_inside_the_restoration_is_the_time_limit(model, monkeypatch):
+    # Only the clock of the phase is late, so the solve reaches its restoration
+    monkeypatch.setattr(feasibility_restoration, "time", LateClock())
+
+    data = solve(model, 1.0)
+
+    assert data["iterations"][-1]["resto_iterations"] == 0
+    assert data["iterations"][-1]["status"] == TIME_LIMIT
 
 
 def test_feasible_box_converges(model):

@@ -26,12 +26,20 @@ inline bool check_consistent_policy_and_location(ExecPolicy policy,
 
 }  // namespace amigo
 
+// CUDA defines its noinline keyword only where a CUDA compiler processes the code
+#if defined(__CUDACC__)
+#define AMIGO_NOINLINE __noinline__
+#elif defined(_MSC_VER)
+#define AMIGO_NOINLINE __declspec(noinline)
+#else
+#define AMIGO_NOINLINE __attribute__((noinline))
+#endif
+
 #ifdef AMIGO_USE_CUDA
 #define AMIGO_KERNEL __global__
 #define AMIGO_DEVICE __device__
 #define AMIGO_HOST_DEVICE __host__ __device__
 #define AMIGO_RESTRICT __restrict__
-#define AMIGO_NOINLINE __noinline__
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -91,11 +99,6 @@ inline bool check_consistent_policy_and_location(ExecPolicy policy,
 #define AMIGO_DEVICE
 #define AMIGO_HOST_DEVICE
 #define AMIGO_RESTRICT
-#ifdef _MSC_VER
-#define AMIGO_NOINLINE __declspec(noinline)
-#else
-#define AMIGO_NOINLINE __attribute__((noinline))
-#endif
 #endif  // AMIGO_USE_CUDA
 
 #endif  // AMIGO_H

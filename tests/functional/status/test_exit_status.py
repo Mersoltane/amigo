@@ -97,8 +97,8 @@ def test_iteration_limit_is_reported(model):
 
 
 def test_unbounded_objective_diverges(model):
-    # A linear objective without curvature takes constant steps, so the test lowers the threshold
-    data = solve(model, (0.0, 1.0, 0.0), diverging_iterates_tol=1e10)
+    # A linear objective moves by its gradient over the shift of the corrector, so the test lowers the threshold
+    data = solve(model, (0.0, 1.0, 0.0), diverging_iterates_tol=1e8)
 
     assert_status(data, DIVERGED)
 

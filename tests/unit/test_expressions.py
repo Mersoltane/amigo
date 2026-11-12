@@ -59,11 +59,15 @@ class TestIsZero:
         assert node.is_zero() is False
 
 
-class TestUnsupportedUnary:
-    @pytest.mark.parametrize("op", UnaryNode.unsupported_ops)
-    def test_unsupported_op_raises_before_code_generation(self, op):
-        with pytest.raises(NotImplementedError, match=op):
-            UnaryNode(op, Expr(VarNode("x")))
+class TestUnaryOps:
+    # The tangent and the hyperbolic functions that A2D differentiates to second order
+    @pytest.mark.parametrize(
+        "op", ["tan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh"]
+    )
+    def test_tangent_and_hyperbolic_ops_call_a2d(self, op):
+        node = UnaryNode(op, Expr(VarNode("x")))
+
+        assert node.to_cpp().startswith(f"A2D::{op}(")
 
     def test_unknown_op_names_the_op(self):
         with pytest.raises(ValueError, match="erf"):

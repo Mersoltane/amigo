@@ -24,6 +24,10 @@ class MultiplierInitializer:
         # Largest multiplier after the last step or estimate
         self.mult_size = None
 
+        # Dual infeasibility the last estimate leaves without its cap and its size, None when its factorization failed
+        self.estimate_residual = None
+        self.estimate_size = 0.0
+
     def initialize_multipliers(self, evaluator, solver, state):
         """Initialize the constraint multipliers in state.current."""
         # Warm starts keep the supplied multipliers
@@ -33,7 +37,9 @@ class MultiplierInitializer:
             self.compute_least_squares_multipliers(evaluator, solver, state)
         return
 
-    def recompute_multipliers(self, evaluator, solver, state, dual_prev=None, force=False):
+    def recompute_multipliers(
+        self, evaluator, solver, state, dual_prev=None, force=False
+    ):
         """Refresh the multipliers by least squares after a step that left the dual infeasibility high.
 
         Returns True when the refresh cut the dual infeasibility by a tenth,
@@ -56,14 +62,18 @@ class MultiplierInitializer:
                 return None
 
             # Least squares multipliers only mean something near feasibility or against diverging multipliers
-            diverging = mult_prev is not None and self.mult_size > MULT_JUMP * max(mult_prev, 1.0)
+            diverging = mult_prev is not None and self.mult_size > MULT_JUMP * max(
+                mult_prev, 1.0
+            )
             if not diverging:
                 if state.primal_infeas >= self.options["recompute_multiplier_tol"]:
                     return None
 
                 # Near feasibility only a jump or a dominant dual error pays for a refresh
                 jumped = state.dual_infeas > DUAL_JUMP * dual_prev
-                dominant = state.dual_infeas > DUAL_JUMP * max(state.primal_infeas, state.mu)
+                dominant = state.dual_infeas > DUAL_JUMP * max(
+                    state.primal_infeas, state.mu
+                )
                 if not (jumped or dominant):
                     return None
 
@@ -78,20 +88,11 @@ class MultiplierInitializer:
         # A refresh that keeps more than this fraction of the dual infeasibility is futile
         return state.dual_infeas <= FUTILE_FRACTION * dual_before
 
-    def compute_least_squares_multipliers(self, evaluator, solver, state):
-        """Replace the multipliers by their least-squares estimate when that lowers the dual infeasibility.
-
-        The normal equations give the lambda that minimizes the dual residual norm
-            || grad_f - zl + zu + A^T lambda ||
-        Returns True when the estimate stays under constr_mult_init_max and is taken.
-        """
+    def _estimate_multipliers(self, evaluator, solver, state):
+        """Solve the normal equations for the least squares multipliers into the estimate and return their size, or None when the factorization fails"""
         x = state.get_current_point()
         primal_indices = self.problem.get_primal_indices()
         con_indices = self.problem.get_constraint_indices()
-
-        evaluator.evaluate_residual(state)
-        dual_before = state.dual_infeas
-        self.saved_point.copy(x)
 
         # Objective gradient at the current obj_scale, constraint Hessian at obj_scale=0
         x.fill_at(con_indices, 0.0)
@@ -105,9 +106,7 @@ class MultiplierInitializer:
         state.diagonal.zero()
         state.diagonal.fill_at(primal_indices, 1.0)
         if solver.factor(state.hessian, state.diagonal):
-            x.copy_at(con_indices, self.saved_point)
-            state.invalidate()
-            return False
+            return None
 
         self.optimizer.compute_dual_residual(
             state.current, state.gradient, state.residual
@@ -117,17 +116,45 @@ class MultiplierInitializer:
         solver.solve(state.residual, self.estimate)
 
         self.estimate.get_values_at(con_indices, self.temp_con)
-        accepted = (
-            self.problem.maxabs(self.temp_con) <= self.options["constr_mult_init_max"]
-        )
-        if accepted:
-            x.copy_at(con_indices, self.estimate)
-            state.invalidate()
-            evaluator.evaluate_residual(state)
-            accepted = state.dual_infeas <= dual_before
-        if not accepted:
+        return self.problem.maxabs(self.temp_con)
+
+    def compute_least_squares_multipliers(self, evaluator, solver, state):
+        """Replace the multipliers by their least-squares estimate when that lowers the dual infeasibility.
+
+        The normal equations give the lambda that minimizes the dual residual norm
+            || grad_f - zl + zu + A^T lambda ||
+        Returns True when the estimate stays under constr_mult_init_max and is taken.
+        """
+        x = state.get_current_point()
+        con_indices = self.problem.get_constraint_indices()
+
+        evaluator.evaluate_residual(state)
+        dual_before = state.dual_infeas
+        self.saved_point.copy(x)
+
+        size = self._estimate_multipliers(evaluator, solver, state)
+        self.estimate_residual = None
+        self.estimate_size = 0.0
+        if size is None:
             x.copy_at(con_indices, self.saved_point)
             state.invalidate()
+            evaluator.evaluate_residual(state)
+            return False
+
+        # The dual infeasibility the estimate leaves is the reduced gradient, kept whatever the size of the estimate
+        x.copy_at(con_indices, self.estimate)
+        state.invalidate()
+        evaluator.evaluate_residual(state)
+        self.estimate_residual = state.dual_infeas
+        self.estimate_size = size
+
+        accepted = size <= self.options["constr_mult_init_max"]
+        accepted = accepted and state.dual_infeas <= dual_before
+        if not accepted:
+            # The multipliers of the point return with its own errors
+            x.copy_at(con_indices, self.saved_point)
+            state.invalidate()
+            evaluator.evaluate_residual(state)
         else:
             self.mult_size = self._mult_size(state)
         return accepted

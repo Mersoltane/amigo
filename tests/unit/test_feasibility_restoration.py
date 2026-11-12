@@ -8,7 +8,7 @@ Restoration start
 import numpy as np
 import pytest
 
-from amigo.algorithm.globalization.feasibility_restoration import elastic_split
+from amigo.algorithm.initialization.elastic_parts import elastic_split
 
 RESIDUALS = np.array([-1e3, -2.0, -1e-6, 0.0, 3e-7, 0.5, 1e4])
 

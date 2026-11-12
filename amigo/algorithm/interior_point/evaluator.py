@@ -1,7 +1,13 @@
+import numpy as np
+
+
 class Evaluator:
     def __init__(self, problem, optimizer):
         self.problem = problem
         self.optimizer = optimizer
+
+        # Positions among the bound duals of the elastic parts, which the optimality scaling leaves out
+        self.part_positions = None
 
         # Create a temporary constraint vector for later usage
         self.temp_con = self.problem.create_constraint_vector()
@@ -158,6 +164,12 @@ class Evaluator:
         s_d, s_c = self.compute_optimality_scaling(state)
         return max(dual / s_d, primal, comp / s_c)
 
+    def set_elastic_parts(self, positions):
+        """Leave the bound duals at these positions out of the optimality scaling"""
+        self.part_positions = None
+        if len(positions) > 0:
+            self.part_positions = np.asarray(positions, dtype=int)
+
     def compute_optimality_scaling(self, state, s_max=100.0):
         """Compute optimality error scaling factors (s_d, s_c)."""
 
@@ -165,6 +177,14 @@ class Evaluator:
         zl = state.current.get_zl()
         zu = state.current.get_zu()
         z_asum = self.problem.abssum(zl) + self.problem.abssum(zu)
+        num_bounds = self.num_bounds
+
+        # The dual of an elastic part is its weight less the multiplier of its row and says nothing of the solution
+        if self.part_positions is not None:
+            zl.copy_device_to_host()
+            part_duals = np.asarray(zl.get_array())[self.part_positions]
+            z_asum -= float(np.abs(part_duals).sum())
+            num_bounds -= self.part_positions.size
 
         # Get the sum of the absolute values of the multipliers
         con_indices = self.problem.get_constraint_indices()
@@ -174,13 +194,13 @@ class Evaluator:
         y_asum = self.problem.abssum(self.temp_con)
 
         # s_c: bound multiplier scaling
-        if self.num_bounds == 0:
+        if num_bounds == 0:
             s_c = 1.0
         else:
-            s_c = max(s_max, z_asum / self.num_bounds) / s_max
+            s_c = max(s_max, z_asum / num_bounds) / s_max
 
         # s_d: dual (stationarity) scaling
-        num_total = self.num_constraints + self.num_bounds
+        num_total = self.num_constraints + num_bounds
         if num_total == 0:
             s_d = 1.0
         else:

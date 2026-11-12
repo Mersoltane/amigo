@@ -6,6 +6,104 @@ from .meta import Meta, VarType
 
 _cpp_type_map = {int: "int", float: "double", complex: "std::complex<double>"}
 
+# Words that C++ reserves, which the generated code cannot use to name a variable
+_CPP_KEYWORDS = frozenset(
+    [
+        "alignas",
+        "alignof",
+        "and",
+        "and_eq",
+        "asm",
+        "auto",
+        "bitand",
+        "bitor",
+        "bool",
+        "break",
+        "case",
+        "catch",
+        "char",
+        "char8_t",
+        "char16_t",
+        "char32_t",
+        "class",
+        "compl",
+        "concept",
+        "const",
+        "consteval",
+        "constexpr",
+        "constinit",
+        "const_cast",
+        "continue",
+        "co_await",
+        "co_return",
+        "co_yield",
+        "decltype",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "dynamic_cast",
+        "else",
+        "enum",
+        "explicit",
+        "export",
+        "extern",
+        "false",
+        "float",
+        "for",
+        "friend",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "long",
+        "mutable",
+        "namespace",
+        "new",
+        "noexcept",
+        "not",
+        "not_eq",
+        "nullptr",
+        "operator",
+        "or",
+        "or_eq",
+        "private",
+        "protected",
+        "public",
+        "register",
+        "reinterpret_cast",
+        "requires",
+        "return",
+        "short",
+        "signed",
+        "sizeof",
+        "static",
+        "static_assert",
+        "static_cast",
+        "struct",
+        "switch",
+        "template",
+        "this",
+        "thread_local",
+        "throw",
+        "true",
+        "try",
+        "typedef",
+        "typeid",
+        "typename",
+        "union",
+        "unsigned",
+        "using",
+        "virtual",
+        "void",
+        "volatile",
+        "wchar_t",
+        "while",
+        "xor",
+        "xor_eq",
+    ]
+)
+
 
 def _get_shape_from_obj(obj):
     if not isinstance(obj, (list, tuple, np.ndarray)):
@@ -651,7 +749,17 @@ class Component:
             return not self._is_overridden("compute_output")
 
     def _claim(self, name):
-        """Raise when the name already belongs to another quantity of the component."""
+        """Raise when the name cannot name a C++ variable or already belongs to another quantity of the component."""
+        # The generated code declares a variable of every name
+        if (
+            not isinstance(name, str)
+            or not name.isidentifier()
+            or name in _CPP_KEYWORDS
+        ):
+            raise ValueError(
+                f"The name {name!r} cannot name a variable in the generated C++ code"
+            )
+
         groups = (
             ("a constant", self.constants),
             ("an input", self.inputs),

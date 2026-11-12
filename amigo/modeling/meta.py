@@ -25,6 +25,7 @@ class Meta:
             "units": None,
             "scale": 1.0,
             "label": None,
+            "elastic": False,
         }
 
         if name in defaults:
@@ -57,6 +58,11 @@ class Meta:
             kwargs.pop("scale", self.UNSET), self.shape, "scale"
         )
         self.label = kwargs.pop("label", self.UNSET)
+
+        # An elastic constraint is relaxed by a pair of parts the model adds at a weight the solve raises until exact
+        self.elastic = kwargs.pop("elastic", self.UNSET)
+        if self.elastic is not self.UNSET and var_type != VarType.CONSTRAINT:
+            raise ValueError("Only a constraint can be elastic")
 
         if len(kwargs) > 0:
             raise ValueError(f"Unknown options: {kwargs}")
@@ -157,6 +163,8 @@ class Meta:
             return self.scale
         elif name == "label":
             return self.label
+        elif name == "elastic":
+            return self.elastic
 
     def __repr__(self):
         return (
@@ -187,6 +195,7 @@ class Meta:
             "units": self._serialize_value(self.units),
             "scale": self._serialize_value(self.scale),
             "label": self._serialize_value(self.label),
+            "elastic": self._serialize_value(self.elastic),
         }
 
     @staticmethod

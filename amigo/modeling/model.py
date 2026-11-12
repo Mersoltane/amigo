@@ -63,6 +63,21 @@ def _write_if_changed(path, text: str):
         path.write_text(text)
 
 
+def _class_header(code: str):
+    """Header of one component class around its generated code"""
+    return (
+        '#include "amigo.h"\n#include "scalar_ad.h"\nnamespace amigo {' + code + "}\n"
+    )
+
+
+def _usable_cores():
+    """Cores this process may run on, which a scheduler such as Slurm can limit"""
+    # Linux reports the cores given to the process through its affinity mask
+    if sys.platform.startswith("linux"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _run_build_step(cmd, label: str, tail: int = 40):
     """Run a CMake step with its output streamed, raising with the last lines when it fails."""
     p = subprocess.Popen(
@@ -218,6 +233,30 @@ class GlobalIndexPool:
         indices = np.arange(self.counter, self.counter + size).reshape(shape)
         self.counter += size
         return indices
+
+
+class ElasticComponent(Component):
+    """Pair of parts that relax a constraint row, weighted in the objective.
+
+    A linked row reads c(x) - p + n = 0 with p and n nonnegative, so p takes a
+    violation above the row's range and n one below it, and the penalty is the
+    weight times p + n. The solve starts the pair from the violation and raises
+    the weight until the penalty is exact and the parts vanish.
+    """
+
+    def __init__(self):
+        super().__init__(name="ElasticComponent")
+        self.add_input("p", lower=0.0)
+        self.add_input("n", lower=0.0)
+        self.add_data("rho")
+        self.add_constraint("res")
+        self.add_objective("penalty")
+
+    def compute(self):
+        p = self.inputs["p"]
+        n = self.inputs["n"]
+        self.constraints["res"] = n - p
+        self.objective["penalty"] = self.data["rho"] * (p + n)
 
 
 class ComponentGroup:
@@ -528,6 +567,14 @@ class Model:
                 f"module_name '{module_name}' is not a valid identifier. "
                 f"Use only letters, digits, and underscores, starting with a letter or underscore."
             )
+
+        # A compiled module named like the running script shadows the script on import
+        script_stem = Path(sys.argv[0]).stem if sys.argv else ""
+        if module_name is not None and module_name == script_stem:
+            warnings.warn(
+                f"module_name '{module_name}' equals the name of the running script, "
+                f"so importing the script from another module loads the compiled extension instead"
+            )
         self.comp = {}
         self.external_comp = {}
         self.index_pool = GlobalIndexPool()
@@ -546,6 +593,13 @@ class Model:
         self.ineq_names = None
         self.slack_lower = []
         self.slack_upper = []
+
+        # Elastic constraints hold a pair of parts each with a weight in the data
+        self.elastic_comp_name = None
+        self.elastic_row_indices = np.zeros(0, dtype=int)
+        self.elastic_p_indices = np.zeros(0, dtype=int)
+        self.elastic_n_indices = np.zeros(0, dtype=int)
+        self.elastic_weight_indices = np.zeros(0, dtype=int)
 
         # Is this model initialized or not
         self._initialized = False
@@ -665,8 +719,8 @@ class Model:
 
         # Add all of the sub-model components
         for comp_name in model.comp:
-            # Skip the slack component
-            if comp_name == model.slack_comp_name:
+            # Skip the slack groups that the model rebuilds at initialization
+            if model._is_slack_group(comp_name):
                 continue
             sub_name = name + "." + comp_name
             sub_size = model.comp[comp_name].size
@@ -932,6 +986,35 @@ class Model:
         """Returns true if the model is initialized"""
         return self._initialized
 
+    def _stale_classes(self):
+        """Count of class headers found beside the module and the classes whose code differs from them"""
+        directory = self._guess_source_dir()
+        checked = 0
+        stale = []
+        if directory is None:
+            return checked, stale
+
+        seen = {}
+        for name in self.comp:
+            class_name = self.comp[name].class_name
+            if class_name in seen:
+                continue
+            seen[class_name] = True
+
+            comp_obj = self.comp[name].comp_obj
+            if comp_obj.is_compute_empty() and comp_obj.is_compute_output_empty():
+                continue
+
+            # The header the module was built from is absent when it was built elsewhere
+            path = directory / f"{self.module_name}_{class_name}.h"
+            if not path.exists():
+                continue
+            checked += 1
+            if path.read_text() != _class_header(comp_obj.generate_cpp()):
+                stale.append(class_name)
+
+        return checked, stale
+
     def initialize(
         self, comm=COMM_WORLD, order_type=OrderingType.DEFAULT, order_for_block=False
     ):
@@ -947,11 +1030,19 @@ class Model:
         resulting KKT system is a 2x2 augmented system (eq. 13).
         """
 
+        # A module compiled in another session is checked against the component code beside it
         if self.module_name is not None and self.module_name not in _built_modules:
-            warnings.warn(
-                f"Call model.build_module() before model.initialize(). "
-                f"Module '{self.module_name}' has not been compiled in this session."
-            )
+            checked, stale = self._stale_classes()
+            if stale:
+                warnings.warn(
+                    f"Module '{self.module_name}' was built from other code than the classes "
+                    f"{', '.join(stale)} now define. Rebuild it with build_module()."
+                )
+            elif checked == 0:
+                warnings.warn(
+                    f"Call model.build_module() before model.initialize(). "
+                    f"Module '{self.module_name}' has not been compiled in this session."
+                )
 
         self.num_variables = self._init_indices(
             self.links, self.index_pool, vtype="vars"
@@ -992,6 +1083,20 @@ class Model:
         else:
             self.ineq_constraint_indices = []
             self.slack_indices = []
+
+        # The elastic rows with their parts and weights in the reordered numbering
+        if self.elastic_comp_name is not None:
+            group = self.comp[self.elastic_comp_name]
+            self.elastic_row_indices = self.get_indices(
+                f"{self.elastic_comp_name}.res"
+            ).ravel()
+            self.elastic_p_indices = self.get_indices(
+                f"{self.elastic_comp_name}.p"
+            ).ravel()
+            self.elastic_n_indices = self.get_indices(
+                f"{self.elastic_comp_name}.n"
+            ).ravel()
+            self.elastic_weight_indices = np.ravel(group.data["rho"])
 
         # The problem is now initialized
         self._initialized = True
@@ -1107,6 +1212,13 @@ class Model:
     def get_initial_point(self):
         """Get the initial point from the optimization problem class"""
         return ModelVector(self, self.problem.get_initial_point(), kind="state")
+
+    def get_elastic(self):
+        """Indices of the elastic parts and of the data entries that weight them."""
+        parts = np.concatenate([self.elastic_p_indices, self.elastic_n_indices]).astype(
+            int
+        )
+        return parts, np.asarray(self.elastic_weight_indices, dtype=int)
 
     def get_lower(self):
         """Get the lower bounds from the optimization problem class"""
@@ -1288,13 +1400,8 @@ class Model:
             raise ValueError("module_name cannot be None when compiling a model")
         directory = Path(directory) if directory is not None else Path.cwd()
 
-        # Each class header with the C++ component definitions
-        def header(code):
-            return (
-                '#include "amigo.h"\n#include "scalar_ad.h"\nnamespace amigo {'
-                + code
-                + "}\n"
-            )
+        # The directory of the generated files, created when it does not exist yet
+        directory.mkdir(parents=True, exist_ok=True)
 
         # Classes are written once since class names are unique
         units = []
@@ -1310,6 +1417,16 @@ class Model:
                     class_names[class_name] = True
                     wrapper = comp_obj.generate_pybind11(mod_ident="mod")
                     units.append((class_name, comp_obj.generate_cpp(), wrapper))
+
+        # The elastic pair is generated with the model
+        if self._has_elastic():
+            comp_obj = ElasticComponent()
+            if comp_obj.name in class_names:
+                raise ValueError(
+                    f"The component name {comp_obj.name} is reserved for the generated groups"
+                )
+            wrapper = comp_obj.generate_pybind11(mod_ident="mod")
+            units.append((comp_obj.name, comp_obj.generate_cpp(), wrapper))
 
         # The registration units are stamped so an ABI change always recompiles
         stamp = f"// Generated for amigo ABI {abi_version}\n"
@@ -1330,7 +1447,7 @@ class Model:
         for class_name, code, wrapper in units:
             base = f"{self.module_name}_{class_name}"
             register = f"{self.module_name}_register_{class_name}"
-            _write_if_changed(directory / f"{base}.h", header(code))
+            _write_if_changed(directory / f"{base}.h", _class_header(code))
 
             unit = stamp
             unit += f"#define AMIGO_DATA_DERIVATIVES {1 if data_derivatives else 0}\n"
@@ -1451,9 +1568,9 @@ amigo_add_python_module(
             f"-DCMAKE_BUILD_TYPE={build_type}",
         ]
 
-        # The translation units of one module compile in parallel
+        # The translation units compile in parallel on the cores this process may use
         build_cmd = ["cmake", "--build", str(build_dir), "--config", build_type]
-        build_cmd += ["--parallel", str(os.cpu_count() or 1)]
+        build_cmd += ["--parallel", str(_usable_cores())]
 
         print("Running CMake commands from amigo")
         print(" ".join(cmake_cmd))
@@ -1477,7 +1594,7 @@ amigo_add_python_module(
         # Serialize the components
         comp_list = []
         for name, comp in self.comp.items():
-            if name == self.slack_comp_name:
+            if self._is_slack_group(name):
                 continue
             comp_data = {}
             comp_data["name"] = name
@@ -1885,6 +2002,20 @@ amigo_add_python_module(
 
         return prob
 
+    def _is_slack_group(self, name):
+        """True for the slack and elastic groups that initialization builds."""
+        return name == self.slack_comp_name or name == self.elastic_comp_name
+
+    def _has_elastic(self):
+        """True when a constraint of the components is marked elastic."""
+        for comp_name, comp in self.comp.items():
+            if self._is_slack_group(comp_name):
+                continue
+            for var_name in comp.get_constraint_names():
+                if self.get_meta(f"{comp_name}.{var_name}")["elastic"] is True:
+                    return True
+        return False
+
     def _initialize_slacks(self, con_indices):
         """
         Identify inequality constraints and allocate slack variable indices.
@@ -1912,6 +2043,7 @@ amigo_add_python_module(
         upper = np.zeros(self.num_variables)
 
         # Get the meta data from values set in the components
+        elastic_rows = []
         for comp_name, comp in self.comp.items():
             for var_name in comp.vars:
                 name = comp_name + "." + var_name
@@ -1920,6 +2052,24 @@ amigo_add_python_module(
                     lower[comp.vars[var_name]] = meta["lower"]
                 if meta.is_value_set("upper"):
                     upper[comp.vars[var_name]] = meta["upper"]
+                if meta["elastic"] is True:
+                    elastic_rows.append(np.ravel(comp.vars[var_name]))
+
+        # The elastic rows get a pair of parts each, generated with the model like the slacks
+        if elastic_rows:
+            rows = np.concatenate(elastic_rows).astype(int)
+            size = rows.size
+            self.elastic_comp_name = "_elastic_component"
+            group = ComponentGroup(self.elastic_comp_name, size, ElasticComponent())
+            group.vars["p"] = np.arange(self.num_variables, self.num_variables + size)
+            group.vars["n"] = np.arange(
+                self.num_variables + size, self.num_variables + 2 * size
+            )
+            group.vars["res"] = rows
+            group.data["rho"] = np.arange(self.data_size, self.data_size + size)
+            self.comp[self.elastic_comp_name] = group
+            self.num_variables += 2 * size
+            self.data_size += size
 
         # Get any staged meta data
         for vtype, meta_name, name, data in self._staged_meta_data:

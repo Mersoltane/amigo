@@ -64,7 +64,8 @@ if(AMIGO_ENABLE_CUDA)
     find_path(CUDSS_INCLUDE_DIR cudss.h
       HINTS ${CUDSS_HOME}/include)
 
-    find_library(CUDSS_LIBRARY cudss
+    # The pip wheel of cuDSS ships only the versioned library name
+    find_library(CUDSS_LIBRARY NAMES cudss libcudss.so.0
       HINTS ${CUDSS_HOME}/lib ${CUDSS_HOME}/lib64)
         
     include(FindPackageHandleStandardArgs)
